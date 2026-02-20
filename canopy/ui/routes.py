@@ -10288,12 +10288,12 @@ def create_ui_blueprint() -> Blueprint:
 
     @ui.route('/static/<path:filename>')
     def serve_static(filename):
-        """Serve static files from the ui/static directory."""
+        """Serve static files from the ui/static directory (absolute path, cwd-independent)."""
         try:
-            import os
             from flask import send_from_directory
-            
-            static_dir = os.path.join(os.path.dirname(__file__), 'static')
+            # Resolve absolute path from this file so it works regardless of process cwd
+            _this_dir = os.path.dirname(os.path.abspath(__file__))
+            static_dir = os.path.join(_this_dir, 'static')
             return send_from_directory(static_dir, filename)
         except Exception as e:
             logger.error(f"Static file serve error for {filename}: {e}")

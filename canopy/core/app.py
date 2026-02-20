@@ -62,9 +62,10 @@ def create_app(config: Optional[Config] = None) -> Flask:
     log_system = setup_logging(debug=config.debug)
     logger.info("Starting Canopy application initialization")
     
-    # Create Flask app — static files live under canopy/ui/static/
+    # Create Flask app — static files live under canopy/ui/static/ (absolute path, cwd-independent)
     import os as _os
-    _ui_static = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), 'ui', 'static')
+    _pkg_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    _ui_static = _os.path.join(_pkg_root, 'ui', 'static')
     app = Flask(__name__, static_folder=_ui_static)
     
     app.config['SECRET_KEY'] = config.secret_key
