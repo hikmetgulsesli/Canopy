@@ -980,7 +980,7 @@
             <div class="border-top p-3 channel-composer-wrap" style="background: var(--canopy-bg-card); border-color: var(--canopy-border) !important; flex-shrink: 0;">
                 <div id="channel-member-gate" class="alert alert-warning d-none align-items-center justify-content-between gap-2" role="alert">
                     <div>
-                        <strong>Private channel setup:</strong> add at least one member before posting.
+                        <strong>Private channel tip:</strong> you can post now; add members when you're ready to share.
                     </div>
                     <button type="button" class="btn btn-sm btn-outline-dark" onclick="openChannelMembersModal()">Add members</button>
                 </div>
@@ -2888,9 +2888,10 @@ function updateMemberGate() {
     const gate = document.getElementById('channel-member-gate');
     if (!gate) return;
     const isPrivateMode = currentChannelType === 'private' || currentChannelPrivacy !== 'open';
-    const needsGate = isPrivateMode && canManageChannelMembers() && (currentChannelMemberCount <= 1);
-    memberGateActive = needsGate;
-    if (needsGate) {
+    const showSetupHint = isPrivateMode && canManageChannelMembers() && (currentChannelMemberCount <= 1);
+    // Owner-only private channels are valid; this hint is informational only.
+    memberGateActive = false;
+    if (showSetupHint) {
         gate.classList.remove('d-none');
         gate.classList.add('d-flex');
     } else {
@@ -2899,7 +2900,7 @@ function updateMemberGate() {
     }
     const sendBtn = document.querySelector('#message-form button[type="submit"]');
     if (sendBtn) {
-        sendBtn.disabled = !!needsGate;
+        sendBtn.disabled = false;
     }
 }
 
@@ -5127,11 +5128,6 @@ function sendMessage(event) {
     event.preventDefault();
     hideChannelMentionSuggestions();
 
-    if (memberGateActive) {
-        showAlert('Add at least one member to this restricted channel before posting.', 'warning');
-        return;
-    }
-    
     const messageInput = document.getElementById('message-input');
     const rawContent = messageInput.value;
     let content = rawContent.trim();
