@@ -6428,14 +6428,17 @@ function escapeHtml(text) {
 // viewImage and openLightbox are defined globally in base.html
 
 function formatTimestamp(timestamp) {
+    if (typeof window.formatCanopyTimestamp === 'function') {
+        return window.formatCanopyTimestamp(timestamp);
+    }
     const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return String(timestamp || '');
     const now = new Date();
     const diff = now - date;
-    
     if (diff < 60000) return 'Just now';
     if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
     if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
-    return date.toLocaleDateString();
+    return date.toLocaleString();
 }
 
 function formatTimestamps() {
@@ -6443,6 +6446,12 @@ function formatTimestamps() {
         const timestamp = el.getAttribute('data-timestamp');
         if (timestamp) {
             el.textContent = formatTimestamp(timestamp);
+            if (typeof window.parseCanopyTimestamp === 'function') {
+                const parsed = window.parseCanopyTimestamp(timestamp);
+                if (parsed) {
+                    el.title = parsed.toLocaleString();
+                }
+            }
         }
     });
 }

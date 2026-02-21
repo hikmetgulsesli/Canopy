@@ -1,15 +1,57 @@
 /* Canopy common UI JavaScript — extracted from base.html */
         // Common utility functions
+        function parseCanopyTimestamp(timestamp) {
+            if (timestamp === null || timestamp === undefined || timestamp === '') return null;
+            if (timestamp instanceof Date) {
+                return Number.isNaN(timestamp.getTime()) ? null : timestamp;
+            }
+            if (typeof timestamp === 'number') {
+                const value = timestamp > 1e12 ? timestamp : timestamp * 1000;
+                const date = new Date(value);
+                return Number.isNaN(date.getTime()) ? null : date;
+            }
+
+            const raw = String(timestamp).trim();
+            if (!raw) return null;
+
+            if (/^\d+$/.test(raw)) {
+                const numeric = Number(raw);
+                const value = numeric > 1e12 ? numeric : numeric * 1000;
+                const fromNumeric = new Date(value);
+                if (!Number.isNaN(fromNumeric.getTime())) return fromNumeric;
+            }
+
+            let normalized = raw;
+            if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/.test(raw)) {
+                normalized = raw.replace(' ', 'T') + 'Z';
+            } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(raw)) {
+                normalized = raw + 'Z';
+            } else if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+                normalized = raw + 'T00:00:00Z';
+            }
+
+            const parsed = new Date(normalized);
+            if (!Number.isNaN(parsed.getTime())) return parsed;
+
+            const fallback = new Date(raw);
+            return Number.isNaN(fallback.getTime()) ? null : fallback;
+        }
+
         function formatTimestamp(timestamp) {
-            const date = new Date(timestamp);
+            const date = parseCanopyTimestamp(timestamp);
+            if (!date) return String(timestamp || '');
+
             const now = new Date();
-            const diff = now - date;
-            
+            const diff = now.getTime() - date.getTime();
+
+            if (diff < -60000) return date.toLocaleString();
             if (diff < 60000) return 'Just now';
             if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
             if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
-            return date.toLocaleDateString();
+            return date.toLocaleString();
         }
+        window.parseCanopyTimestamp = parseCanopyTimestamp;
+        window.formatCanopyTimestamp = formatTimestamp;
         
         function showAlert(message, type = 'info') {
             const alertDiv = document.createElement('div');
@@ -1437,6 +1479,12 @@
             document.querySelectorAll('[data-timestamp]').forEach(el => {
                 const timestamp = el.getAttribute('data-timestamp');
                 el.textContent = formatTimestamp(timestamp);
+                if (typeof window.parseCanopyTimestamp === 'function') {
+                    const parsed = window.parseCanopyTimestamp(timestamp);
+                    if (parsed) {
+                        el.title = parsed.toLocaleString();
+                    }
+                }
             });
         }, 30000);
 

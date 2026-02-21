@@ -1814,14 +1814,17 @@
     }
 
     function formatTimestamp(timestamp) {
+        if (typeof window.formatCanopyTimestamp === 'function') {
+            return window.formatCanopyTimestamp(timestamp);
+        }
         const date = new Date(timestamp);
+        if (Number.isNaN(date.getTime())) return String(timestamp || '');
         const now = new Date();
         const diff = now - date;
-        
         if (diff < 60000) return 'Just now';
         if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
         if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
-        return date.toLocaleDateString();
+        return date.toLocaleString();
     }
 
     function escapeHtml(text) {
