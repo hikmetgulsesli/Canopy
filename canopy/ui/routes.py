@@ -9331,9 +9331,63 @@ def create_ui_blueprint() -> Blueprint:
             
             # Get or create user profile
             user_profile = profile_manager.ensure_default_profile(user_id, user_id)
+
+            # Build activity stats from actual data (avoid placeholder values).
+            stats = {
+                'messages': 0,
+                'channels': 0,
+                'posts': 0,
+                'api_keys': 0,
+            }
+            try:
+                with db_manager.get_connection() as conn:
+                    def _table_exists(name: str) -> bool:
+                        row = conn.execute(
+                            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                            (name,),
+                        ).fetchone()
+                        return bool(row)
+
+                    if _table_exists('channel_messages'):
+                        row = conn.execute(
+                            "SELECT COUNT(*) AS count FROM channel_messages WHERE user_id = ?",
+                            (user_id,),
+                        ).fetchone()
+                        stats['messages'] += int((row['count'] if row else 0) or 0)
+
+                    if _table_exists('messages'):
+                        row = conn.execute(
+                            "SELECT COUNT(*) AS count FROM messages WHERE sender_id = ?",
+                            (user_id,),
+                        ).fetchone()
+                        stats['messages'] += int((row['count'] if row else 0) or 0)
+
+                    if _table_exists('channel_members'):
+                        row = conn.execute(
+                            "SELECT COUNT(DISTINCT channel_id) AS count FROM channel_members WHERE user_id = ?",
+                            (user_id,),
+                        ).fetchone()
+                        stats['channels'] = int((row['count'] if row else 0) or 0)
+
+                    if _table_exists('feed_posts'):
+                        row = conn.execute(
+                            "SELECT COUNT(*) AS count FROM feed_posts WHERE author_id = ?",
+                            (user_id,),
+                        ).fetchone()
+                        stats['posts'] = int((row['count'] if row else 0) or 0)
+
+                    if _table_exists('api_keys'):
+                        row = conn.execute(
+                            "SELECT COUNT(*) AS count FROM api_keys WHERE user_id = ? AND COALESCE(revoked, 0) = 0",
+                            (user_id,),
+                        ).fetchone()
+                        stats['api_keys'] = int((row['count'] if row else 0) or 0)
+            except Exception as stats_err:
+                logger.warning(f"Profile stats query failed for {user_id}: {stats_err}")
             
             return render_template('profile.html',
                                  profile=user_profile,
+                                 profile_stats=stats,
                                  user_id=user_id)
                                  
         except Exception as e:
