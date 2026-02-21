@@ -2214,13 +2214,14 @@
                 const current = state.current;
                 const type = current.type;
                 const el = current.el;
+                const isResumablePause = (type === 'audio' || type === 'video') && !!el.paused && !el.ended;
 
                 if (state.dismissedEl && state.dismissedEl === el) {
                     hideMini();
                     return;
                 }
 
-                if (!isElementPlaying(el, type)) {
+                if (!isElementPlaying(el, type) && !isResumablePause) {
                     const fallback = findPlayingElement();
                     if (fallback && fallback !== el) {
                         setCurrent(fallback);

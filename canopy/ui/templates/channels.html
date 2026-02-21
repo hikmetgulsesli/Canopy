@@ -3089,11 +3089,10 @@ function displayMessages(messages, options = {}) {
         if (m && m.id) channelMessageCache[m.id] = m;
     });
 
-    // Track oldest message for "load older" pagination
-    const sorted = [...messages].sort((a, b) =>
-        (a.created_at || '').localeCompare(b.created_at || '')
-    );
-    oldestLoadedMessageId = sorted.length > 0 ? sorted[0].id : null;
+    // Track page boundary cursor for "load older" pagination.
+    // Use API order (query order) instead of raw created_at to avoid
+    // skipping pages when older threads are resurfaced by new replies.
+    oldestLoadedMessageId = messages.length > 0 ? messages[0].id : null;
     noMoreOlderMessages = messages.length < OLDER_MESSAGES_LIMIT;
     loadingOlderMessages = false;
 
@@ -4459,11 +4458,8 @@ function loadOlderMessages() {
             }
 
             const messages = data.messages;
-            // Update oldest tracker
-            const sorted = [...messages].sort((a, b) =>
-                (a.created_at || '').localeCompare(b.created_at || '')
-            );
-            oldestLoadedMessageId = sorted[0].id;
+            // Update page boundary cursor from API order.
+            oldestLoadedMessageId = messages[0].id;
 
             if (messages.length < OLDER_MESSAGES_LIMIT) {
                 noMoreOlderMessages = true;

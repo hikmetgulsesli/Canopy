@@ -20,6 +20,8 @@ import time
 import re
 import socket
 import ipaddress
+import sqlite3
+import tempfile
 import html as html_lib
 import threading
 import xml.etree.ElementTree as ET
@@ -2459,7 +2461,8 @@ def create_ui_blueprint() -> Blueprint:
                                  config=config.to_dict(),
                                  db_stats=db_stats,
                                  user_id=user_id,
-                                 auto_approve_agents=auto_approve_agents)
+                                 auto_approve_agents=auto_approve_agents,
+                                 is_admin=_is_admin())
                                  
         except Exception as e:
             logger.error(f"Settings error: {e}")
@@ -9301,6 +9304,144 @@ def create_ui_blueprint() -> Blueprint:
         except Exception as e:
             logger.error(f"Database export error: {e}")
             return jsonify({'error': 'Internal server error'}), 500
+
+    @ui.route('/ajax/database_import', methods=['POST'])
+    @require_login
+    def ajax_database_import():
+        """AJAX: Import a SQLite database backup (admin-only, destructive)."""
+        temp_import_path: Optional[str] = None
+        try:
+            db_manager, _, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
+
+            if not _is_admin():
+                return jsonify({'error': 'Only the instance admin can import a database backup'}), 403
+
+            confirm_phrase = (request.form.get('confirm_phrase') or '').strip()
+            if confirm_phrase != 'IMPORT DATABASE':
+                return jsonify({'error': 'Confirmation phrase mismatch. Type IMPORT DATABASE to proceed.'}), 400
+
+            upload = request.files.get('database')
+            if not upload:
+                return jsonify({'error': 'No database file uploaded'}), 400
+            if not upload.filename:
+                return jsonify({'error': 'No database file selected'}), 400
+
+            safe_name = secure_filename(upload.filename)
+            ext = os.path.splitext(safe_name)[1].lower()
+            if ext and ext not in {'.db', '.sqlite', '.sqlite3'}:
+                return jsonify({'error': 'Unsupported file type. Upload a .db, .sqlite, or .sqlite3 file.'}), 400
+
+            db_path_raw = getattr(db_manager, 'db_path', None)
+            if not db_path_raw:
+                logger.error("Database import failed: db_manager missing db_path")
+                return jsonify({'error': 'Database import unavailable on this node'}), 500
+
+            db_path = os.path.abspath(str(db_path_raw))
+            db_dir = os.path.dirname(db_path)
+            os.makedirs(db_dir, exist_ok=True)
+
+            fd, temp_import_path = tempfile.mkstemp(prefix='canopy_import_', suffix='.db', dir=db_dir)
+            max_import_bytes = 512 * 1024 * 1024  # 512MB hard limit for safety
+            bytes_written = 0
+            header = b''
+
+            with os.fdopen(fd, 'wb') as temp_file:
+                while True:
+                    chunk = upload.stream.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    if not header:
+                        header = chunk[:16]
+                    bytes_written += len(chunk)
+                    if bytes_written > max_import_bytes:
+                        return jsonify({'error': 'Import file too large (max 512MB).'}), 400
+                    temp_file.write(chunk)
+
+            if bytes_written == 0:
+                return jsonify({'error': 'Uploaded file was empty'}), 400
+            if not header.startswith(b'SQLite format 3\x00'):
+                return jsonify({'error': 'Uploaded file is not a valid SQLite database'}), 400
+
+            src_validate = sqlite3.connect(temp_import_path, timeout=10)
+            try:
+                check = src_validate.execute("PRAGMA quick_check").fetchone()
+                status = str(check[0]).lower() if check else 'unknown'
+                if status != 'ok':
+                    return jsonify({'error': f'Import database failed integrity check: {status}'}), 400
+
+                table_rows = src_validate.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+                table_names = {str(row[0]) for row in table_rows}
+                if 'users' not in table_names:
+                    return jsonify({'error': 'Import database does not look like a Canopy database (missing users table).'}), 400
+            finally:
+                src_validate.close()
+
+            backup_path = db_manager.backup_database(suffix='pre_import')
+            if not backup_path:
+                return jsonify({'error': 'Failed to create pre-import backup. Import aborted.'}), 500
+
+            def _copy_sqlite_db(src_file: str, dst_file: str) -> None:
+                src_conn = sqlite3.connect(src_file, timeout=30)
+                dst_conn = sqlite3.connect(dst_file, timeout=30)
+                try:
+                    src_conn.backup(dst_conn)
+                    dst_conn.commit()
+                finally:
+                    try:
+                        dst_conn.close()
+                    finally:
+                        src_conn.close()
+
+            try:
+                _copy_sqlite_db(temp_import_path, db_path)
+
+                # Ensure this thread does not keep stale pooled connection state.
+                if hasattr(db_manager, 'close_pooled_connection'):
+                    try:
+                        db_manager.close_pooled_connection()
+                    except Exception:
+                        pass
+
+                # Bring imported DB up to current schema if needed.
+                if hasattr(db_manager, '_initialize_database'):
+                    db_manager._initialize_database()
+
+                with db_manager.get_connection(busy_timeout_ms=30_000) as conn:
+                    post_check = conn.execute("PRAGMA quick_check").fetchone()
+                    post_status = str(post_check[0]).lower() if post_check else 'unknown'
+                    if post_status != 'ok':
+                        raise RuntimeError(f'post-import integrity check failed: {post_status}')
+            except Exception as import_err:
+                logger.error(f"Database import failed; attempting rollback: {import_err}")
+                try:
+                    _copy_sqlite_db(str(backup_path), db_path)
+                    logger.warning("Database import rolled back to pre-import backup")
+                except Exception as rollback_err:
+                    logger.critical(f"Database import rollback failed: {rollback_err}")
+                    return jsonify({
+                        'error': 'Database import failed and automatic rollback also failed. Manual restore is required.',
+                        'details': str(import_err),
+                    }), 500
+                return jsonify({
+                    'error': 'Database import failed. Previous database was restored from backup.',
+                    'details': str(import_err),
+                }), 500
+
+            return jsonify({
+                'success': True,
+                'message': f'Database imported successfully. Safety backup created: {os.path.basename(str(backup_path))}. Refresh this page to load the imported state.',
+            })
+        except Exception as e:
+            logger.error(f"Database import error: {e}")
+            return jsonify({'error': 'Internal server error'}), 500
+        finally:
+            if temp_import_path and os.path.exists(temp_import_path):
+                try:
+                    os.unlink(temp_import_path)
+                except Exception:
+                    pass
 
     @ui.route('/ajax/system_reset', methods=['POST'])
     @require_login

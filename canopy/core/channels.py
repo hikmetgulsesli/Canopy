@@ -1605,18 +1605,33 @@ class ChannelManager:
                     return []
                 
                 # Build query — sort root messages by activity time
-                # (resurfaced parents appear at the bottom/newest position)
+                # (resurfaced parents appear at the bottom/newest position).
                 # Replies sort with their parent via COALESCE on the parent row.
-                query = """
+                sort_expr = """
+                    CASE
+                        WHEN m.parent_message_id IS NOT NULL THEN
+                            COALESCE(
+                                (SELECT p.last_activity_at FROM channel_messages p WHERE p.id = m.parent_message_id),
+                                (SELECT p.created_at FROM channel_messages p WHERE p.id = m.parent_message_id)
+                            )
+                        ELSE COALESCE(m.last_activity_at, m.created_at)
+                    END
+                """
+
+                before_sort_expr = """
+                    CASE
+                        WHEN b.parent_message_id IS NOT NULL THEN
+                            COALESCE(
+                                (SELECT p.last_activity_at FROM channel_messages p WHERE p.id = b.parent_message_id),
+                                (SELECT p.created_at FROM channel_messages p WHERE p.id = b.parent_message_id)
+                            )
+                        ELSE COALESCE(b.last_activity_at, b.created_at)
+                    END
+                """
+
+                query = f"""
                     SELECT m.*, u.username as author_username,
-                           CASE
-                               WHEN m.parent_message_id IS NOT NULL THEN
-                                   COALESCE(
-                                       (SELECT p.last_activity_at FROM channel_messages p WHERE p.id = m.parent_message_id),
-                                       (SELECT p.created_at FROM channel_messages p WHERE p.id = m.parent_message_id)
-                                   )
-                               ELSE COALESCE(m.last_activity_at, m.created_at)
-                           END AS sort_time
+                           {sort_expr} AS sort_time
                     FROM channel_messages m
                     LEFT JOIN users u ON m.user_id = u.id
                     WHERE m.channel_id = ?
@@ -1625,8 +1640,35 @@ class ChannelManager:
                 params: List[Any] = [channel_id]
                 
                 if before_message_id:
-                    query += " AND m.created_at < (SELECT created_at FROM channel_messages WHERE id = ?)"
-                    params.append(before_message_id)
+                    # Pagination must use the same sort tuple as ORDER BY to
+                    # avoid gaps/duplicates when old threads are resurfaced by
+                    # new replies.
+                    query += f"""
+                        AND (
+                            {sort_expr} < (
+                                SELECT {before_sort_expr}
+                                FROM channel_messages b
+                                WHERE b.id = ?
+                            )
+                            OR (
+                                {sort_expr} = (
+                                    SELECT {before_sort_expr}
+                                    FROM channel_messages b
+                                    WHERE b.id = ?
+                                )
+                                AND m.created_at < (
+                                    SELECT b.created_at
+                                    FROM channel_messages b
+                                    WHERE b.id = ?
+                                )
+                            )
+                        )
+                    """
+                    params.extend([
+                        before_message_id,
+                        before_message_id,
+                        before_message_id,
+                    ])
                 
                 query += " ORDER BY sort_time DESC, m.created_at DESC LIMIT ?"
                 params.append(limit)
@@ -1747,7 +1789,7 @@ class ChannelManager:
                             msg_ids.add(message.id)
                         except Exception as row_err:
                             logger.warning(f"Skipping corrupt parent row {row.get('id', '?')}: {row_err}")
-                    messages.sort(key=lambda m: m.created_at)
+                    # Keep the original page order stable for pagination cursors.
 
                 logger.debug(f"Retrieved {len(messages)} messages from channel {channel_id}")
                 return messages

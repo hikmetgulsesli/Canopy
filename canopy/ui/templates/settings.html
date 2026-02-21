@@ -400,7 +400,7 @@
                     <strong>Warning:</strong> These actions affect your data. Use with caution.
                 </p>
                 <div class="row">
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <div class="d-grid">
                             <button class="btn btn-outline-warning" id="cleanup-db-btn" onclick="cleanupDatabase()">
                                 <i class="bi bi-trash"></i> Cleanup Database
@@ -409,7 +409,7 @@
                         </div>
                     </div>
                     
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <div class="d-grid">
                             <button class="btn btn-outline-info" id="export-data-btn" onclick="exportData()">
                                 <i class="bi bi-download"></i> Export Data
@@ -417,8 +417,21 @@
                             <small class="text-muted mt-1">Download your data for backup</small>
                         </div>
                     </div>
+
+                    <div class="col-md-3">
+                        <div class="d-grid">
+                            <button class="btn btn-outline-danger" id="import-data-btn" onclick="openImportDataPicker()"
+                                    {% if not is_admin %}disabled title="Instance admin only"{% endif %}>
+                                <i class="bi bi-upload"></i> Import Data
+                            </button>
+                            <small class="text-muted mt-1">
+                                Overwrites local database (backup created automatically)
+                                {% if not is_admin %}<span class="d-block">Instance admin only</span>{% endif %}
+                            </small>
+                        </div>
+                    </div>
                     
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <div class="d-grid">
                             <button class="btn btn-outline-danger" id="reset-system-btn" onclick="resetSystem()">
                                 <i class="bi bi-arrow-clockwise"></i> Reset System
@@ -534,6 +547,8 @@ export CANOPY_AUTO_APPROVE_AGENTS=1</code></pre>
     </div>
 </div>
 
+<input type="file" id="import-db-input" class="d-none" accept=".db,.sqlite,.sqlite3,application/x-sqlite3">
+
 {% endblock %}
 
 {% block extra_js %}
@@ -645,6 +660,91 @@ export CANOPY_AUTO_APPROVE_AGENTS=1</code></pre>
             showAlert('Export failed: ' + extractErrorMessage(err, 'Unknown error'), 'danger');
         } finally {
             setButtonBusy('export-data-btn', false);
+        }
+    }
+
+    function openImportDataPicker() {
+        const input = document.getElementById('import-db-input');
+        if (!input) {
+            showAlert('Import file input is unavailable on this page.', 'danger');
+            return;
+        }
+        input.value = '';
+        input.click();
+    }
+
+    async function importDatabaseFile(file) {
+        if (!file) return;
+
+        const lowerName = (file.name || '').toLowerCase();
+        const allowedExt = ['.db', '.sqlite', '.sqlite3'];
+        const hasAllowedExt = allowedExt.some(ext => lowerName.endsWith(ext));
+        if (!hasAllowedExt) {
+            showAlert('Unsupported file type. Use a .db, .sqlite, or .sqlite3 backup file.', 'danger');
+            return;
+        }
+        if (file.size <= 0) {
+            showAlert('Selected file is empty.', 'danger');
+            return;
+        }
+        if (file.size > 512 * 1024 * 1024) {
+            showAlert('Import file is too large (max 512MB).', 'danger');
+            return;
+        }
+
+        const firstConfirm = confirm(
+            'DANGER: Importing a database REPLACES your current local data (messages, channels, posts, users, and settings on this node).\n\n' +
+            'A pre-import backup will be created automatically.\n\n' +
+            `Selected file: ${file.name}\n\n` +
+            'Continue?'
+        );
+        if (!firstConfirm) {
+            showAlert('Database import canceled.', 'info');
+            return;
+        }
+
+        const confirmPhrase = prompt('Type IMPORT DATABASE to proceed with destructive import.');
+        if (confirmPhrase !== 'IMPORT DATABASE') {
+            showAlert('Database import canceled. Confirmation phrase did not match.', 'info');
+            return;
+        }
+
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+        const formData = new FormData();
+        formData.append('database', file);
+        formData.append('confirm_phrase', confirmPhrase);
+
+        setButtonBusy('import-data-btn', true, '<i class="bi bi-hourglass-split"></i> Importing...');
+        try {
+            const response = await fetch('/ajax/database_import', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'X-CSRFToken': csrfToken,
+                },
+                body: formData,
+            });
+
+            let payload = {};
+            try {
+                payload = await response.json();
+            } catch (_) {
+                payload = {};
+            }
+
+            if (!response.ok) {
+                throw new Error(payload.error || payload.message || `Import failed (${response.status})`);
+            }
+            if (!payload.success) {
+                throw new Error(payload.error || payload.message || 'Import failed');
+            }
+
+            showAlert(payload.message || 'Database imported successfully. Reloading...', 'success');
+            setTimeout(() => window.location.reload(), 1800);
+        } catch (err) {
+            showAlert('Import failed: ' + extractErrorMessage(err, 'Unknown error'), 'danger');
+        } finally {
+            setButtonBusy('import-data-btn', false);
         }
     }
     
@@ -871,6 +971,15 @@ export CANOPY_AUTO_APPROVE_AGENTS=1</code></pre>
 
     // Load relay status and landing preference on page load
     document.addEventListener('DOMContentLoaded', function() {
+        const importInput = document.getElementById('import-db-input');
+        if (importInput) {
+            importInput.addEventListener('change', function(e) {
+                const file = e.target && e.target.files && e.target.files[0] ? e.target.files[0] : null;
+                if (file) {
+                    importDatabaseFile(file);
+                }
+            });
+        }
         loadRelayStatus();
         loadLandingPreference();
     });
