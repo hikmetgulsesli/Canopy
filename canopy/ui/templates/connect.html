@@ -689,6 +689,15 @@ function apiJsonFetch(url, options = {}) {
     });
 }
 
+function buildConnectErrorMessage(err) {
+    const text = String((err && err.message) ? err.message : (err || 'Unknown error'));
+    if (/session may have expired|authentication required|api key required/i.test(text)) {
+        return 'Authentication required for this action. Please reload the page and sign in again. ' +
+               'If you are using a script/CLI, include X-API-Key.';
+    }
+    return text;
+}
+
 function copyInvite() {
     const el = document.getElementById('inviteCode');
     navigator.clipboard.writeText(el.value).then(() => {
@@ -718,7 +727,7 @@ function regenerateInvite() {
             alert('Error: ' + (data.error || 'Unknown'));
         }
     }).catch((err) => {
-        alert('Error: ' + err.message);
+        alert('Error: ' + buildConnectErrorMessage(err));
     });
 }
 
@@ -758,7 +767,7 @@ function importInvite() {
         const res = document.getElementById('importResult');
         res.style.display = 'block';
         res.className = 'mt-3 alert alert-danger';
-        res.innerHTML = '<i class="bi bi-x-circle-fill"></i> ' + _escapeHtml(err.message || err);
+        res.innerHTML = '<i class="bi bi-x-circle-fill"></i> ' + _escapeHtml(buildConnectErrorMessage(err));
     })
     .finally(() => {
         btn.disabled = false;
@@ -792,7 +801,7 @@ function connectToIntroduced(peerId, buttonEl) {
         }
     })
     .catch(err => {
-        alert('Error: ' + (err.message || err));
+        alert('Error: ' + buildConnectErrorMessage(err));
         btn.disabled = false;
         btn.innerHTML = '<i class="bi bi-plug"></i> Connect';
     });
@@ -876,7 +885,7 @@ function reconnectPeer(peerId, buttonEl) {
         }
     })
     .catch(err => {
-        alert('Error: ' + (err.message || err));
+        alert('Error: ' + buildConnectErrorMessage(err));
         btn.disabled = false;
         btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Reconnect';
     });
@@ -897,7 +906,7 @@ function reconnectAllPeers() {
                 showAlert(data.message || 'Reconnect failed', 'danger');
             }
         })
-        .catch((err) => showAlert('Reconnect failed: ' + (err.message || err), 'danger'))
+        .catch((err) => showAlert('Reconnect failed: ' + buildConnectErrorMessage(err), 'danger'))
         .finally(() => {
             btns.forEach(btn => {
                 btn.disabled = false;
@@ -935,7 +944,7 @@ function disconnectPeer(peerId) {
             showAlert(data.message || 'Disconnect failed', 'danger');
         }
     })
-    .catch((err) => showAlert('Disconnect failed: ' + (err.message || err), 'danger'));
+    .catch((err) => showAlert('Disconnect failed: ' + buildConnectErrorMessage(err), 'danger'));
 }
 
 function forgetPeer(peerId) {
@@ -953,7 +962,7 @@ function forgetPeer(peerId) {
             showAlert(data.message || 'Could not forget peer', 'danger');
         }
     })
-    .catch((err) => showAlert('Could not forget peer: ' + (err.message || err), 'danger'));
+    .catch((err) => showAlert('Could not forget peer: ' + buildConnectErrorMessage(err), 'danger'));
 }
 
 let lastPeerActivityFetch = null;
