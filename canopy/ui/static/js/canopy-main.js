@@ -1915,6 +1915,7 @@
             const progressBar = document.getElementById('sidebar-media-mini-progress-bar');
             const playBtn = document.getElementById('sidebar-media-mini-play');
             const jumpBtn = document.getElementById('sidebar-media-mini-jump');
+            const pipBtn = document.getElementById('sidebar-media-mini-pip');
             const closeBtn = document.getElementById('sidebar-media-mini-close');
             const timeEl = document.getElementById('sidebar-media-mini-time');
             const mainScroller = document.querySelector('.main-content');
@@ -2149,10 +2150,35 @@
 
             function hideMini() {
                 mini.classList.remove('is-visible');
+                if (pipBtn) pipBtn.style.display = 'none';
             }
 
             function showMini() {
                 mini.classList.add('is-visible');
+            }
+
+            function supportsPictureInPicture(videoEl) {
+                if (!videoEl || !videoEl.isConnected) return false;
+                if (mediaTypeFor(videoEl) !== 'video') return false;
+                if (!document || document.pictureInPictureEnabled !== true) return false;
+                return typeof videoEl.requestPictureInPicture === 'function';
+            }
+
+            function isPictureInPictureActiveFor(videoEl) {
+                if (!videoEl || !document) return false;
+                return document.pictureInPictureElement === videoEl;
+            }
+
+            function updatePiPButton(el, type) {
+                if (!pipBtn) return;
+                if (type !== 'video' || !supportsPictureInPicture(el)) {
+                    pipBtn.style.display = 'none';
+                    return;
+                }
+                const inPiP = isPictureInPictureActiveFor(el);
+                pipBtn.style.display = '';
+                pipBtn.innerHTML = `<i class="bi bi-pip me-1"></i><span>${inPiP ? 'Exit PiP' : 'PiP'}</span>`;
+                pipBtn.title = inPiP ? 'Exit Picture-in-Picture' : 'Open Picture-in-Picture';
             }
 
             function setCurrent(el, forcedType) {
@@ -2259,11 +2285,13 @@
                         progressBar.style.width = '0%';
                         timeEl.textContent = formatTime(currentTime);
                     }
+                    updatePiPButton(el, type);
                 } else {
                     playBtn.style.display = 'none';
                     progressWrap.classList.remove('show');
                     progressBar.style.width = '0%';
                     timeEl.textContent = 'YouTube';
+                    updatePiPButton(null, '');
                 }
 
                 showMini();
@@ -2291,6 +2319,10 @@
                     el.addEventListener('ended', () => setTimeout(updateMini, 60));
                     el.addEventListener('timeupdate', updateMini);
                     el.addEventListener('seeking', updateMini);
+                    if (type === 'video') {
+                        el.addEventListener('enterpictureinpicture', () => setTimeout(updateMini, 20));
+                        el.addEventListener('leavepictureinpicture', () => setTimeout(updateMini, 20));
+                    }
                 } else if (type === 'youtube') {
                     initYouTubePlayer(el);
                     const activate = () => setCurrent(el, 'youtube');
@@ -2306,6 +2338,15 @@
             function scanForMedia(scope) {
                 const root = scope || document;
                 root.querySelectorAll('audio, video, .youtube-embed iframe').forEach(registerMediaNode);
+            }
+
+            function jumpToCurrentSource() {
+                if (!state.current || !state.current.el) return;
+                const target = state.current.sourceEl && state.current.sourceEl.isConnected
+                    ? state.current.sourceEl
+                    : state.current.el;
+                target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+                applyFocusFlash(target);
             }
 
             if (playBtn) {
@@ -2327,12 +2368,41 @@
 
             if (jumpBtn) {
                 jumpBtn.addEventListener('click', () => {
-                    if (!state.current || !state.current.el) return;
-                    const target = state.current.sourceEl && state.current.sourceEl.isConnected
-                        ? state.current.sourceEl
-                        : state.current.el;
-                    target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-                    applyFocusFlash(target);
+                    jumpToCurrentSource();
+                });
+            }
+
+            if (pipBtn) {
+                pipBtn.addEventListener('click', async () => {
+                    if (!state.current || !state.current.el || state.current.type !== 'video') {
+                        jumpToCurrentSource();
+                        return;
+                    }
+                    const el = state.current.el;
+                    if (!supportsPictureInPicture(el)) {
+                        if (typeof showAlert === 'function') {
+                            showAlert('Picture-in-Picture is not available for this video here.', 'info');
+                        }
+                        jumpToCurrentSource();
+                        return;
+                    }
+                    try {
+                        if (isPictureInPictureActiveFor(el)) {
+                            if (typeof document.exitPictureInPicture === 'function') {
+                                await document.exitPictureInPicture();
+                            }
+                        } else {
+                            if (document.pictureInPictureElement && typeof document.exitPictureInPicture === 'function') {
+                                try { await document.exitPictureInPicture(); } catch (_) {}
+                            }
+                            await el.requestPictureInPicture();
+                        }
+                    } catch (_) {
+                        if (typeof showAlert === 'function') {
+                            showAlert('Picture-in-Picture could not be started.', 'info');
+                        }
+                    }
+                    setTimeout(updateMini, 50);
                 });
             }
 
