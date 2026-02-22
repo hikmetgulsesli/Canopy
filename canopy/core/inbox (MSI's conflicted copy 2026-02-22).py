@@ -523,21 +523,14 @@ class InboxManager:
                 agent_user_id, "disabled", source_type, source_id,
                 channel_id, sender_user_id, origin_peer, trigger_type,
             )
-            logger.info(
-                "Inbox trigger rejected: reason=disabled (CANOPY_INBOX_ENABLED=0) "
-                "agent_user_id=%s source_id=%s", agent_user_id, source_id,
-            )
             return None
 
         # Cascade prevention: reject triggers beyond max depth
         if depth >= MAX_TRIGGER_DEPTH:
+            logger.debug(f"Inbox trigger rejected: depth {depth} >= MAX_TRIGGER_DEPTH {MAX_TRIGGER_DEPTH}")
             self._record_rejection(
                 agent_user_id, "depth_exceeded", source_type, source_id,
                 channel_id, sender_user_id, origin_peer, trigger_type,
-            )
-            logger.info(
-                "Inbox trigger rejected: reason=depth_exceeded agent_user_id=%s source_id=%s depth=%s",
-                agent_user_id, source_id, depth,
             )
             return None
 
@@ -547,10 +540,6 @@ class InboxManager:
             self._record_rejection(
                 agent_user_id, "trigger_type_blocked", source_type, source_id,
                 channel_id, sender_user_id, origin_peer, trigger_type,
-            )
-            logger.info(
-                "Inbox trigger rejected: reason=trigger_type_blocked agent_user_id=%s source_id=%s trigger_type=%s",
-                agent_user_id, source_id, trigger_type,
             )
             return None
 
@@ -562,10 +551,6 @@ class InboxManager:
                 agent_user_id, "channel_blocked", source_type, source_id,
                 channel_id, sender_user_id, origin_peer, trigger_type,
             )
-            logger.info(
-                "Inbox trigger rejected: reason=channel_blocked agent_user_id=%s source_id=%s channel_id=%s",
-                agent_user_id, source_id, channel_id,
-            )
             return None
 
         # Sender allowlist: only filter when sender_user_id is present.
@@ -575,10 +560,6 @@ class InboxManager:
             self._record_rejection(
                 agent_user_id, "sender_blocked", source_type, source_id,
                 channel_id, sender_user_id, origin_peer, trigger_type,
-            )
-            logger.info(
-                "Inbox trigger rejected: reason=sender_blocked agent_user_id=%s source_id=%s sender_user_id=%s",
-                agent_user_id, source_id, sender_user_id,
             )
             return None
 
@@ -593,20 +574,13 @@ class InboxManager:
                         agent_user_id, "trust_rejected", source_type, source_id,
                         channel_id, sender_user_id, origin_peer, trigger_type,
                     )
-                    logger.info(
-                        "Inbox trigger rejected: reason=trust_rejected agent_user_id=%s source_id=%s origin_peer=%s",
-                        agent_user_id, source_id, origin_peer,
-                    )
                     return None
             except Exception:
                 # Fail closed: reject trigger when trust cannot be verified
+                logger.debug(f"Trust check failed for peer {origin_peer}, rejecting inbox trigger")
                 self._record_rejection(
                     agent_user_id, "trust_error", source_type, source_id,
                     channel_id, sender_user_id, origin_peer, trigger_type,
-                )
-                logger.info(
-                    "Inbox trigger rejected: reason=trust_error agent_user_id=%s source_id=%s origin_peer=%s",
-                    agent_user_id, source_id, origin_peer,
                 )
                 return None
 
@@ -615,20 +589,12 @@ class InboxManager:
                 agent_user_id, "cooldown", source_type, source_id,
                 channel_id, sender_user_id, origin_peer, trigger_type,
             )
-            logger.info(
-                "Inbox trigger rejected: reason=cooldown agent_user_id=%s source_id=%s sender_user_id=%s",
-                agent_user_id, source_id, sender_user_id,
-            )
             return None
 
         if not self._rate_limit_ok(agent_user_id, channel_id, sender_user_id, config):
             self._record_rejection(
                 agent_user_id, "rate_limited", source_type, source_id,
                 channel_id, sender_user_id, origin_peer, trigger_type,
-            )
-            logger.info(
-                "Inbox trigger rejected: reason=rate_limited agent_user_id=%s source_id=%s channel_id=%s",
-                agent_user_id, source_id, channel_id,
             )
             return None
 

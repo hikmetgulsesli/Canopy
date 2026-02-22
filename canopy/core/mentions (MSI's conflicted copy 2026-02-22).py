@@ -540,14 +540,9 @@ def record_mention_activity(
             metadata=extra_ref,
         )
 
-    if target_ids and not inbox_manager:
-        logger.warning(
-            "Inbox skipped: INBOX_MANAGER not configured (mention targets=%s, source_type=%s, source_id=%s)",
-            list(target_ids), source_type, source_id,
-        )
     if inbox_manager and target_ids:
         try:
-            inserted = inbox_manager.record_mention_triggers(
+            inbox_manager.record_mention_triggers(
                 target_ids=target_ids,
                 source_type=source_type,
                 source_id=source_id,
@@ -558,17 +553,8 @@ def record_mention_activity(
                 extra_ref=extra_ref,
                 source_content=source_content,
             )
-            if inserted == 0:
-                logger.info(
-                    "Inbox: 0 triggers created for %d target(s) (source_type=%s, source_id=%s, targets=%s) "
-                    "- check agent_inbox_audit for rejection reasons",
-                    len(target_ids), source_type, source_id, list(target_ids),
-                )
         except Exception as e:
-            logger.warning(
-                "Inbox trigger creation failed: %s (source_type=%s, source_id=%s, targets=%s)",
-                e, source_type, source_id, list(target_ids),
-            )
+            logger.debug(f"Inbox trigger creation failed: {e}")
 
     if p2p_manager and target_ids:
         try:

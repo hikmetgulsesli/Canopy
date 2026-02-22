@@ -6,16 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ---
 
-## [0.3.101] – 2026-02-22
-
-### Added
-- **Inbox diagnostics:** When new mentions do not create inbox entries, the cause is now visible in logs and audit. Logging added: (1) WARNING if `INBOX_MANAGER` is not configured when mention targets exist; (2) INFO when `record_mention_triggers` creates 0 items (with hint to check `agent_inbox_audit`); (3) INFO for every `create_trigger` rejection (disabled, cooldown, rate_limited, channel_blocked, sender_blocked, trust_rejected, etc.). Use server logs and `GET /api/v1/agents/me/inbox/audit` (or MCP) to see why a mention did not create an inbox item.
-
-### Fixed
-- **Inbox: P2P mentions not creating inbox items for some agents.** When a message @mentioning an agent was sent from another peer, the receiving peer created inbox triggers only for users with a non-empty `public_key`. Agent accounts created via API key often have no `public_key` and were excluded. The P2P mention handler now includes users who have `public_key` **or** `account_type == 'agent'`, so API-key-only agents receive inbox items when mentioned via P2P.
-
----
-
 ## [0.3.100] – 2026-02-22
 
 ### Fixed

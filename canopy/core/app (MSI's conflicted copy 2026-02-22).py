@@ -3142,15 +3142,9 @@ def create_app(config: Optional[Config] = None) -> Flask:
                             row = db_manager.get_user(tid)
                         except Exception:
                             row = None
-                        if not row:
+                        if not row or not row.get('public_key'):
                             continue
-                        # Include user if they have a public_key (local/registered) or are an
-                        # agent — agents without public_key (e.g. API-key-only) should still
-                        # receive inbox items when mentioned via P2P broadcast.
-                        has_key = bool((row.get('public_key') or '').strip())
-                        is_agent = (row.get('account_type') or '').strip().lower() == 'agent'
-                        if has_key or is_agent:
-                            local_targets.append({'user_id': tid})
+                        local_targets.append({'user_id': tid})
 
                     if local_targets:
                         # Extract source_content from P2P metadata so inbox
