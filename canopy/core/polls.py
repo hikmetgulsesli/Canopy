@@ -45,8 +45,8 @@ class PollSpec:
 
 
 _POLL_BLOCK_PATTERNS = [
-    re.compile(r"(?is)\\[poll\\](.*?)\\[/poll\\]"),
-    re.compile(r"(?is)::poll\\s*(.*?)\\s*::endpoll"),
+    re.compile(r"(?is)\[poll\](.*?)\[/poll\]"),
+    re.compile(r"(?is)::poll\s*(.*?)\s*::endpoll"),
 ]
 
 
@@ -80,7 +80,7 @@ def _parse_duration_seconds(value: str) -> Optional[int]:
         return 90 * 24 * 3600
     if raw in {"year", "yr", "y"}:
         return 365 * 24 * 3600
-    m = re.match(r"^(\\d+)\\s*([a-z]+)?$", raw)
+    m = re.match(r"^(\d+)\s*([a-z]+)?$", raw)
     if not m:
         return None
     value_num = int(m.group(1))

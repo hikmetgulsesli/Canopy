@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ---
 
+## [0.3.100] – 2026-02-22
+
+### Fixed
+- **Poll cards:** Block format `[poll]...[/poll]` and `::poll...::endpoll` now parse correctly so channel and feed messages render as poll cards (regex matched literal brackets).
+- **Poll duration:** Duration line (e.g. `duration: 3d`, `1w`) now parses so poll end time and status display correctly.
+
+### Added
+- Regression tests for poll block and inline parsing (`tests/test_poll_parsing.py`) so poll rendering stays correct.
+
+---
+
 ## [0.3.99] – 2026-02-22
 
 ### Added
