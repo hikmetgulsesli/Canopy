@@ -10425,6 +10425,7 @@ def create_ui_blueprint() -> Blueprint:
                         'display_name': display_name,
                         'handle': _clean_mention_handle(display_name, username_val, uid),
                         'avatar_url': prof.avatar_url if profile_manager and prof else None,
+                        'account_type': (m.get('account_type') or '').strip().lower() or None,
                     })
             else:
                 all_info = profile_manager.get_all_users_display_info() if profile_manager else {}
@@ -10439,9 +10440,28 @@ def create_ui_blueprint() -> Blueprint:
                         'display_name': dname,
                         'handle': _clean_mention_handle(dname, uname, uid),
                         'avatar_url': info.get('avatar_url'),
+                        'account_type': (info.get('account_type') or '').strip().lower() or None,
                     })
 
             users = users[:200]
+            # Ensure account_type is available for mention-builder UIs
+            # (agents vs humans) even when upstream profile/member payloads
+            # do not include it.
+            user_ids = [u.get('user_id') for u in users if u.get('user_id')]
+            if user_ids:
+                account_type_map = {}
+                with db_manager.get_connection() as conn:
+                    placeholders = ",".join("?" for _ in user_ids)
+                    rows = conn.execute(
+                        f"SELECT id, account_type FROM users WHERE id IN ({placeholders})",
+                        user_ids
+                    ).fetchall()
+                    for row in rows:
+                        account_type_map[row['id']] = (row['account_type'] or 'human').strip().lower()
+                for user in users:
+                    uid = user.get('user_id')
+                    account_type = user.get('account_type') or account_type_map.get(uid) or 'human'
+                    user['account_type'] = str(account_type).strip().lower() or 'human'
 
             return jsonify({'success': True, 'users': users})
         except Exception as e:

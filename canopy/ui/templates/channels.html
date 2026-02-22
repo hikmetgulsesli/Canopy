@@ -186,6 +186,241 @@
         color: var(--canopy-text-secondary);
     }
 
+    .mention-builder-panel {
+        margin-top: 0.65rem;
+        border: 1px solid var(--canopy-border);
+        border-radius: 14px;
+        padding: 0.75rem;
+        background:
+            radial-gradient(circle at top right, rgba(34, 197, 94, 0.14), transparent 55%),
+            linear-gradient(145deg, rgba(19, 24, 39, 0.96), rgba(16, 22, 36, 0.94));
+        box-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
+    }
+
+    .mention-builder-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.65rem;
+    }
+
+    .mention-builder-title {
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: var(--canopy-text-primary);
+        letter-spacing: 0.01em;
+    }
+
+    .mention-builder-subtitle {
+        font-size: 0.74rem;
+        color: var(--canopy-text-secondary);
+    }
+
+    .mention-builder-toolbar {
+        margin-top: 0.6rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+    }
+
+    .mention-builder-search-wrap {
+        flex: 1;
+        min-width: 220px;
+    }
+
+    .mention-builder-filters .btn.active {
+        border-color: rgba(34, 197, 94, 0.45);
+        background: rgba(34, 197, 94, 0.2);
+        color: #bbf7d0;
+    }
+
+    .mention-builder-quick {
+        margin-top: 0.55rem;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.55rem;
+    }
+
+    .mention-builder-presets {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+    }
+
+    .mention-builder-presets select {
+        min-width: 160px;
+    }
+
+    .mention-builder-selected {
+        margin-top: 0.6rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+    }
+
+    .mention-builder-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        border-radius: 999px;
+        padding: 0.2rem 0.55rem;
+        font-size: 0.75rem;
+        color: #dcfce7;
+        background: rgba(34, 197, 94, 0.16);
+        border: 1px solid rgba(34, 197, 94, 0.42);
+    }
+
+    .mention-builder-chip button {
+        border: none;
+        background: transparent;
+        color: #bbf7d0;
+        font-size: 0.95rem;
+        line-height: 1;
+        padding: 0;
+    }
+
+    .mention-builder-list {
+        margin-top: 0.65rem;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 0.45rem;
+        max-height: 230px;
+        overflow-y: auto;
+        padding-right: 0.15rem;
+    }
+
+    .mention-builder-user {
+        width: 100%;
+        border: 1px solid var(--canopy-border);
+        border-radius: 11px;
+        background: rgba(15, 23, 42, 0.65);
+        color: var(--canopy-text-primary);
+        padding: 0.45rem 0.55rem;
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        text-align: left;
+        transition: border-color 0.2s, transform 0.2s, background 0.2s;
+    }
+
+    .mention-builder-user:hover {
+        transform: translateY(-1px);
+        border-color: rgba(59, 130, 246, 0.38);
+        background: rgba(30, 41, 59, 0.9);
+    }
+
+    .mention-builder-user.is-selected {
+        border-color: rgba(34, 197, 94, 0.5);
+        background: rgba(20, 83, 45, 0.32);
+    }
+
+    .mention-builder-avatar {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        overflow: hidden;
+        flex-shrink: 0;
+        border: 1px solid rgba(148, 163, 184, 0.38);
+        background: rgba(51, 65, 85, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+
+    .mention-builder-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .mention-builder-meta {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+    }
+
+    .mention-builder-name {
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--canopy-text-primary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .mention-builder-handle {
+        font-size: 0.72rem;
+        color: var(--canopy-text-secondary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .mention-builder-type {
+        margin-left: auto;
+        font-size: 0.66rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        border-radius: 999px;
+        padding: 0.15rem 0.42rem;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        color: var(--canopy-text-secondary);
+    }
+
+    .mention-builder-type.agent {
+        border-color: rgba(56, 189, 248, 0.45);
+        color: #7dd3fc;
+        background: rgba(56, 189, 248, 0.15);
+    }
+
+    .mention-builder-footer {
+        margin-top: 0.7rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .mention-macro-buttons {
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        margin: 0 0.35rem;
+    }
+
+    .mention-macro-btn {
+        max-width: 112px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    @media (max-width: 768px) {
+        .mention-builder-search-wrap {
+            min-width: 100%;
+        }
+        .mention-builder-presets {
+            width: 100%;
+        }
+        .mention-builder-presets select {
+            flex: 1;
+            min-width: 0;
+        }
+        .mention-macro-buttons {
+            margin: 0 0.2rem;
+            gap: 0.2rem;
+        }
+        .mention-macro-btn {
+            max-width: 92px;
+        }
+    }
+
     .inline-task-card {
         background: linear-gradient(150deg, rgba(25, 35, 55, 0.92), rgba(18, 22, 38, 0.9));
         border: 1px solid rgba(255, 255, 255, 0.08);
@@ -1058,8 +1293,68 @@
                             <button type="button" class="btn btn-outline-secondary" id="emoji-toggle-btn" onclick="insertEmoji()">
                                 <i class="bi bi-emoji-smile"></i>
                             </button>
+                            <button type="button" class="btn btn-outline-secondary" id="channel-mention-builder-toggle"
+                                    title="Team mention builder" onclick="toggleChannelMentionBuilder()">
+                                <i class="bi bi-people"></i>
+                            </button>
+                            <div id="channel-mention-macro-buttons" class="mention-macro-buttons" style="display: none;"></div>
                             <button type="submit" class="btn btn-primary">
                                 <i class="bi bi-send"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="channel-mention-builder" class="mention-builder-panel mt-2" style="display: none;">
+                        <div class="mention-builder-header">
+                            <div>
+                                <div class="mention-builder-title">
+                                    <i class="bi bi-lightning-charge-fill me-1"></i>Team Mention Builder
+                                </div>
+                                <div class="mention-builder-subtitle" id="channel-mention-builder-count">0 selected</div>
+                            </div>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleChannelMentionBuilder(false)">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        </div>
+                        <div class="mention-builder-toolbar">
+                            <div class="input-group input-group-sm mention-builder-search-wrap">
+                                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                                <input type="text" class="form-control" id="channel-mention-builder-search"
+                                       placeholder="Find people or agents..." oninput="renderChannelMentionBuilder()">
+                            </div>
+                            <div class="btn-group btn-group-sm mention-builder-filters" role="group">
+                                <button type="button" id="channel-mention-filter-all" class="btn btn-outline-secondary"
+                                        onclick="setChannelMentionBuilderFilter('all')">All</button>
+                                <button type="button" id="channel-mention-filter-agents" class="btn btn-outline-secondary"
+                                        onclick="setChannelMentionBuilderFilter('agent')">Agents</button>
+                                <button type="button" id="channel-mention-filter-humans" class="btn btn-outline-secondary"
+                                        onclick="setChannelMentionBuilderFilter('human')">Humans</button>
+                            </div>
+                        </div>
+                        <div class="mention-builder-quick">
+                            <div class="btn-group btn-group-sm" role="group">
+                                <button type="button" class="btn btn-outline-secondary" onclick="bulkSelectChannelMentionBuilder('agent')">Add agents</button>
+                                <button type="button" class="btn btn-outline-secondary" onclick="bulkSelectChannelMentionBuilder('human')">Add humans</button>
+                                <button type="button" class="btn btn-outline-secondary" onclick="clearChannelMentionBuilderSelection()">Clear</button>
+                            </div>
+                            <div class="mention-builder-presets">
+                                <select id="channel-mention-list-select" class="form-select form-select-sm"></select>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="applyChannelMentionList()" title="Load selected list">
+                                    <i class="bi bi-upload"></i>
+                                </button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="saveChannelMentionList()" title="Save current selection as a list">
+                                    <i class="bi bi-save"></i>
+                                </button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="deleteChannelMentionList()" title="Delete selected list">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div id="channel-mention-builder-selected" class="mention-builder-selected"></div>
+                        <div id="channel-mention-builder-list" class="mention-builder-list"></div>
+                        <div class="mention-builder-footer">
+                            <small class="text-muted">Select multiple users and inject all mentions at once.</small>
+                            <button type="button" class="btn btn-success btn-sm" onclick="insertChannelMentionBuilderSelection()">
+                                <i class="bi bi-at"></i> Insert Mentions
                             </button>
                         </div>
                     </div>
@@ -2713,6 +3008,9 @@ const AUTO_REFRESH_MS = 6000;
 const channelMentionCache = {};
 let channelHashCache = null;
 let channelMentionContext = null;
+let channelMentionBuilderFilter = 'all';
+const channelMentionBuilderSelection = new Map();
+const CHANNEL_MENTION_LISTS_STORAGE_KEY = 'canopy.channel_mention_lists.v1';
 const POLL_EDIT_WINDOW_SECONDS = {{ (poll_edit_window_seconds if poll_edit_window_seconds is defined else 0)|tojson }};
 const POLL_EDIT_WINDOW_LABEL = POLL_EDIT_WINDOW_SECONDS
     ? `Edits lock after ${Math.max(1, Math.round(POLL_EDIT_WINDOW_SECONDS / 60))}m or first vote`
@@ -2775,7 +3073,7 @@ function selectChannel(channelId, channelName) {
     loadingOlderMessages = false;
     noMoreOlderMessages = false;
     clearNewMessagesBanner();
-    fetchChannelMentionCandidates(channelId);
+    refreshChannelMentionBuilderForChannel(channelId);
     
     // Clear reply and search context when switching channels
     cancelReply();
@@ -4009,15 +4307,388 @@ function fetchChannelMentionCandidates(channelId) {
         .then(data => {
             if (data && data.success && Array.isArray(data.users)) {
                 channelMentionCache[channelId] = data.users;
+                if (channelId === currentChannelId) {
+                    renderChannelMentionMacroButtons();
+                }
                 return data.users;
             }
             channelMentionCache[channelId] = [];
+            if (channelId === currentChannelId) {
+                renderChannelMentionMacroButtons();
+            }
             return [];
         })
         .catch(() => {
             channelMentionCache[channelId] = [];
+            if (channelId === currentChannelId) {
+                renderChannelMentionMacroButtons();
+            }
             return [];
         });
+}
+
+function normalizeMentionAccountType(accountType) {
+    return String(accountType || '').toLowerCase() === 'agent' ? 'agent' : 'human';
+}
+
+function getChannelMentionBuilderHandle(user) {
+    return (user && (user.handle || user.username || user.user_id)) || '';
+}
+
+function getChannelMentionBuilderLabel(user) {
+    return (user && (user.display_name || user.username || user.user_id)) || '';
+}
+
+function getStoredChannelMentionLists() {
+    try {
+        const raw = localStorage.getItem(CHANNEL_MENTION_LISTS_STORAGE_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (_) {
+        return {};
+    }
+}
+
+function setStoredChannelMentionLists(lists) {
+    try {
+        localStorage.setItem(CHANNEL_MENTION_LISTS_STORAGE_KEY, JSON.stringify(lists || {}));
+    } catch (_) {
+        // Ignore storage errors; feature is optional.
+    }
+}
+
+function refreshChannelMentionListOptions() {
+    const select = document.getElementById('channel-mention-list-select');
+    if (!select) return;
+    const lists = getStoredChannelMentionLists();
+    const names = Object.keys(lists).sort((a, b) => a.localeCompare(b));
+    const previous = select.value;
+    select.innerHTML = '<option value="">Saved lists</option>' + names
+        .map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
+        .join('');
+    if (previous && lists[previous]) {
+        select.value = previous;
+    }
+}
+
+function getChannelMacroHandlesFromList(listName) {
+    const lists = getStoredChannelMentionLists();
+    const ids = lists[listName];
+    if (!Array.isArray(ids) || !ids.length) return [];
+    const candidates = channelMentionCache[currentChannelId] || [];
+    const byId = new Map(candidates.map(user => [user.user_id, user]));
+    const handles = ids
+        .map(id => byId.get(id))
+        .filter(user => user && user.user_id !== currentUserId)
+        .map(user => getChannelMentionBuilderHandle(user))
+        .filter(Boolean);
+    return Array.from(new Set(handles));
+}
+
+function renderChannelMentionMacroButtons() {
+    const container = document.getElementById('channel-mention-macro-buttons');
+    if (!container) return;
+    const lists = getStoredChannelMentionLists();
+    const names = Object.keys(lists).sort((a, b) => a.localeCompare(b));
+    const available = names
+        .map(name => ({ name, handles: getChannelMacroHandlesFromList(name) }))
+        .filter(entry => entry.handles.length > 0);
+
+    container.innerHTML = '';
+    if (!available.length) {
+        container.style.display = 'none';
+        return;
+    }
+
+    const quickEntries = available.slice(0, 2);
+    quickEntries.forEach(entry => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-outline-success btn-sm mention-macro-btn';
+        btn.textContent = entry.name;
+        btn.title = `Insert ${entry.handles.length} mention${entry.handles.length === 1 ? '' : 's'} from "${entry.name}"`;
+        btn.addEventListener('click', () => runChannelMentionMacro(entry.name));
+        container.appendChild(btn);
+    });
+
+    const hiddenCount = available.length - quickEntries.length;
+    if (hiddenCount > 0) {
+        const moreBtn = document.createElement('button');
+        moreBtn.type = 'button';
+        moreBtn.className = 'btn btn-outline-secondary btn-sm mention-macro-btn';
+        moreBtn.innerHTML = `<i class="bi bi-three-dots"></i><span class="ms-1">+${hiddenCount}</span>`;
+        moreBtn.title = 'Open mention builder';
+        moreBtn.addEventListener('click', () => toggleChannelMentionBuilder(true));
+        container.appendChild(moreBtn);
+    }
+
+    container.style.display = '';
+}
+
+function insertChannelMentionHandles(handles) {
+    const textarea = document.getElementById('message-input');
+    if (!textarea) return 0;
+    const uniqueHandles = Array.from(new Set((handles || []).map(h => String(h || '').trim()).filter(Boolean)));
+    if (!uniqueHandles.length) return 0;
+
+    const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const content = textarea.value || '';
+    const missingHandles = uniqueHandles.filter(handle => {
+        const pattern = new RegExp(`(^|[^A-Za-z0-9_.\\-@])@${escapeRegex(handle)}($|[^A-Za-z0-9_.\\-])`, 'i');
+        return !pattern.test(content);
+    });
+    if (!missingHandles.length) return 0;
+
+    const prefix = content && !/\s$/.test(content) ? '\n' : '';
+    const mentionText = missingHandles.map(handle => `@${handle}`).join(' ') + ' ';
+    textarea.value = content + prefix + mentionText;
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    hideChannelMentionSuggestions();
+    updateChannelTaskToggle();
+    return missingHandles.length;
+}
+
+function runChannelMentionMacro(listName) {
+    const handles = getChannelMacroHandlesFromList(listName);
+    if (!handles.length) {
+        showAlert(`No users from "${listName}" are available in this channel.`, 'info');
+        return;
+    }
+    const inserted = insertChannelMentionHandles(handles);
+    if (inserted > 0) {
+        showAlert(`Inserted ${inserted} mention${inserted === 1 ? '' : 's'} from "${listName}".`, 'success');
+    } else {
+        showAlert(`All mentions from "${listName}" are already in this message.`, 'info');
+    }
+}
+
+function isChannelMentionBuilderOpen() {
+    const panel = document.getElementById('channel-mention-builder');
+    return !!panel && panel.style.display !== 'none';
+}
+
+function toggleChannelMentionBuilder(forceOpen) {
+    const panel = document.getElementById('channel-mention-builder');
+    const search = document.getElementById('channel-mention-builder-search');
+    if (!panel) return;
+    const shouldOpen = (forceOpen === undefined) ? !isChannelMentionBuilderOpen() : !!forceOpen;
+    panel.style.display = shouldOpen ? '' : 'none';
+    if (!shouldOpen) return;
+    refreshChannelMentionListOptions();
+    fetchChannelMentionCandidates(currentChannelId).then(() => {
+        renderChannelMentionBuilder();
+        if (search) search.focus();
+    });
+}
+
+function setChannelMentionBuilderFilter(filter) {
+    channelMentionBuilderFilter = (filter === 'agent' || filter === 'human') ? filter : 'all';
+    renderChannelMentionBuilder();
+}
+
+function removeChannelMentionBuilderUser(userId) {
+    channelMentionBuilderSelection.delete(userId);
+    renderChannelMentionBuilder();
+}
+
+function clearChannelMentionBuilderSelection() {
+    channelMentionBuilderSelection.clear();
+    renderChannelMentionBuilder();
+}
+
+function toggleChannelMentionBuilderUser(userId) {
+    if (!userId) return;
+    if (channelMentionBuilderSelection.has(userId)) {
+        channelMentionBuilderSelection.delete(userId);
+    } else {
+        const candidates = channelMentionCache[currentChannelId] || [];
+        const user = candidates.find(item => item && item.user_id === userId);
+        if (user) channelMentionBuilderSelection.set(userId, user);
+    }
+    renderChannelMentionBuilder();
+}
+
+function bulkSelectChannelMentionBuilder(accountType) {
+    const targetType = normalizeMentionAccountType(accountType);
+    const candidates = channelMentionCache[currentChannelId] || [];
+    candidates.forEach(user => {
+        if (!user || !user.user_id || user.user_id === currentUserId) return;
+        if (normalizeMentionAccountType(user.account_type) !== targetType) return;
+        channelMentionBuilderSelection.set(user.user_id, user);
+    });
+    renderChannelMentionBuilder();
+}
+
+function getFilteredChannelMentionBuilderUsers() {
+    const search = (document.getElementById('channel-mention-builder-search')?.value || '').trim().toLowerCase();
+    const candidates = (channelMentionCache[currentChannelId] || []).filter(user => {
+        if (!user || !user.user_id || user.user_id === currentUserId) return false;
+        const accountType = normalizeMentionAccountType(user.account_type);
+        if (channelMentionBuilderFilter !== 'all' && accountType !== channelMentionBuilderFilter) return false;
+        if (!search) return true;
+        const label = (getChannelMentionBuilderLabel(user) || '').toLowerCase();
+        const username = (user.username || '').toLowerCase();
+        const handle = (getChannelMentionBuilderHandle(user) || '').toLowerCase();
+        const userId = (user.user_id || '').toLowerCase();
+        return label.includes(search) || username.includes(search) || handle.includes(search) || userId.includes(search);
+    });
+
+    return candidates.sort((a, b) => {
+        const aSelected = channelMentionBuilderSelection.has(a.user_id) ? 0 : 1;
+        const bSelected = channelMentionBuilderSelection.has(b.user_id) ? 0 : 1;
+        if (aSelected !== bSelected) return aSelected - bSelected;
+        const aType = normalizeMentionAccountType(a.account_type) === 'agent' ? 0 : 1;
+        const bType = normalizeMentionAccountType(b.account_type) === 'agent' ? 0 : 1;
+        if (aType !== bType) return aType - bType;
+        return getChannelMentionBuilderLabel(a).localeCompare(getChannelMentionBuilderLabel(b));
+    });
+}
+
+function renderChannelMentionBuilder() {
+    if (!isChannelMentionBuilderOpen()) return;
+    const listEl = document.getElementById('channel-mention-builder-list');
+    const selectedEl = document.getElementById('channel-mention-builder-selected');
+    const countEl = document.getElementById('channel-mention-builder-count');
+    if (!listEl || !selectedEl || !countEl) return;
+
+    const selectedUsers = Array.from(channelMentionBuilderSelection.values());
+    const selectedAgentCount = selectedUsers.filter(u => normalizeMentionAccountType(u.account_type) === 'agent').length;
+    const selectedHumanCount = Math.max(0, selectedUsers.length - selectedAgentCount);
+    countEl.textContent = selectedUsers.length
+        ? `${selectedUsers.length} selected • ${selectedAgentCount} agent${selectedAgentCount === 1 ? '' : 's'} / ${selectedHumanCount} human${selectedHumanCount === 1 ? '' : 's'}`
+        : '0 selected';
+
+    selectedEl.innerHTML = selectedUsers.map(user => {
+        const userId = String(user.user_id || '').replace(/'/g, "\\'");
+        return `<span class="mention-builder-chip">
+            ${escapeHtml(getChannelMentionBuilderLabel(user))}
+            <button type="button" onclick="removeChannelMentionBuilderUser('${userId}')">&times;</button>
+        </span>`;
+    }).join('');
+
+    const allBtn = document.getElementById('channel-mention-filter-all');
+    const agentBtn = document.getElementById('channel-mention-filter-agents');
+    const humanBtn = document.getElementById('channel-mention-filter-humans');
+    if (allBtn) allBtn.classList.toggle('active', channelMentionBuilderFilter === 'all');
+    if (agentBtn) agentBtn.classList.toggle('active', channelMentionBuilderFilter === 'agent');
+    if (humanBtn) humanBtn.classList.toggle('active', channelMentionBuilderFilter === 'human');
+
+    const users = getFilteredChannelMentionBuilderUsers();
+    if (!users.length) {
+        listEl.innerHTML = '<div class="text-muted small px-1 py-2">No users match this filter.</div>';
+        return;
+    }
+    listEl.innerHTML = users.map(user => {
+        const userId = String(user.user_id || '').replace(/'/g, "\\'");
+        const selected = channelMentionBuilderSelection.has(user.user_id);
+        const accountType = normalizeMentionAccountType(user.account_type);
+        const avatar = user.avatar_url
+            ? `<img src="${escapeHtml(user.avatar_url)}" alt="${escapeHtml(getChannelMentionBuilderLabel(user))}">`
+            : `<span>${escapeHtml(getChannelMentionBuilderLabel(user).slice(0, 1).toUpperCase())}</span>`;
+        return `<button type="button" class="mention-builder-user ${selected ? 'is-selected' : ''}"
+                    onclick="toggleChannelMentionBuilderUser('${userId}')">
+            <span class="mention-builder-avatar">${avatar}</span>
+            <span class="mention-builder-meta">
+                <span class="mention-builder-name">${escapeHtml(getChannelMentionBuilderLabel(user))}</span>
+                <span class="mention-builder-handle">@${escapeHtml(getChannelMentionBuilderHandle(user))}</span>
+            </span>
+            <span class="mention-builder-type ${accountType === 'agent' ? 'agent' : ''}">${accountType}</span>
+        </button>`;
+    }).join('');
+}
+
+function saveChannelMentionList() {
+    if (!channelMentionBuilderSelection.size) {
+        showAlert('Select at least one user before saving a mention list.', 'warning');
+        return;
+    }
+    const listName = (window.prompt('Save mention list as:', '') || '').trim();
+    if (!listName) return;
+    const lists = getStoredChannelMentionLists();
+    lists[listName] = Array.from(channelMentionBuilderSelection.keys());
+    setStoredChannelMentionLists(lists);
+    refreshChannelMentionListOptions();
+    renderChannelMentionMacroButtons();
+    const select = document.getElementById('channel-mention-list-select');
+    if (select) select.value = listName;
+    showAlert(`Saved mention list "${listName}".`, 'success');
+}
+
+function applyChannelMentionList() {
+    const select = document.getElementById('channel-mention-list-select');
+    if (!select || !select.value) {
+        showAlert('Select a saved list first.', 'warning');
+        return;
+    }
+    const lists = getStoredChannelMentionLists();
+    const ids = lists[select.value];
+    if (!Array.isArray(ids) || !ids.length) {
+        showAlert('Saved list is empty.', 'warning');
+        return;
+    }
+    const candidates = channelMentionCache[currentChannelId] || [];
+    const byId = new Map(candidates.map(user => [user.user_id, user]));
+    channelMentionBuilderSelection.clear();
+    let added = 0;
+    ids.forEach(id => {
+        const user = byId.get(id);
+        if (!user || user.user_id === currentUserId) return;
+        channelMentionBuilderSelection.set(user.user_id, user);
+        added += 1;
+    });
+    renderChannelMentionBuilder();
+    if (added) {
+        showAlert(`Loaded ${added} user${added === 1 ? '' : 's'} from "${select.value}".`, 'success');
+    } else {
+        showAlert('No users from this list are available in the current channel.', 'info');
+    }
+}
+
+function deleteChannelMentionList() {
+    const select = document.getElementById('channel-mention-list-select');
+    if (!select || !select.value) {
+        showAlert('Select a saved list to delete.', 'warning');
+        return;
+    }
+    const name = select.value;
+    if (!window.confirm(`Delete mention list "${name}"?`)) return;
+    const lists = getStoredChannelMentionLists();
+    delete lists[name];
+    setStoredChannelMentionLists(lists);
+    refreshChannelMentionListOptions();
+    renderChannelMentionMacroButtons();
+    showAlert(`Deleted mention list "${name}".`, 'success');
+}
+
+function insertChannelMentionBuilderSelection() {
+    if (!channelMentionBuilderSelection.size) {
+        showAlert('Select at least one person to mention.', 'warning');
+        return;
+    }
+    const handles = Array.from(channelMentionBuilderSelection.values())
+        .map(user => getChannelMentionBuilderHandle(user))
+        .filter(Boolean);
+    const inserted = insertChannelMentionHandles(handles);
+    if (inserted <= 0) {
+        showAlert('All selected users are already mentioned in this message.', 'info');
+        return;
+    }
+    showAlert(`Inserted ${inserted} mention${inserted === 1 ? '' : 's'}.`, 'success');
+}
+
+function refreshChannelMentionBuilderForChannel(channelId) {
+    channelMentionBuilderSelection.clear();
+    channelMentionBuilderFilter = 'all';
+    const search = document.getElementById('channel-mention-builder-search');
+    if (search) search.value = '';
+    renderChannelMentionMacroButtons();
+    fetchChannelMentionCandidates(channelId).then(() => {
+        if (isChannelMentionBuilderOpen()) {
+            renderChannelMentionBuilder();
+        }
+    });
 }
 
 function fetchChannelHashCandidates() {
@@ -4257,9 +4928,10 @@ function handleChannelMentionInput() {
             const matches = candidates.filter(item => {
                 const name = (item.display_name || '').toLowerCase();
                 const username = (item.username || '').toLowerCase();
+                const handle = (item.handle || '').toLowerCase();
                 const userId = (item.user_id || '').toLowerCase();
                 if (!q) return true;
-                return name.includes(q) || username.includes(q) || userId.includes(q);
+                return name.includes(q) || username.includes(q) || handle.includes(q) || userId.includes(q);
             }).slice(0, 6);
             channelMentionContext = mentionContext;
             renderChannelMentionSuggestions(matches, mentionContext);
@@ -6727,6 +7399,8 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('Channels page loaded successfully.');
         console.log('Current channel ID:', currentChannelId);
         console.log('Selected files array:', selectedFiles);
+        refreshChannelMentionListOptions();
+        renderChannelMentionMacroButtons();
 
         if (typeof ensureChannelIndex === 'function') {
             ensureChannelIndex();
@@ -6772,6 +7446,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (e.key === 'Escape') {
                         hideChannelMentionSuggestions();
                         hideChannelHashSuggestions();
+                        toggleChannelMentionBuilder(false);
                     } else {
                         handleChannelComposerKeydown(e);
                     }
