@@ -413,8 +413,8 @@
                                     <div class="user-avatar me-3" style="width: 40px; height: 40px;"
                                          data-user-id="{{ post.author_id }}"
                                          data-origin-peer="{{ post.metadata.get('origin_peer') if post.metadata and post.metadata.get('origin_peer') else '' }}"
-                                         onclick="copyUserId('{{ post.author_id }}', this.closest('.d-flex').querySelector('[data-user-display]')?.textContent?.trim() || '')"
-                                         title="Click to copy user ID">
+                                         onclick="copyUserId('{{ post.author_id }}', this.closest('.d-flex').querySelector('[data-user-display]')?.textContent?.trim() || '', this)"
+                                         title="View user details">
                                         <div class="bg-primary rounded-circle d-flex align-items-center justify-content-center" style="width: 100%; height: 100%;">
                                             <i class="bi bi-person text-white"></i>
                                         </div>
@@ -1542,6 +1542,51 @@
     border-color: rgba(56, 189, 248, 0.45);
     color: #7dd3fc;
     background: rgba(56, 189, 248, 0.15);
+}
+
+.mention-builder-badges {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.mention-builder-presence {
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border-radius: 999px;
+    padding: 0.15rem 0.4rem;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    color: var(--canopy-text-secondary);
+    background: rgba(71, 85, 105, 0.2);
+    white-space: nowrap;
+}
+
+.mention-builder-presence.online {
+    border-color: rgba(34, 197, 94, 0.55);
+    color: #86efac;
+    background: rgba(22, 163, 74, 0.16);
+}
+
+.mention-builder-presence.recent {
+    border-color: rgba(59, 130, 246, 0.45);
+    color: #93c5fd;
+    background: rgba(59, 130, 246, 0.14);
+}
+
+.mention-builder-presence.idle {
+    border-color: rgba(245, 158, 11, 0.45);
+    color: #fde68a;
+    background: rgba(217, 119, 6, 0.14);
+}
+
+.mention-builder-presence.offline,
+.mention-builder-presence.no_checkin,
+.mention-builder-presence.remote_unknown {
+    border-color: rgba(148, 163, 184, 0.42);
+    color: #cbd5e1;
+    background: rgba(71, 85, 105, 0.16);
 }
 
 .mention-builder-footer {
@@ -3240,6 +3285,50 @@
             return String(accountType || '').toLowerCase() === 'agent' ? 'agent' : 'human';
         }
 
+        function normalizeAgentPresenceState(state) {
+            const raw = String(state || '').trim().toLowerCase();
+            if (!raw) return 'no_checkin';
+            if (['online', 'recent', 'idle', 'offline', 'no_checkin', 'remote_unknown'].includes(raw)) return raw;
+            return 'no_checkin';
+        }
+
+        function getAgentPresenceSortRank(user) {
+            const state = normalizeAgentPresenceState(user && user.presence_state);
+            if (state === 'online') return 0;
+            if (state === 'recent') return 1;
+            if (state === 'idle') return 2;
+            if (state === 'offline') return 3;
+            if (state === 'remote_unknown') return 4;
+            return 5;
+        }
+
+        function getAgentPresenceSummary(user) {
+            if (normalizeMentionAccountType(user && user.account_type) !== 'agent') return '';
+            const state = normalizeAgentPresenceState(user && user.presence_state);
+            const label = String(user && user.presence_label || '').trim() || (
+                state === 'online' ? 'Online'
+                : state === 'recent' ? 'Recent'
+                : state === 'idle' ? 'Idle'
+                : state === 'offline' ? 'Offline'
+                : state === 'remote_unknown' ? 'Remote'
+                : 'No check-in'
+            );
+            const age = String(user && user.presence_age_text || '').trim();
+            if (age && ['online', 'recent', 'idle', 'offline'].includes(state)) {
+                return `${label} ${age}`;
+            }
+            return label;
+        }
+
+        function renderAgentPresenceBadge(user) {
+            if (normalizeMentionAccountType(user && user.account_type) !== 'agent') return '';
+            const state = normalizeAgentPresenceState(user && user.presence_state);
+            const summary = getAgentPresenceSummary(user);
+            const lastCheckIn = String(user && user.last_check_in_at || '').trim();
+            const tooltip = lastCheckIn ? `Last check-in ${lastCheckIn}` : 'No heartbeat check-in recorded yet';
+            return `<span class="mention-builder-presence ${state}" title="${escapeHtml(tooltip)}">${escapeHtml(summary)}</span>`;
+        }
+
         function getFeedMentionBuilderHandle(user) {
             return (user && (user.handle || user.username || user.user_id)) || '';
         }
@@ -3447,6 +3536,11 @@
                 const aType = normalizeMentionAccountType(a.account_type) === 'agent' ? 0 : 1;
                 const bType = normalizeMentionAccountType(b.account_type) === 'agent' ? 0 : 1;
                 if (aType !== bType) return aType - bType;
+                if (aType === 0 && bType === 0) {
+                    const aPresence = getAgentPresenceSortRank(a);
+                    const bPresence = getAgentPresenceSortRank(b);
+                    if (aPresence !== bPresence) return aPresence - bPresence;
+                }
                 return getFeedMentionBuilderLabel(a).localeCompare(getFeedMentionBuilderLabel(b));
             });
         }
@@ -3499,7 +3593,10 @@
                         <span class="mention-builder-name">${escapeHtml(getFeedMentionBuilderLabel(user))}</span>
                         <span class="mention-builder-handle">@${escapeHtml(getFeedMentionBuilderHandle(user))}</span>
                     </span>
-                    <span class="mention-builder-type ${accountType === 'agent' ? 'agent' : ''}">${accountType}</span>
+                    <span class="mention-builder-badges">
+                        ${renderAgentPresenceBadge(user)}
+                        <span class="mention-builder-type ${accountType === 'agent' ? 'agent' : ''}">${accountType}</span>
+                    </span>
                 </button>`;
             }).join('');
         }
@@ -3639,9 +3736,13 @@
                 btn.className = 'mention-item' + (i === 0 ? ' highlighted' : '');
                 const label = item.display_name || item.username || item.user_id;
                 const handle = item.handle || item.display_name || item.username;
+                const presenceSummary = getAgentPresenceSummary(item);
+                const mentionMeta = presenceSummary
+                    ? `@${escapeHtml(handle)} · ${escapeHtml(presenceSummary)}`
+                    : `@${escapeHtml(handle)}`;
                 btn.innerHTML = `<div class="flex-grow-1">
                         <div><strong>${escapeHtml(label)}</strong></div>
-                        <div class="mention-meta">@${escapeHtml(handle)}</div>
+                        <div class="mention-meta">${mentionMeta}</div>
                     </div>`;
                 btn.addEventListener('mousedown', (e) => {
                     e.preventDefault();
@@ -4958,8 +5059,8 @@
                 <div class="d-flex gap-2">
                     <!-- User Avatar -->
                     <div class="user-avatar flex-shrink-0" data-user-id="${comment.user_id}" data-origin-peer="${comment.origin_peer || ''}"
-                         onclick="copyUserId('${comment.user_id}', '${(comment.display_name || '').replace(/'/g, "\\'")}')"
-                         title="Click to copy user ID"
+                         onclick="copyUserId('${comment.user_id}', '${(comment.display_name || '').replace(/'/g, "\\'")}', this)"
+                         title="View user details"
                          style="width: 32px; height: 32px; background: var(--canopy-bg-secondary); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
                         <i class="bi bi-person-circle"></i>
                     </div>

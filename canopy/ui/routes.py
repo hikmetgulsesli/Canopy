@@ -53,6 +53,10 @@ from ..core.profile import (
     normalize_agent_directives,
 )
 from ..core.agent_heartbeat import build_agent_heartbeat_snapshot
+from ..core.agent_presence import (
+    get_agent_presence_records,
+    build_agent_presence_payload,
+)
 
 logger = logging.getLogger(__name__)
 _CUSTOM_EMOJI_LOCK = threading.Lock()
@@ -1159,6 +1163,74 @@ def create_ui_blueprint() -> Blueprint:
             mention_manager=mention_manager,
             inbox_manager=inbox_manager,
         )
+
+    def _normalized_account_type(
+        raw_account_type: Any,
+        *,
+        status: Any = None,
+        agent_directives: Any = None,
+        has_presence_checkin: bool = False,
+    ) -> str:
+        """Normalize account_type with conservative agent inference for legacy rows.
+
+        Some historical or partially migrated user rows can carry ``account_type='human'``
+        even when they are operational agent accounts. We only infer ``agent`` when there
+        is explicit supporting evidence (agent directives or pending-approval state).
+        """
+        account_type = str(raw_account_type or '').strip().lower()
+        if account_type not in ('agent', 'human'):
+            account_type = 'human'
+        if account_type == 'agent':
+            return 'agent'
+
+        if has_presence_checkin:
+            return 'agent'
+
+        status_norm = str(status or '').strip().lower()
+        directives_norm = None
+        try:
+            directives_norm = normalize_agent_directives(agent_directives)
+        except Exception:
+            directives_norm = str(agent_directives or '').strip() or None
+
+        if directives_norm:
+            return 'agent'
+        if status_norm == 'pending_approval':
+            return 'agent'
+        return 'human'
+
+    def _annotate_user_presence(users: list[dict[str, Any]], db_manager: Any) -> None:
+        """Attach badge-friendly presence fields to user rows in place."""
+        if not users or not db_manager:
+            return
+        user_ids = [str(u.get('id') or u.get('user_id') or '').strip() for u in users]
+        user_ids = [uid for uid in user_ids if uid]
+        if not user_ids:
+            return
+        presence_records = get_agent_presence_records(db_manager=db_manager, user_ids=user_ids)
+        for user in users:
+            uid = str(user.get('id') or user.get('user_id') or '').strip()
+            presence_record = presence_records.get(uid) or {}
+            account_type = _normalized_account_type(
+                user.get('account_type'),
+                status=user.get('status'),
+                agent_directives=user.get('agent_directives'),
+                has_presence_checkin=bool(presence_record.get('last_check_in_at')),
+            )
+            user['account_type'] = account_type
+            origin_peer = str(user.get('origin_peer') or '').strip()
+            presence = build_agent_presence_payload(
+                last_check_in_at=presence_record.get('last_check_in_at'),
+                is_remote=bool(origin_peer),
+                account_type=account_type,
+            )
+            user['presence_state'] = presence.get('state')
+            user['presence_label'] = presence.get('label')
+            user['presence_color'] = presence.get('color')
+            user['presence_age_seconds'] = presence.get('age_seconds')
+            user['presence_age_text'] = presence.get('age_text')
+            user['last_check_in_at'] = presence.get('last_check_in_at')
+            user['last_check_in_source'] = presence_record.get('last_check_in_source')
 
     def _coerce_int(raw: Any, default: int, minimum: int, maximum: int) -> int:
         try:
@@ -2726,6 +2798,7 @@ def create_ui_blueprint() -> Blueprint:
             _, api_key_manager, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
             skill_manager = current_app.config.get('SKILL_MANAGER')
             users = db_manager.get_all_users_for_admin()
+            _annotate_user_presence(users, db_manager)
             pending = [u for u in users if (u.get('status') or 'active') == 'pending_approval']
             active_agents = [u for u in users if (u.get('account_type') or 'human') == 'agent' and (u.get('status') or 'active') == 'active']
             for u in users:
@@ -3518,6 +3591,7 @@ def create_ui_blueprint() -> Blueprint:
         try:
             db_manager, _, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
             users = db_manager.get_all_users_for_admin()
+            _annotate_user_presence(users, db_manager)
             for u in users:
                 state = _effective_agent_directive_state(u)
                 u['agent_directives_source'] = state['source']
@@ -10216,34 +10290,80 @@ def create_ui_blueprint() -> Blueprint:
             
             if not user_ids:
                 return jsonify({'error': 'No user IDs provided'}), 400
-            
+
+            presence_records = get_agent_presence_records(db_manager=db_manager, user_ids=user_ids)
             user_info = {}
             for user_id in user_ids:
+                row = None
+                if db_manager:
+                    try:
+                        row = db_manager.get_user(user_id)
+                    except Exception:
+                        row = None
+
                 profile = profile_manager.get_profile(user_id)
                 if profile:
-                    logger.debug(f"Found profile for {user_id}: display_name={profile.display_name}, avatar_file_id={profile.avatar_file_id}, avatar_url={profile.avatar_url}")
-                    user_info[user_id] = {
-                        'display_name': profile.display_name or profile.username,
-                        'avatar_url': profile.avatar_url,
-                        'username': profile.username,
-                        'origin_peer': getattr(profile, 'origin_peer', None),
-                    }
+                    logger.debug(
+                        "Found profile for %s: display_name=%s, avatar_file_id=%s, avatar_url=%s",
+                        user_id,
+                        getattr(profile, 'display_name', None),
+                        getattr(profile, 'avatar_file_id', None),
+                        getattr(profile, 'avatar_url', None),
+                    )
+                    display_name = (
+                        getattr(profile, 'display_name', None)
+                        or getattr(profile, 'username', None)
+                        or (row.get('display_name') if row else None)
+                        or (row.get('username') if row else None)
+                        or user_id
+                    )
+                    username = (
+                        getattr(profile, 'username', None)
+                        or (row.get('username') if row else None)
+                        or user_id
+                    )
+                    origin_peer = (
+                        getattr(profile, 'origin_peer', None)
+                        or (row.get('origin_peer') if row else None)
+                    )
+                    account_type_raw = (
+                        getattr(profile, 'account_type', None)
+                        or (row.get('account_type') if row else None)
+                    )
+                    status = (row.get('status') if row else None) or 'active'
+                    avatar_url = getattr(profile, 'avatar_url', None)
+                    agent_directives = (
+                        getattr(profile, 'agent_directives', None)
+                        or (row.get('agent_directives') if row else None)
+                    )
                 else:
                     logger.warning(f"No profile found for user_id: {user_id}")
-                    origin_peer = None
-                    try:
-                        if db_manager:
-                            row = db_manager.get_user(user_id)
-                            if row:
-                                origin_peer = row.get('origin_peer')
-                    except Exception:
-                        origin_peer = None
-                    user_info[user_id] = {
-                        'display_name': user_id,
-                        'avatar_url': None,
-                        'username': user_id,
-                        'origin_peer': origin_peer,
-                    }
+                    display_name = (row.get('display_name') if row else None) or user_id
+                    username = (row.get('username') if row else None) or user_id
+                    origin_peer = (row.get('origin_peer') if row else None)
+                    account_type_raw = (row.get('account_type') if row else None)
+                    status = (row.get('status') if row else None) or 'active'
+                    avatar_url = None
+                    agent_directives = (row.get('agent_directives') if row else None)
+
+                account_type = _normalized_account_type(
+                    account_type_raw,
+                    status=status,
+                    agent_directives=agent_directives,
+                    has_presence_checkin=bool((presence_records.get(user_id) or {}).get('last_check_in_at')),
+                )
+                status = str(status or 'active').strip().lower() or 'active'
+                origin_peer = str(origin_peer or '').strip() or None
+
+                user_info[user_id] = {
+                    'display_name': display_name,
+                    'avatar_url': avatar_url,
+                    'username': username,
+                    'origin_peer': origin_peer,
+                    'account_type': account_type,
+                    'status': status,
+                    'is_remote': bool(origin_peer),
+                }
             
             logger.debug(f"Returning user info: {user_info}")
             
@@ -10864,19 +10984,68 @@ def create_ui_blueprint() -> Blueprint:
             # do not include it.
             user_ids = [u.get('user_id') for u in users if u.get('user_id')]
             if user_ids:
-                account_type_map = {}
+                user_meta_map: dict[str, dict[str, Any]] = {}
+                origin_peer_map = {}
                 with db_manager.get_connection() as conn:
                     placeholders = ",".join("?" for _ in user_ids)
+                    table_cols = set()
+                    try:
+                        for col_row in conn.execute("PRAGMA table_info(users)").fetchall():
+                            name = col_row['name'] if isinstance(col_row, sqlite3.Row) else col_row[1]
+                            table_cols.add(str(name))
+                    except Exception:
+                        table_cols = {'id', 'account_type', 'origin_peer', 'status', 'agent_directives'}
+
+                    select_cols = ['id', 'account_type']
+                    if 'origin_peer' in table_cols:
+                        select_cols.append('origin_peer')
+                    if 'status' in table_cols:
+                        select_cols.append('status')
+                    if 'agent_directives' in table_cols:
+                        select_cols.append('agent_directives')
+
                     rows = conn.execute(
-                        f"SELECT id, account_type FROM users WHERE id IN ({placeholders})",
+                        f"SELECT {', '.join(select_cols)} FROM users WHERE id IN ({placeholders})",
                         user_ids
                     ).fetchall()
                     for row in rows:
-                        account_type_map[row['id']] = (row['account_type'] or 'human').strip().lower()
+                        meta = dict(row)
+                        uid = str(meta.get('id') or '').strip()
+                        if not uid:
+                            continue
+                        user_meta_map[uid] = meta
+                        origin_peer_map[uid] = str(meta.get('origin_peer') or '').strip()
+
+                presence_records = get_agent_presence_records(db_manager=db_manager, user_ids=user_ids)
                 for user in users:
                     uid = user.get('user_id')
-                    account_type = user.get('account_type') or account_type_map.get(uid) or 'human'
-                    user['account_type'] = str(account_type).strip().lower() or 'human'
+                    meta = user_meta_map.get(uid) or {}
+                    presence_record = presence_records.get(uid) or {}
+                    account_type_norm = _normalized_account_type(
+                        user.get('account_type') or meta.get('account_type'),
+                        status=user.get('status') or meta.get('status'),
+                        agent_directives=user.get('agent_directives') or meta.get('agent_directives'),
+                        has_presence_checkin=bool(presence_record.get('last_check_in_at')),
+                    )
+                    user['account_type'] = account_type_norm
+                    origin_peer = origin_peer_map.get(uid) or ''
+                    is_remote = bool(origin_peer)
+                    user['is_remote'] = is_remote
+                    if origin_peer:
+                        user['origin_peer'] = origin_peer
+
+                    presence = build_agent_presence_payload(
+                        last_check_in_at=presence_record.get('last_check_in_at'),
+                        is_remote=is_remote,
+                        account_type=account_type_norm,
+                    )
+                    user['last_check_in_at'] = presence.get('last_check_in_at')
+                    user['last_check_in_source'] = presence_record.get('last_check_in_source')
+                    user['presence_state'] = presence.get('state')
+                    user['presence_label'] = presence.get('label')
+                    user['presence_color'] = presence.get('color')
+                    user['presence_age_seconds'] = presence.get('age_seconds')
+                    user['presence_age_text'] = presence.get('age_text')
 
             return jsonify({'success': True, 'users': users})
         except Exception as e:

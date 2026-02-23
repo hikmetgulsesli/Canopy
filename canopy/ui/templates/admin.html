@@ -626,6 +626,9 @@
                             </div>
                             <div class="small text-muted">
                                 @{{ u.username }} · {{ u.get('status') or 'active' }}
+                                {% if (u.get('account_type') or 'human') == 'agent' %}
+                                · {{ (u.get('presence_label') or 'No check-in')|lower }}{% if u.get('presence_age_text') %} {{ u.get('presence_age_text') }}{% endif %}
+                                {% endif %}
                                 {% if u.get('origin_peer') %}
                                 · remote
                                 {% endif %}
@@ -769,6 +772,11 @@
                         <td>
                             {% set st = u.get('status') or 'active' %}
                             <span class="badge bg-{{ 'success' if st == 'active' else 'warning' if st == 'pending_approval' else 'danger' }}">{{ st }}</span>
+                            {% if (u.get('account_type') or 'human') == 'agent' %}
+                            {% set pstate = u.get('presence_state') or 'no_checkin' %}
+                            {% set pcolor = 'success' if pstate == 'online' else 'info' if pstate == 'recent' else 'warning' if pstate == 'idle' else 'secondary' %}
+                            <span class="badge bg-{{ pcolor }} ms-1" title="Last check-in: {{ u.get('last_check_in_at') or 'none' }}">{{ u.get('presence_label') or 'No check-in' }}{% if u.get('presence_age_text') %} {{ u.get('presence_age_text') }}{% endif %}</span>
+                            {% endif %}
                         </td>
                         <td>
                             {% if u.get('agent_directives_source') %}

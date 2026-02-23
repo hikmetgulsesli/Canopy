@@ -642,22 +642,332 @@
             }
         }
 
-        // --- Copy user ID to clipboard (clickable avatars) ---
-        function copyUserId(userId, displayName) {
-            navigator.clipboard.writeText(userId).then(() => {
-                showAlert(`Copied ${displayName || 'user'} ID to clipboard`, 'success');
-            }).catch(() => {
-                // Fallback
-                const ta = document.createElement('textarea');
-                ta.value = userId;
-                ta.style.position = 'fixed';
-                ta.style.opacity = '0';
-                document.body.appendChild(ta);
-                ta.select();
-                document.execCommand('copy');
-                document.body.removeChild(ta);
-                showAlert(`Copied ${displayName || 'user'} ID to clipboard`, 'success');
+        // --- User identity card (clickable avatars) ---
+        let _userIdentityModal = null;
+        const _userIdentityCache = {};
+        let _userIdentityRequestSeq = 0;
+
+        function _safeImageSrc(value) {
+            const src = String(value || '').trim();
+            if (!src) return '';
+            if (src.startsWith('/')) return src;
+            if (src.startsWith('data:image/')) return src;
+            if (src.startsWith('https://') || src.startsWith('http://')) return src;
+            return '';
+        }
+
+        function _avatarSrcFromElement(el) {
+            if (!el) return '';
+            const userImg = el.querySelector('.avatar-user img');
+            if (userImg) return _safeImageSrc(userImg.getAttribute('src') || userImg.src);
+            const anyImg = el.querySelector('img');
+            if (anyImg) return _safeImageSrc(anyImg.getAttribute('src') || anyImg.src);
+            return '';
+        }
+
+        function _copyTextToClipboard(value, label) {
+            const text = String(value || '').trim();
+            if (!text) {
+                showAlert(`No ${label || 'value'} available to copy`, 'warning');
+                return;
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(() => {
+                    showAlert(`Copied ${label || 'value'} to clipboard`, 'success');
+                }).catch(() => {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.style.position = 'fixed';
+                    ta.style.opacity = '0';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    showAlert(`Copied ${label || 'value'} to clipboard`, 'success');
+                });
+                return;
+            }
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            showAlert(`Copied ${label || 'value'} to clipboard`, 'success');
+        }
+
+        function _ensureUserIdentityModal() {
+            if (_userIdentityModal) return _userIdentityModal;
+            let modalEl = document.getElementById('userIdentityModal');
+            if (!modalEl) {
+                const modalHtml = `
+                    <div class="modal fade" id="userIdentityModal" tabindex="-1" aria-labelledby="userIdentityModalLabel" aria-hidden="true">
+                        <div class="modal-dialog modal-dialog-centered modal-sm">
+                            <div class="modal-content user-identity-modal-content">
+                                <div class="modal-header py-2">
+                                    <h5 class="modal-title" id="userIdentityModalLabel">
+                                        <i class="bi bi-person-badge me-2"></i>Identity
+                                    </h5>
+                                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="user-identity-hero">
+                                        <div id="user-identity-avatar" class="user-identity-avatar"></div>
+                                        <div class="user-identity-meta">
+                                            <div id="user-identity-display" class="user-identity-display">User</div>
+                                            <div id="user-identity-subtitle" class="user-identity-subtitle">Loading...</div>
+                                        </div>
+                                    </div>
+                                    <div id="user-identity-fields" class="user-identity-fields"></div>
+                                    <div class="user-identity-actions">
+                                        <button type="button" class="btn btn-outline-secondary btn-sm" id="user-identity-copy-user-id">
+                                            <i class="bi bi-clipboard me-1"></i>Copy User ID
+                                        </button>
+                                        <button type="button" class="btn btn-outline-success btn-sm" id="user-identity-copy-mention">
+                                            <i class="bi bi-at me-1"></i>Copy @mention
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>`;
+                document.body.insertAdjacentHTML('beforeend', modalHtml);
+                modalEl = document.getElementById('userIdentityModal');
+            }
+            if (!modalEl) return null;
+            if (modalEl.dataset.boundIdentity !== '1') {
+                modalEl.dataset.boundIdentity = '1';
+                const copyIdBtn = modalEl.querySelector('#user-identity-copy-user-id');
+                const copyMentionBtn = modalEl.querySelector('#user-identity-copy-mention');
+                if (copyIdBtn) {
+                    copyIdBtn.addEventListener('click', () => {
+                        _copyTextToClipboard(copyIdBtn.getAttribute('data-copy-value') || '', 'user ID');
+                    });
+                }
+                if (copyMentionBtn) {
+                    copyMentionBtn.addEventListener('click', () => {
+                        _copyTextToClipboard(copyMentionBtn.getAttribute('data-copy-value') || '', '@mention');
+                    });
+                }
+            }
+            _userIdentityModal = modalEl;
+            return modalEl;
+        }
+
+        function _appendIdentityField(parent, label, value, copyValue, monospace) {
+            const text = String(value || '').trim();
+            if (!text || !parent) return;
+
+            const row = document.createElement('div');
+            row.className = 'user-identity-field-row';
+
+            const left = document.createElement('div');
+            left.className = 'user-identity-field-left';
+
+            const labelEl = document.createElement('div');
+            labelEl.className = 'user-identity-field-label';
+            labelEl.textContent = label;
+
+            const valueEl = document.createElement(monospace ? 'code' : 'div');
+            valueEl.className = monospace ? 'user-identity-field-value mono' : 'user-identity-field-value';
+            valueEl.textContent = text;
+
+            left.appendChild(labelEl);
+            left.appendChild(valueEl);
+
+            const copyBtn = document.createElement('button');
+            copyBtn.type = 'button';
+            copyBtn.className = 'btn btn-outline-secondary btn-sm user-identity-copy-btn';
+            copyBtn.innerHTML = '<i class="bi bi-clipboard"></i>';
+            copyBtn.title = `Copy ${label}`;
+            copyBtn.addEventListener('click', () => {
+                _copyTextToClipboard(copyValue || text, label);
             });
+
+            row.appendChild(left);
+            row.appendChild(copyBtn);
+            parent.appendChild(row);
+        }
+
+        function _userIdentityInfoFromPayload(userId, displayName, triggerEl, info) {
+            const source = (info && typeof info === 'object') ? info : {};
+            const originPeerFromEl = (triggerEl && triggerEl.dataset) ? (triggerEl.dataset.originPeer || '') : '';
+            const usernameRaw = String(source.username || '').trim();
+            const username = usernameRaw || userId;
+            const accountTypeRaw = String(source.account_type || '').trim().toLowerCase();
+            const accountType = accountTypeRaw || 'human';
+            const statusRaw = String(source.status || '').trim().toLowerCase();
+            const status = statusRaw || (accountType === 'agent' ? 'active' : 'active');
+            const originPeer = String(source.origin_peer || originPeerFromEl || '').trim();
+            const isRemote = originPeer ? true : !!source.is_remote;
+
+            const display = (
+                String(source.display_name || '').trim()
+                || String(displayName || '').trim()
+                || username
+                || userId
+            );
+
+            const avatar = _safeImageSrc(source.avatar_url || _avatarSrcFromElement(triggerEl));
+            const peerDisplay = originPeer
+                ? ((window.canopyPeerDisplayName && window.canopyPeerDisplayName(originPeer)) || `${originPeer.slice(0, 12)}...`)
+                : '';
+            const peerAvatar = originPeer
+                ? _safeImageSrc((window.canopyPeerAvatarSrc && window.canopyPeerAvatarSrc(originPeer)) || '')
+                : '';
+
+            return {
+                user_id: userId,
+                display_name: display,
+                username: username,
+                avatar_url: avatar,
+                account_type: accountType,
+                status: status,
+                origin_peer: originPeer || '',
+                is_remote: isRemote,
+                peer_display_name: peerDisplay,
+                peer_avatar_url: peerAvatar,
+            };
+        }
+
+        function _renderUserIdentityModal(info, loading) {
+            const modalEl = _ensureUserIdentityModal();
+            if (!modalEl) return;
+
+            const avatarWrap = modalEl.querySelector('#user-identity-avatar');
+            const displayEl = modalEl.querySelector('#user-identity-display');
+            const subtitleEl = modalEl.querySelector('#user-identity-subtitle');
+            const fieldsEl = modalEl.querySelector('#user-identity-fields');
+            const copyIdBtn = modalEl.querySelector('#user-identity-copy-user-id');
+            const copyMentionBtn = modalEl.querySelector('#user-identity-copy-mention');
+
+            if (displayEl) displayEl.textContent = info.display_name || info.username || info.user_id || 'User';
+            const subtitleParts = [];
+            if (info.username) subtitleParts.push(`@${info.username}`);
+            if (info.account_type) subtitleParts.push(info.account_type);
+            if (info.status) subtitleParts.push(info.status);
+            subtitleParts.push(info.is_remote ? 'remote' : 'local');
+            if (subtitleEl) {
+                subtitleEl.textContent = loading
+                    ? 'Loading profile details...'
+                    : subtitleParts.join(' · ');
+            }
+
+            if (avatarWrap) {
+                if (window.renderAvatarStack) {
+                    window.renderAvatarStack(avatarWrap, {
+                        userId: info.user_id,
+                        userLabel: info.display_name || info.username || info.user_id,
+                        userAvatarUrl: info.avatar_url || null,
+                        peerId: info.origin_peer || null
+                    });
+                } else {
+                    avatarWrap.innerHTML = '';
+                    const fallback = document.createElement('div');
+                    fallback.className = 'avatar-stack';
+                    const userEl = document.createElement('div');
+                    userEl.className = 'avatar-user';
+                    if (info.avatar_url) {
+                        const img = document.createElement('img');
+                        img.src = info.avatar_url;
+                        img.alt = info.display_name || info.user_id;
+                        userEl.appendChild(img);
+                    } else {
+                        const initial = String(info.display_name || info.username || info.user_id || '?').slice(0, 1).toUpperCase();
+                        userEl.textContent = initial || '?';
+                    }
+                    fallback.appendChild(userEl);
+                    if (info.origin_peer) {
+                        const peerEl = document.createElement('div');
+                        peerEl.className = 'avatar-peer';
+                        if (info.peer_avatar_url) {
+                            const peerImg = document.createElement('img');
+                            peerImg.src = info.peer_avatar_url;
+                            peerImg.alt = info.peer_display_name || info.origin_peer;
+                            peerEl.appendChild(peerImg);
+                        } else {
+                            const pInitial = String(info.peer_display_name || info.origin_peer || '?').slice(0, 1).toUpperCase();
+                            peerEl.textContent = pInitial || '?';
+                        }
+                        fallback.appendChild(peerEl);
+                    }
+                    avatarWrap.appendChild(fallback);
+                }
+            }
+
+            if (copyIdBtn) {
+                copyIdBtn.setAttribute('data-copy-value', info.user_id || '');
+                copyIdBtn.disabled = !info.user_id;
+            }
+            if (copyMentionBtn) {
+                const mention = info.username ? `@${info.username}` : '';
+                copyMentionBtn.setAttribute('data-copy-value', mention);
+                copyMentionBtn.disabled = !mention;
+            }
+
+            if (fieldsEl) {
+                fieldsEl.innerHTML = '';
+                _appendIdentityField(fieldsEl, 'User ID', info.user_id || '', info.user_id || '', true);
+                _appendIdentityField(fieldsEl, 'Display Name', info.display_name || '', info.display_name || '', false);
+                _appendIdentityField(fieldsEl, 'Username', info.username || '', info.username || '', true);
+                if (info.username) {
+                    _appendIdentityField(fieldsEl, 'Mention', `@${info.username}`, `@${info.username}`, true);
+                }
+                _appendIdentityField(fieldsEl, 'Account Type', info.account_type || '', info.account_type || '', false);
+                _appendIdentityField(fieldsEl, 'Status', info.status || '', info.status || '', false);
+                if (info.origin_peer) {
+                    _appendIdentityField(fieldsEl, 'Origin Peer ID', info.origin_peer, info.origin_peer, true);
+                    _appendIdentityField(fieldsEl, 'Origin Peer Name', info.peer_display_name || info.origin_peer, info.peer_display_name || info.origin_peer, false);
+                }
+            }
+        }
+
+        function _fetchUserIdentityInfo(userId) {
+            if (!userId) return Promise.resolve(null);
+            if (_userIdentityCache[userId]) {
+                return Promise.resolve(_userIdentityCache[userId]);
+            }
+            return apiCall(`/ajax/get_user_display_info?user_ids=${encodeURIComponent(userId)}`)
+                .then(data => {
+                    const users = (data && data.users && typeof data.users === 'object') ? data.users : {};
+                    const info = users[userId] || null;
+                    if (info) _userIdentityCache[userId] = info;
+                    return info;
+                });
+        }
+
+        function copyUserId(userId, displayName, triggerEl) {
+            const uid = String(userId || '').trim();
+            if (!uid) return;
+
+            const modalEl = _ensureUserIdentityModal();
+            if (!modalEl || typeof bootstrap === 'undefined' || !bootstrap.Modal) {
+                _copyTextToClipboard(uid, 'user ID');
+                return;
+            }
+
+            const initialInfo = _userIdentityInfoFromPayload(uid, displayName, triggerEl, null);
+            _renderUserIdentityModal(initialInfo, true);
+
+            const requestSeq = ++_userIdentityRequestSeq;
+            modalEl.setAttribute('data-request-seq', String(requestSeq));
+
+            const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+            modal.show();
+
+            _fetchUserIdentityInfo(uid)
+                .then(payload => {
+                    if (modalEl.getAttribute('data-request-seq') !== String(requestSeq)) return;
+                    const resolved = _userIdentityInfoFromPayload(uid, displayName, triggerEl, payload || {});
+                    _renderUserIdentityModal(resolved, false);
+                })
+                .catch(() => {
+                    if (modalEl.getAttribute('data-request-seq') !== String(requestSeq)) return;
+                    _renderUserIdentityModal(initialInfo, false);
+                    showAlert('User details lookup is unavailable; showing local details only.', 'warning');
+                });
         }
 
         function apiCall(url, options = {}) {

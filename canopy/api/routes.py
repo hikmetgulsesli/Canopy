@@ -47,6 +47,11 @@ from ..core.agent_heartbeat import (
     build_agent_heartbeat_snapshot,
     build_actionable_work_preview,
 )
+from ..core.agent_presence import (
+    record_agent_checkin,
+    get_agent_presence_records,
+    build_agent_presence_payload,
+)
 from ..security.api_keys import Permission
 from ..security.csrf import validate_csrf_request
 from ..core.messaging import MessageType
@@ -217,6 +222,17 @@ def create_api_blueprint() -> Blueprint:
         if value is None:
             return False
         return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+    def _touch_agent_presence(user_id: Optional[str], source: str) -> Optional[str]:
+        """Record a lightweight check-in timestamp for agent presence badges."""
+        uid = (user_id or '').strip()
+        if not uid:
+            return None
+        try:
+            db_manager = _get_app_components_any(current_app)[0]
+            return record_agent_checkin(db_manager=db_manager, user_id=uid, source=source)
+        except Exception:
+            return None
 
     def _stable_handle_candidates(user_row: dict[str, Any]) -> list[str]:
         """Return mention handles ordered from most-stable to least-stable."""
@@ -3702,21 +3718,27 @@ def create_api_blueprint() -> Blueprint:
             method = request.method
             data = request.get_json(silent=True) or {}
             user_id = g.api_key_info.user_id
+            has_manage_keys = bool(
+                g.api_key_info and g.api_key_info.has_permission(Permission.MANAGE_KEYS)
+            )
             user_row = db_manager.get_user(user_id) if db_manager else None
             username = None
             if user_row:
                 username = user_row.get('username') or user_row.get('display_name') or user_id
 
             mention_id = ''
+            inbox_id = ''
             source_type = ''
             source_id = ''
             channel_id = None
             if method == 'GET':
                 mention_id = (request.args.get('mention_id') or '').strip()
+                inbox_id = (request.args.get('inbox_id') or '').strip()
                 source_type = (request.args.get('source_type') or '').strip()
                 source_id = (request.args.get('source_id') or '').strip()
             else:
                 mention_id = (data.get('mention_id') or '').strip()
+                inbox_id = (data.get('inbox_id') or '').strip()
                 source_type = (data.get('source_type') or '').strip()
                 source_id = (data.get('source_id') or '').strip()
                 channel_id = data.get('channel_id')
@@ -3731,12 +3753,67 @@ def create_api_blueprint() -> Blueprint:
                 source_id = mention.get('source_id') or source_id
                 channel_id = mention.get('channel_id') or channel_id
 
+            if inbox_id:
+                if not db_manager:
+                    return jsonify({'error': 'DB manager unavailable'}), 503
+                inbox_channel_id = None
+                try:
+                    with db_manager.get_connection() as conn:
+                        try:
+                            inbox_row = conn.execute(
+                                """
+                                SELECT id, agent_user_id, source_type, source_id, channel_id
+                                FROM agent_inbox
+                                WHERE id = ?
+                                LIMIT 1
+                                """,
+                                (inbox_id,),
+                            ).fetchone()
+                            if inbox_row:
+                                inbox_channel_id = inbox_row['channel_id']
+                        except Exception as inbox_primary_err:
+                            # Backward-compatibility for older schemas that predate channel_id.
+                            if 'no such column: channel_id' not in str(inbox_primary_err).lower():
+                                raise
+                            inbox_row = conn.execute(
+                                """
+                                SELECT id, agent_user_id, source_type, source_id
+                                FROM agent_inbox
+                                WHERE id = ?
+                                LIMIT 1
+                                """,
+                                (inbox_id,),
+                            ).fetchone()
+                except Exception as inbox_err:
+                    logger.warning(f"Mention claim lookup failed for inbox_id={inbox_id}: {inbox_err}")
+                    inbox_row = None
+
+                if not inbox_row:
+                    return jsonify({'error': 'Inbox item not found'}), 404
+
+                inbox_owner = str(inbox_row['agent_user_id'] or '').strip()
+                if inbox_owner and inbox_owner != user_id and not has_manage_keys:
+                    return jsonify({'error': 'Inbox item does not belong to this user'}), 403
+
+                inbox_source_type = str(inbox_row['source_type'] or '').strip()
+                inbox_source_id = str(inbox_row['source_id'] or '').strip()
+
+                if source_type and inbox_source_type and source_type != inbox_source_type:
+                    return jsonify({'error': 'source_type does not match inbox item'}), 400
+                if source_id and inbox_source_id and source_id != inbox_source_id:
+                    return jsonify({'error': 'source_id does not match inbox item'}), 400
+
+                source_type = inbox_source_type or source_type
+                source_id = inbox_source_id or source_id
+                channel_id = inbox_channel_id or channel_id
+
             if not source_type or not source_id:
-                return jsonify({'error': 'source_type and source_id are required (or mention_id)'}), 400
+                return jsonify({'error': 'source_type and source_id are required (or mention_id/inbox_id)'}), 400
 
             if method == 'GET':
                 claim = mention_manager.get_active_claim(source_type=source_type, source_id=source_id)
                 return jsonify({
+                    'inbox_id': inbox_id or None,
                     'source_type': source_type,
                     'source_id': source_id,
                     'claim': claim,
@@ -3744,9 +3821,7 @@ def create_api_blueprint() -> Blueprint:
                 })
 
             if method == 'DELETE':
-                force = bool(data.get('force')) and bool(
-                    g.api_key_info and g.api_key_info.has_permission(Permission.MANAGE_KEYS)
-                )
+                force = bool(data.get('force')) and has_manage_keys
                 result = mention_manager.release_claim(
                     source_type=source_type,
                     source_id=source_id,
@@ -3756,15 +3831,19 @@ def create_api_blueprint() -> Blueprint:
                 )
                 status = 200 if result.get('released') else (409 if result.get('reason') == 'not_owner' else 404)
                 return jsonify({
+                    'inbox_id': inbox_id or None,
                     'source_type': source_type,
                     'source_id': source_id,
                     **result,
                 }), status
 
             # POST (claim)
-            takeover_requested = bool(data.get('takeover')) and bool(
-                g.api_key_info and g.api_key_info.has_permission(Permission.MANAGE_KEYS)
-            )
+            takeover_requested = bool(data.get('takeover')) and has_manage_keys
+            claim_metadata = {}
+            if mention_id:
+                claim_metadata['mention_id'] = mention_id
+            if inbox_id:
+                claim_metadata['inbox_id'] = inbox_id
             result = mention_manager.claim_source(
                 source_type=source_type,
                 source_id=source_id,
@@ -3773,10 +3852,11 @@ def create_api_blueprint() -> Blueprint:
                 channel_id=channel_id,
                 ttl_seconds=data.get('ttl_seconds'),
                 allow_takeover=takeover_requested,
-                metadata={'mention_id': mention_id} if mention_id else None,
+                metadata=claim_metadata or None,
             )
             status = 200 if result.get('claimed') else (409 if result.get('reason') == 'already_claimed' else 400)
             return jsonify({
+                'inbox_id': inbox_id or None,
                 'source_type': source_type,
                 'source_id': source_id,
                 **result,
@@ -3869,14 +3949,18 @@ def create_api_blueprint() -> Blueprint:
                 limit = 100
             limit = max(1, min(limit, 500))
 
+            account_type_expr = "LOWER(COALESCE(NULLIF(TRIM(account_type), ''), 'human'))"
+            status_expr = "LOWER(COALESCE(NULLIF(TRIM(status), ''), 'active'))"
+            origin_peer_expr = "COALESCE(NULLIF(TRIM(origin_peer), ''), '')"
+
             where = ["id NOT IN ('system', 'local_user')"]
             params: list[Any] = []
             if not include_humans:
-                where.append("COALESCE(account_type, 'human') = 'agent'")
+                where.append(f"{account_type_expr} = 'agent'")
             if active_only:
-                where.append("(status IS NULL OR status = 'active')")
+                where.append(f"{status_expr} = 'active'")
             if not include_remote:
-                where.append("(origin_peer IS NULL OR TRIM(origin_peer) = '')")
+                where.append(f"{origin_peer_expr} = ''")
             if query:
                 where.append(
                     "("
@@ -3896,8 +3980,8 @@ def create_api_blueprint() -> Blueprint:
                     FROM users
                     WHERE {' AND '.join(where)}
                     ORDER BY
-                        CASE WHEN COALESCE(account_type, 'human') = 'agent' THEN 0 ELSE 1 END,
-                        CASE WHEN COALESCE(status, 'active') = 'active' THEN 0 ELSE 1 END,
+                        CASE WHEN {account_type_expr} = 'agent' THEN 0 ELSE 1 END,
+                        CASE WHEN {status_expr} = 'active' THEN 0 ELSE 1 END,
                         LOWER(COALESCE(display_name, username, id))
                     LIMIT ?
                     """,
@@ -3954,15 +4038,23 @@ def create_api_blueprint() -> Blueprint:
                     logger.debug(f"Agent discovery skill summary failed: {skill_err}")
                     skill_map = {}
 
+            row_ids = [str(row['id']) for row in (rows or []) if row and row['id']]
+            presence_records = get_agent_presence_records(db_manager=db_manager, user_ids=row_ids)
+
             agents: list[dict[str, Any]] = []
             for row in rows or []:
+                account_type_raw = str(row['account_type'] or '').strip().lower()
+                account_type = account_type_raw or 'human'
+                status_raw = str(row['status'] or '').strip().lower()
+                status = status_raw or 'active'
+                origin_peer = str(row['origin_peer'] or '').strip()
                 row_dict = {
                     'id': row['id'],
                     'username': row['username'],
                     'display_name': row['display_name'],
-                    'account_type': row['account_type'] or 'human',
-                    'status': row['status'] or 'active',
-                    'origin_peer': row['origin_peer'],
+                    'account_type': account_type,
+                    'status': status,
+                    'origin_peer': origin_peer,
                     'bio': row['bio'] or '',
                     'created_at': row['created_at'],
                 }
@@ -3970,6 +4062,12 @@ def create_api_blueprint() -> Blueprint:
                 skill_info = skill_map.get(row_dict['id']) or {}
                 skill_tags = sorted(list(skill_info.get('tags') or []))[:10]
                 skill_names = sorted(list(skill_info.get('names') or []))[:10]
+                presence_info = presence_records.get(str(row_dict['id'])) or {}
+                presence = build_agent_presence_payload(
+                    last_check_in_at=presence_info.get('last_check_in_at'),
+                    is_remote=bool((row_dict['origin_peer'] or '').strip()),
+                    account_type=row_dict['account_type'],
+                )
 
                 agents.append({
                     'user_id': row_dict['id'],
@@ -3978,7 +4076,7 @@ def create_api_blueprint() -> Blueprint:
                     'account_type': row_dict['account_type'],
                     'status': row_dict['status'],
                     'origin_peer': row_dict['origin_peer'],
-                    'is_remote': bool(row_dict['origin_peer']),
+                    'is_remote': bool((row_dict['origin_peer'] or '').strip()),
                     'stable_handle': handles[0] if handles else (row_dict['username'] or row_dict['id']),
                     'mention_handles': handles,
                     'bio': row_dict['bio'],
@@ -3987,6 +4085,14 @@ def create_api_blueprint() -> Blueprint:
                     'capabilities': skill_tags,
                     'skill_count': int(skill_info.get('count') or 0),
                     'skills': skill_names,
+                    'last_check_in_at': presence.get('last_check_in_at'),
+                    'last_check_in_source': presence_info.get('last_check_in_source'),
+                    'presence': presence,
+                    'presence_state': presence.get('state'),
+                    'presence_label': presence.get('label'),
+                    'presence_color': presence.get('color'),
+                    'presence_age_seconds': presence.get('age_seconds'),
+                    'presence_age_text': presence.get('age_text'),
                     'created_at': row_dict['created_at'],
                 })
 
@@ -4119,6 +4225,7 @@ def create_api_blueprint() -> Blueprint:
         try:
             db_manager = get_app_components(current_app)[0]
             user_id = g.api_key_info.user_id
+            _touch_agent_presence(user_id, 'agents_me')
             user_row = db_manager.get_user(user_id) if db_manager else None
             if not user_row:
                 return jsonify({'error': 'User not found'}), 404
@@ -4143,6 +4250,7 @@ def create_api_blueprint() -> Blueprint:
             inbox_manager = current_app.config.get('INBOX_MANAGER')
             if not inbox_manager:
                 return jsonify({'items': [], 'count': 0})
+            _touch_agent_presence(g.api_key_info.user_id, 'inbox')
             status = request.args.get('status')
             limit = request.args.get('limit', 50)
             since = request.args.get('since')
@@ -4167,6 +4275,7 @@ def create_api_blueprint() -> Blueprint:
             inbox_manager = current_app.config.get('INBOX_MANAGER')
             if not inbox_manager:
                 return jsonify({'count': 0})
+            _touch_agent_presence(g.api_key_info.user_id, 'inbox_count')
             status = request.args.get('status')
             count = inbox_manager.count_items(
                 user_id=g.api_key_info.user_id,
@@ -4362,6 +4471,7 @@ def create_api_blueprint() -> Blueprint:
             handoff_manager = current_app.config.get('HANDOFF_MANAGER')
             profile_manager = current_app.config.get('PROFILE_MANAGER')
             user_id = g.api_key_info.user_id
+            _touch_agent_presence(user_id, 'catchup')
 
             heartbeat_snapshot = build_agent_heartbeat_snapshot(
                 db_manager=db_manager,
@@ -4750,6 +4860,7 @@ def create_api_blueprint() -> Blueprint:
             mention_manager = current_app.config.get('MENTION_MANAGER')
             inbox_manager = current_app.config.get('INBOX_MANAGER')
             user_id = g.api_key_info.user_id
+            _touch_agent_presence(user_id, 'heartbeat')
             snapshot = build_agent_heartbeat_snapshot(
                 db_manager=db_manager,
                 user_id=user_id,

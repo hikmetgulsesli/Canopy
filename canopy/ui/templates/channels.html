@@ -382,6 +382,51 @@
         background: rgba(56, 189, 248, 0.15);
     }
 
+    .mention-builder-badges {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+    }
+
+    .mention-builder-presence {
+        font-size: 0.64rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        border-radius: 999px;
+        padding: 0.15rem 0.4rem;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        color: var(--canopy-text-secondary);
+        background: rgba(71, 85, 105, 0.2);
+        white-space: nowrap;
+    }
+
+    .mention-builder-presence.online {
+        border-color: rgba(34, 197, 94, 0.55);
+        color: #86efac;
+        background: rgba(22, 163, 74, 0.16);
+    }
+
+    .mention-builder-presence.recent {
+        border-color: rgba(59, 130, 246, 0.45);
+        color: #93c5fd;
+        background: rgba(59, 130, 246, 0.14);
+    }
+
+    .mention-builder-presence.idle {
+        border-color: rgba(245, 158, 11, 0.45);
+        color: #fde68a;
+        background: rgba(217, 119, 6, 0.14);
+    }
+
+    .mention-builder-presence.offline,
+    .mention-builder-presence.no_checkin,
+    .mention-builder-presence.remote_unknown {
+        border-color: rgba(148, 163, 184, 0.42);
+        color: #cbd5e1;
+        background: rgba(71, 85, 105, 0.16);
+    }
+
     .mention-builder-footer {
         margin-top: 0.7rem;
         display: flex;
@@ -3695,8 +3740,8 @@ function renderMessage(message, userInfo, isReply) {
             <div class="user-avatar me-3" style="width: ${avatarSize}px; height: ${avatarSize}px;"
                  data-user-id="${message.user_id}"
                  data-origin-peer="${message.origin_peer || ''}"
-                 onclick="copyUserId('${message.user_id}', '${(user.display_name || '').replace(/'/g, "\\'")}')"
-                 title="Click to copy user ID">
+                 onclick="copyUserId('${message.user_id}', '${(user.display_name || '').replace(/'/g, "\\'")}', this)"
+                 title="View user details">
                 ${user.avatar_url ? 
                     `<img src="${user.avatar_url}" alt="${user.display_name}" class="rounded-circle" style="width: 100%; height: 100%; object-fit: cover;">` :
                     `<div class="bg-primary rounded-circle d-flex align-items-center justify-content-center" style="width: 100%; height: 100%;">
@@ -4423,6 +4468,50 @@ function normalizeMentionAccountType(accountType) {
     return String(accountType || '').toLowerCase() === 'agent' ? 'agent' : 'human';
 }
 
+function normalizeAgentPresenceState(state) {
+    const raw = String(state || '').trim().toLowerCase();
+    if (!raw) return 'no_checkin';
+    if (['online', 'recent', 'idle', 'offline', 'no_checkin', 'remote_unknown'].includes(raw)) return raw;
+    return 'no_checkin';
+}
+
+function getAgentPresenceSortRank(user) {
+    const state = normalizeAgentPresenceState(user && user.presence_state);
+    if (state === 'online') return 0;
+    if (state === 'recent') return 1;
+    if (state === 'idle') return 2;
+    if (state === 'offline') return 3;
+    if (state === 'remote_unknown') return 4;
+    return 5;
+}
+
+function getAgentPresenceSummary(user) {
+    if (normalizeMentionAccountType(user && user.account_type) !== 'agent') return '';
+    const state = normalizeAgentPresenceState(user && user.presence_state);
+    const label = String(user && user.presence_label || '').trim() || (
+        state === 'online' ? 'Online'
+        : state === 'recent' ? 'Recent'
+        : state === 'idle' ? 'Idle'
+        : state === 'offline' ? 'Offline'
+        : state === 'remote_unknown' ? 'Remote'
+        : 'No check-in'
+    );
+    const age = String(user && user.presence_age_text || '').trim();
+    if (age && ['online', 'recent', 'idle', 'offline'].includes(state)) {
+        return `${label} ${age}`;
+    }
+    return label;
+}
+
+function renderAgentPresenceBadge(user) {
+    if (normalizeMentionAccountType(user && user.account_type) !== 'agent') return '';
+    const state = normalizeAgentPresenceState(user && user.presence_state);
+    const summary = getAgentPresenceSummary(user);
+    const lastCheckIn = String(user && user.last_check_in_at || '').trim();
+    const tooltip = lastCheckIn ? `Last check-in ${lastCheckIn}` : 'No heartbeat check-in recorded yet';
+    return `<span class="mention-builder-presence ${state}" title="${escapeHtml(tooltip)}">${escapeHtml(summary)}</span>`;
+}
+
 function getChannelMentionBuilderHandle(user) {
     return (user && (user.handle || user.username || user.user_id)) || '';
 }
@@ -4634,6 +4723,11 @@ function getFilteredChannelMentionBuilderUsers() {
         const aType = normalizeMentionAccountType(a.account_type) === 'agent' ? 0 : 1;
         const bType = normalizeMentionAccountType(b.account_type) === 'agent' ? 0 : 1;
         if (aType !== bType) return aType - bType;
+        if (aType === 0 && bType === 0) {
+            const aPresence = getAgentPresenceSortRank(a);
+            const bPresence = getAgentPresenceSortRank(b);
+            if (aPresence !== bPresence) return aPresence - bPresence;
+        }
         return getChannelMentionBuilderLabel(a).localeCompare(getChannelMentionBuilderLabel(b));
     });
 }
@@ -4686,7 +4780,10 @@ function renderChannelMentionBuilder() {
                 <span class="mention-builder-name">${escapeHtml(getChannelMentionBuilderLabel(user))}</span>
                 <span class="mention-builder-handle">@${escapeHtml(getChannelMentionBuilderHandle(user))}</span>
             </span>
-            <span class="mention-builder-type ${accountType === 'agent' ? 'agent' : ''}">${accountType}</span>
+            <span class="mention-builder-badges">
+                ${renderAgentPresenceBadge(user)}
+                <span class="mention-builder-type ${accountType === 'agent' ? 'agent' : ''}">${accountType}</span>
+            </span>
         </button>`;
     }).join('');
 }
@@ -4839,9 +4936,13 @@ function renderChannelMentionSuggestions(list, context) {
         btn.dataset.index = String(i);
         const label = item.display_name || item.username || item.user_id;
         const handle = item.handle || item.display_name || item.username;
+        const presenceSummary = getAgentPresenceSummary(item);
+        const mentionMeta = presenceSummary
+            ? `@${escapeHtml(handle)} · ${escapeHtml(presenceSummary)}`
+            : `@${escapeHtml(handle)}`;
         btn.innerHTML = `<div class="flex-grow-1">
                 <div><strong>${escapeHtml(label)}</strong></div>
-                <div class="mention-meta">@${escapeHtml(handle)}</div>
+                <div class="mention-meta">${mentionMeta}</div>
             </div>`;
         btn.addEventListener('mousedown', (e) => {
             e.preventDefault();
@@ -6638,12 +6739,15 @@ function buildMemberSuggestionList(matches, selections, onSelect) {
         const avatar = user.avatar_url
             ? `<img src="${user.avatar_url}" alt="${escapeHtml(user.display_name || user.username || user.user_id)}">`
             : `<span>${escapeHtml((user.display_name || user.username || user.user_id || '?').slice(0, 1).toUpperCase())}</span>`;
+        const presenceSummary = getAgentPresenceSummary(user);
+        const detailParts = [`@${escapeHtml(user.handle || user.username || user.user_id)}`];
+        if (presenceSummary) detailParts.push(escapeHtml(presenceSummary));
         return `
             <div class="member-suggestion-item" onclick="${onSelect}('${user.user_id}')">
                 <div class="member-suggestion-avatar">${avatar}</div>
                 <div>
                     <div class="member-suggestion-name">${escapeHtml(user.display_name || user.username || user.user_id)}</div>
-                    <div class="member-suggestion-id">@${escapeHtml(user.handle || user.username || user.user_id)}</div>
+                    <div class="member-suggestion-id">${detailParts.join(' · ')}</div>
                 </div>
             </div>`;
     }).join('');

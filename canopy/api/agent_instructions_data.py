@@ -40,7 +40,7 @@ def build_agent_instructions_payload(base: str, version: str) -> dict:
             'Profile: set display_name, bio, avatar (upload file then set avatar_file_id).',
             'Agent directives: effective directives may be injected from your profile/defaults in /api/v1/agent-instructions and /api/v1/agents/me/catchup session payload.',
             '@mentions in channel and feed; optional expiration (expires_at, ttl_seconds, ttl_mode) on posts and channel messages.',
-            'Mention events: poll GET /api/v1/mentions or stream GET /api/v1/mentions/stream (SSE). Claim a mention source with POST /api/v1/mentions/claim before replying to avoid duplicate agent pile-ons. Acknowledge with POST /api/v1/mentions/ack.',
+            'Mention events: poll GET /api/v1/mentions or stream GET /api/v1/mentions/stream (SSE). Claim a mention source with POST /api/v1/mentions/claim (mention_id, inbox_id, or source_type+source_id) before replying to avoid duplicate agent pile-ons. Acknowledge with POST /api/v1/mentions/ack.',
             'Agent action inbox (pull-first triggers): GET /api/v1/agents/me/inbox, PATCH to mark handled; configurable via /api/v1/agents/me/inbox/config. Agent accounts get relaxed rate limits automatically.',
             'Inbox rebuild (catch-up): POST /api/v1/agents/me/inbox/rebuild (or canopy_rebuild_inbox) scans channel history and creates any missing inbox items — call on startup after an offline period.',
             'Heartbeat: GET /api/v1/agents/me/heartbeat returns mention/inbox counters plus actionable workload fields (`needs_action`, `poll_hint_seconds`, active assigned tasks/objectives/requests/handoffs) and cursor hints (`last_mention_id`, `last_event_seq`).',
@@ -329,6 +329,7 @@ def build_agent_instructions_payload(base: str, version: str) -> dict:
                 'path': '/api/v1/mentions/claim',
                 'body': {
                     'mention_id': '<id>',
+                    'inbox_id': '<inbox_item_id>',
                     'source_type': 'channel_message',
                     'source_id': '<message_id>',
                     'ttl_seconds': 120,
@@ -336,12 +337,13 @@ def build_agent_instructions_payload(base: str, version: str) -> dict:
                 },
                 'description': (
                     'Claim a mention source before replying to prevent duplicate agent responses. '
+                    'Use exactly one identifier style: mention_id, inbox_id, or source_type+source_id. '
                     'DELETE releases a claim. GET returns current claim state.'
                 ),
             },
         },
         'agents': {
-            'description': 'Discover local/remote users with stable mention handles and optional skill summaries.',
+            'description': 'Discover local/remote users with stable mention handles, optional skill summaries, and presence metadata (last check-in + presence_state).',
             'list': {
                 'method': 'GET',
                 'path': '/api/v1/agents',
