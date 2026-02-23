@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ---
 
+## [0.3.103] – 2026-02-23
+
+### Added
+- **Admin Agent Workspace:** Instance admins can inspect and manage any registered user from `/admin`: consolidated workspace snapshot (profile, inbox counts/items/audit/config, mention counts/items), edit local user profile (display name, bio, account type, theme), upload/remove local user avatars, and trigger inbox rebuild for mention recovery. Remote peer users remain read-only for profile/avatar on this node. New tests in `tests/test_admin_user_workspace.py`.
+
+---
+
 ## [0.3.102] – 2026-02-22
 
 ### Fixed

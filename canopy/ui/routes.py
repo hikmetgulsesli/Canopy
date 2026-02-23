@@ -1160,6 +1160,208 @@ def create_ui_blueprint() -> Blueprint:
             inbox_manager=inbox_manager,
         )
 
+    def _coerce_int(raw: Any, default: int, minimum: int, maximum: int) -> int:
+        try:
+            value = int(raw)
+        except Exception:
+            value = default
+        if value < minimum:
+            return minimum
+        if value > maximum:
+            return maximum
+        return value
+
+    def _admin_registered_user_row(db_manager: Any, user_id: str) -> Optional[dict[str, Any]]:
+        if not user_id:
+            return None
+        row = db_manager.get_user(user_id) if db_manager else None
+        if not row or not row.get('password_hash'):
+            return None
+        return row
+
+    def _profile_value(profile: Any, field: str, default: Any = None) -> Any:
+        if profile is None:
+            return default
+        if isinstance(profile, dict):
+            return profile.get(field, default)
+        return getattr(profile, field, default)
+
+    def _broadcast_profile_if_possible(profile_manager: Any, user_id: str) -> None:
+        if not profile_manager or not user_id:
+            return
+        try:
+            _, _, _, _, _, _, _, _, _, _, p2p_manager = _get_app_components_any(current_app)
+            if not p2p_manager or not p2p_manager.is_running():
+                return
+            card = profile_manager.get_profile_card(user_id)
+            if card:
+                p2p_manager.broadcast_profile_update(card)
+        except Exception as bcast_err:
+            logger.warning(f"Admin profile broadcast failed: {bcast_err}")
+
+    def _count_unacked_mentions(db_manager: Any, user_id: str) -> int:
+        if not db_manager or not user_id:
+            return 0
+        try:
+            with db_manager.get_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS n
+                    FROM mention_events
+                    WHERE user_id = ? AND acknowledged_at IS NULL
+                    """,
+                    (user_id,),
+                ).fetchone()
+                return int((row['n'] if row else 0) or 0)
+        except Exception:
+            return 0
+
+    def _build_admin_workspace_snapshot(
+        user_row: dict[str, Any],
+        inbox_limit: int = 25,
+        mention_limit: int = 25,
+        audit_limit: int = 25,
+    ) -> dict[str, Any]:
+        user_id = user_row.get('id')
+        db_manager, _, _, _, _, _, _, _, profile_manager, _, _ = _get_app_components_any(current_app)
+        mention_manager = current_app.config.get('MENTION_MANAGER')
+        inbox_manager = current_app.config.get('INBOX_MANAGER')
+
+        profile = None
+        try:
+            if profile_manager and user_id:
+                profile = profile_manager.get_profile(user_id)
+        except Exception:
+            profile = None
+
+        display_name = (
+            _profile_value(profile, 'display_name')
+            or user_row.get('display_name')
+            or user_row.get('username')
+            or user_id
+        )
+        bio = _profile_value(profile, 'bio')
+        avatar_file_id = _profile_value(profile, 'avatar_file_id') or user_row.get('avatar_file_id')
+        avatar_url = _profile_value(profile, 'avatar_url')
+        if not avatar_url and avatar_file_id:
+            avatar_url = f"/files/{avatar_file_id}"
+        theme_preference = (
+            _profile_value(profile, 'theme_preference')
+            or user_row.get('theme_preference')
+            or 'dark'
+        )
+
+        workspace = {
+            'user': {
+                'id': user_id,
+                'username': user_row.get('username'),
+                'display_name': display_name,
+                'bio': bio or '',
+                'avatar_file_id': avatar_file_id,
+                'avatar_url': avatar_url,
+                'account_type': user_row.get('account_type') or 'human',
+                'status': user_row.get('status') or 'active',
+                'theme_preference': theme_preference,
+                'origin_peer': user_row.get('origin_peer'),
+                'created_at': user_row.get('created_at'),
+                'is_local': not bool(user_row.get('origin_peer')),
+            },
+            'inbox': {
+                'available': bool(inbox_manager),
+                'pending_count': 0,
+                'total_count': 0,
+                'stats': {},
+                'config': {},
+                'items': [],
+                'audit': [],
+            },
+            'mentions': {
+                'available': bool(mention_manager),
+                'unacked_count': 0,
+                'items': [],
+            },
+        }
+
+        if inbox_manager and user_id:
+            try:
+                pending_count = inbox_manager.count_items(user_id=user_id, status='pending')
+                total_count = inbox_manager.count_items(user_id=user_id)
+                items = inbox_manager.list_items(
+                    user_id=user_id,
+                    status=None,
+                    limit=inbox_limit,
+                    include_handled=True,
+                )
+                audit = inbox_manager.list_audit(user_id=user_id, limit=audit_limit)
+                stats = inbox_manager.get_stats(user_id=user_id, window_hours=24)
+                config = inbox_manager.get_config(user_id)
+                workspace['inbox'].update({
+                    'pending_count': pending_count,
+                    'total_count': total_count,
+                    'stats': stats or {},
+                    'config': config or {},
+                    'items': [
+                        {
+                            'id': item.get('id'),
+                            'source_type': item.get('source_type'),
+                            'source_id': item.get('source_id'),
+                            'channel_id': item.get('channel_id'),
+                            'sender_user_id': item.get('sender_user_id'),
+                            'trigger_type': item.get('trigger_type'),
+                            'status': item.get('status'),
+                            'priority': item.get('priority'),
+                            'created_at': item.get('created_at'),
+                            'handled_at': item.get('handled_at'),
+                            'preview': ((item.get('payload') or {}).get('preview') or '')[:220],
+                        }
+                        for item in (items or [])
+                    ],
+                    'audit': [
+                        {
+                            'id': row.get('id'),
+                            'reason': row.get('reason'),
+                            'source_type': row.get('source_type'),
+                            'source_id': row.get('source_id'),
+                            'channel_id': row.get('channel_id'),
+                            'sender_user_id': row.get('sender_user_id'),
+                            'trigger_type': row.get('trigger_type'),
+                            'created_at': row.get('created_at'),
+                        }
+                        for row in (audit or [])
+                    ],
+                })
+            except Exception as inbox_err:
+                logger.warning(f"Admin workspace inbox snapshot failed for {user_id}: {inbox_err}")
+
+        if mention_manager and user_id:
+            try:
+                mention_items = mention_manager.get_mentions(
+                    user_id=user_id,
+                    limit=mention_limit,
+                    include_acknowledged=True,
+                )
+                workspace['mentions'].update({
+                    'unacked_count': _count_unacked_mentions(db_manager, user_id),
+                    'items': [
+                        {
+                            'id': m.get('id'),
+                            'source_type': m.get('source_type'),
+                            'source_id': m.get('source_id'),
+                            'author_id': m.get('author_id'),
+                            'channel_id': m.get('channel_id'),
+                            'status': m.get('status'),
+                            'created_at': m.get('created_at'),
+                            'acknowledged_at': m.get('acknowledged_at'),
+                            'preview': (m.get('preview') or '')[:220],
+                        }
+                        for m in (mention_items or [])
+                    ],
+                })
+            except Exception as mention_err:
+                logger.warning(f"Admin workspace mentions snapshot failed for {user_id}: {mention_err}")
+
+        return workspace
+
     def _serialize_community_notes(notes: Any, viewer_user_id: str) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         note_type_labels = {
@@ -2554,6 +2756,14 @@ def create_ui_blueprint() -> Blueprint:
                     or _looks_like_agent(u)
                 )
             ]
+            workspace_users = sorted(
+                users,
+                key=lambda u: (
+                    0 if (u.get('account_type') or 'human') == 'agent' else 1,
+                    0 if (u.get('status') or 'active') == 'active' else 1,
+                    (u.get('display_name') or u.get('username') or '').lower(),
+                ),
+            )
             all_permissions = [p.value for p in api_key_manager.get_all_permissions()]
             current_user_id = get_current_user()
             current_user_row = db_manager.get_user(current_user_id) if db_manager else None
@@ -2621,6 +2831,7 @@ def create_ui_blueprint() -> Blueprint:
                                  active_agents_count=len(active_agents),
                                  all_permissions=all_permissions,
                                  agent_users=agent_users,
+                                 workspace_users=workspace_users,
                                  directive_presets=_agent_directive_presets_payload(),
                                  directive_max_length=MAX_AGENT_DIRECTIVES_LENGTH,
                                  heartbeat_snapshot=heartbeat_snapshot,
@@ -3601,6 +3812,210 @@ def create_ui_blueprint() -> Blueprint:
             return jsonify({'success': True, 'new_owner_id': target_user_id})
         except Exception as e:
             logger.error(f"Admin transfer error: {e}")
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @ui.route('/ajax/admin/users/<user_id>/workspace', methods=['GET'])
+    @require_login
+    @require_admin
+    def ajax_admin_user_workspace(user_id: str):
+        """Return admin debug workspace data for a user (profile, inbox, mentions)."""
+        try:
+            db_manager, _, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
+            user = _admin_registered_user_row(db_manager, user_id)
+            if not user:
+                return jsonify({'error': 'User not found'}), 404
+            inbox_limit = _coerce_int(request.args.get('inbox_limit'), 25, 1, 100)
+            mention_limit = _coerce_int(request.args.get('mention_limit'), 25, 1, 100)
+            audit_limit = _coerce_int(request.args.get('audit_limit'), 25, 1, 100)
+            workspace = _build_admin_workspace_snapshot(
+                user,
+                inbox_limit=inbox_limit,
+                mention_limit=mention_limit,
+                audit_limit=audit_limit,
+            )
+            return jsonify({'success': True, 'workspace': workspace})
+        except Exception as e:
+            logger.error(f"Admin workspace load error: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @ui.route('/ajax/admin/users/<user_id>/profile', methods=['POST'])
+    @require_login
+    @require_admin
+    def ajax_admin_update_user_profile(user_id: str):
+        """Admin: update editable profile fields for a local registered user."""
+        try:
+            db_manager, _, _, _, _, _, _, _, profile_manager, _, _ = _get_app_components_any(current_app)
+            user = _admin_registered_user_row(db_manager, user_id)
+            if not user:
+                return jsonify({'error': 'User not found'}), 404
+            if user.get('origin_peer'):
+                return jsonify({'error': 'Remote peer profiles are read-only on this instance'}), 403
+            if not profile_manager:
+                return jsonify({'error': 'Profile service unavailable'}), 503
+
+            data = request.get_json(silent=True) or {}
+            updates: dict[str, Any] = {}
+
+            if 'display_name' in data:
+                display_name = (data.get('display_name') or '').strip()
+                if len(display_name) > 100:
+                    return jsonify({'error': 'Display name too long (max 100 characters)'}), 400
+                updates['display_name'] = display_name or None
+
+            if 'bio' in data:
+                bio = (data.get('bio') or '').strip()
+                if len(bio) > 500:
+                    return jsonify({'error': 'Bio too long (max 500 characters)'}), 400
+                updates['bio'] = bio or None
+
+            if 'account_type' in data:
+                account_type = (data.get('account_type') or '').strip().lower()
+                if account_type not in ('human', 'agent'):
+                    return jsonify({'error': "account_type must be 'human' or 'agent'"}), 400
+                updates['account_type'] = account_type
+
+            if 'theme_preference' in data:
+                theme_preference = (data.get('theme_preference') or 'dark').strip().lower()
+                if theme_preference not in ['dark', 'light', 'auto', 'liquid-glass', 'eco']:
+                    return jsonify({'error': 'Invalid theme_preference'}), 400
+                updates['theme_preference'] = theme_preference
+
+            if not updates:
+                return jsonify({'error': 'No valid profile fields provided'}), 400
+
+            success = profile_manager.update_profile(user_id, **updates)
+            if not success:
+                return jsonify({'error': 'Failed to update profile'}), 500
+
+            _broadcast_profile_if_possible(profile_manager, user_id)
+            updated_user = db_manager.get_user(user_id) or user
+            workspace = _build_admin_workspace_snapshot(updated_user)
+            return jsonify({'success': True, 'workspace': workspace, 'message': 'Profile updated'})
+        except Exception as e:
+            logger.error(f"Admin profile update error: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @ui.route('/ajax/admin/users/<user_id>/avatar', methods=['POST'])
+    @require_login
+    @require_admin
+    def ajax_admin_upload_user_avatar(user_id: str):
+        """Admin: upload avatar image for a local registered user."""
+        try:
+            db_manager, _, _, _, _, _, _, _, profile_manager, _, _ = _get_app_components_any(current_app)
+            user = _admin_registered_user_row(db_manager, user_id)
+            if not user:
+                return jsonify({'error': 'User not found'}), 404
+            if user.get('origin_peer'):
+                return jsonify({'error': 'Remote peer profiles are read-only on this instance'}), 403
+            if not profile_manager:
+                return jsonify({'error': 'Profile service unavailable'}), 503
+
+            if 'avatar' not in request.files:
+                return jsonify({'error': 'No avatar file provided'}), 400
+            avatar_file = request.files['avatar']
+            if avatar_file.filename == '':
+                return jsonify({'error': 'No file selected'}), 400
+            if not (avatar_file.content_type or '').startswith('image/'):
+                return jsonify({'error': 'Only image files are allowed'}), 400
+
+            avatar_data = avatar_file.read()
+            if len(avatar_data) > 5 * 1024 * 1024:
+                return jsonify({'error': 'File too large (max 5MB)'}), 400
+
+            file_id = profile_manager.update_avatar(
+                user_id,
+                avatar_data,
+                avatar_file.filename,
+                avatar_file.content_type,
+            )
+            if not file_id:
+                return jsonify({'error': 'Failed to upload avatar'}), 500
+
+            _broadcast_profile_if_possible(profile_manager, user_id)
+            updated_user = db_manager.get_user(user_id) or user
+            workspace = _build_admin_workspace_snapshot(updated_user)
+            return jsonify({
+                'success': True,
+                'avatar_url': f'/files/{file_id}',
+                'workspace': workspace,
+                'message': 'Avatar updated',
+            })
+        except Exception as e:
+            logger.error(f"Admin avatar upload error: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @ui.route('/ajax/admin/users/<user_id>/avatar', methods=['DELETE'])
+    @require_login
+    @require_admin
+    def ajax_admin_clear_user_avatar(user_id: str):
+        """Admin: remove avatar from a local registered user profile."""
+        try:
+            db_manager, _, _, _, _, _, _, _, profile_manager, _, _ = _get_app_components_any(current_app)
+            user = _admin_registered_user_row(db_manager, user_id)
+            if not user:
+                return jsonify({'error': 'User not found'}), 404
+            if user.get('origin_peer'):
+                return jsonify({'error': 'Remote peer profiles are read-only on this instance'}), 403
+            if not profile_manager:
+                return jsonify({'error': 'Profile service unavailable'}), 503
+
+            success = profile_manager.update_profile(user_id, avatar_file_id=None)
+            if not success:
+                return jsonify({'error': 'Failed to clear avatar'}), 500
+
+            _broadcast_profile_if_possible(profile_manager, user_id)
+            updated_user = db_manager.get_user(user_id) or user
+            workspace = _build_admin_workspace_snapshot(updated_user)
+            return jsonify({'success': True, 'workspace': workspace, 'message': 'Avatar removed'})
+        except Exception as e:
+            logger.error(f"Admin avatar clear error: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @ui.route('/ajax/admin/users/<user_id>/inbox/rebuild', methods=['POST'])
+    @require_login
+    @require_admin
+    def ajax_admin_rebuild_user_inbox(user_id: str):
+        """Admin: rebuild mention-driven inbox entries from recent channel history."""
+        try:
+            db_manager, _, _, _, _, _, _, _, profile_manager, _, _ = _get_app_components_any(current_app)
+            inbox_manager = current_app.config.get('INBOX_MANAGER')
+            if not inbox_manager:
+                return jsonify({'error': 'Inbox service unavailable'}), 503
+
+            user = _admin_registered_user_row(db_manager, user_id)
+            if not user:
+                return jsonify({'error': 'User not found'}), 404
+
+            data = request.get_json(silent=True) or {}
+            window_hours = _coerce_int(data.get('window_hours'), 168, 1, 720)
+            limit = _coerce_int(data.get('limit'), 2000, 100, 5000)
+            display_name = user.get('display_name')
+            if profile_manager:
+                try:
+                    prof = profile_manager.get_profile(user_id)
+                    display_name = _profile_value(prof, 'display_name', display_name)
+                except Exception:
+                    pass
+
+            result = inbox_manager.rebuild_from_channel_messages(
+                user_id=user_id,
+                username=user.get('username') or user_id,
+                display_name=display_name,
+                window_hours=window_hours,
+                limit=limit,
+            )
+            workspace = _build_admin_workspace_snapshot(user)
+            return jsonify({
+                'success': True,
+                'result': result,
+                'workspace': workspace,
+                'message': (
+                    f"Inbox rebuild complete: scanned {result.get('scanned', 0)}, "
+                    f"created {result.get('created', 0)}, skipped {result.get('skipped', 0)}."
+                ),
+            })
+        except Exception as e:
+            logger.error(f"Admin inbox rebuild error: {e}", exc_info=True)
             return jsonify({'error': 'Internal server error'}), 500
 
     @ui.route('/ajax/get_messages', methods=['GET'])
