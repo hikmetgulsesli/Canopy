@@ -3644,6 +3644,12 @@ def create_api_blueprint() -> Blueprint:
                 user_id=g.api_key_info.user_id,
                 mention_ids=mention_ids,
             )
+            if count == 0 and mention_ids:
+                logger.warning(
+                    "Mention ack returned 0 for user_id=%r and %d ids; check server log for user_id mismatch or invalid ids",
+                    g.api_key_info.user_id,
+                    len(mention_ids),
+                )
             return jsonify({'acknowledged': count})
         except Exception as e:
             logger.error(f"Acknowledge mentions failed: {e}")
@@ -5329,6 +5335,38 @@ def create_api_blueprint() -> Blueprint:
             
         except Exception as e:
             logger.error(f"Failed to get channel messages: {e}")
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @api.route('/channels/<channel_id>/messages/<message_id>', methods=['GET'])
+    @require_auth(Permission.READ_FEED)
+    def get_channel_message_api(channel_id, message_id):
+        """Get a single channel message by id (for inbox source_id lookup, etc.)."""
+        _, _, _, _, channel_manager, _, _, _, profile_manager, _, _ = _get_app_components_any(current_app)
+        if not channel_manager:
+            return jsonify({'error': 'Channels not available'}), 503
+        try:
+            message = channel_manager.get_channel_message(
+                channel_id, message_id, g.api_key_info.user_id
+            )
+            if not message:
+                return jsonify({'error': 'Message not found or you are not a member'}), 404
+            d = message.to_dict()
+            uid = d.get('user_id')
+            if uid and profile_manager:
+                try:
+                    prof = profile_manager.get_profile(uid)
+                    if prof:
+                        d['display_name'] = prof.display_name or prof.username or uid
+                        d['username'] = prof.username or uid
+                except Exception:
+                    pass
+            if not d.get('display_name'):
+                d['display_name'] = d.get('username') or uid
+            if not d.get('username'):
+                d['username'] = uid
+            return jsonify({'message': d})
+        except Exception as e:
+            logger.error(f"Get channel message failed: {e}")
             return jsonify({'error': 'Internal server error'}), 500
 
     @api.route('/channels/<channel_id>/messages/<message_id>', methods=['DELETE'])

@@ -1798,6 +1798,68 @@ class ChannelManager:
             logger.error(f"Failed to get channel messages: {e}", exc_info=True)
             return []
 
+    def get_channel_message(
+        self, channel_id: str, message_id: str, user_id: str
+    ) -> Optional[Message]:
+        """Get a single channel message by id. Returns None if not found or user not a member."""
+        if not channel_id or not message_id or not user_id:
+            return None
+        try:
+            with self.db.get_connection() as conn:
+                if not conn.execute(
+                    "SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?",
+                    (channel_id, user_id),
+                ).fetchone():
+                    return None
+                row = conn.execute(
+                    """
+                    SELECT * FROM channel_messages
+                    WHERE channel_id = ? AND id = ?
+                      AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+                    """,
+                    (channel_id, message_id),
+                ).fetchone()
+                if not row:
+                    return None
+                try:
+                    msg_type = MessageType(row['message_type'])
+                except (ValueError, KeyError):
+                    msg_type = MessageType.TEXT
+                created_at_raw = row['created_at'] or ''
+                try:
+                    created_at = datetime.fromisoformat(created_at_raw.replace('Z', '+00:00'))
+                except (ValueError, AttributeError):
+                    try:
+                        created_at = datetime.strptime(created_at_raw, '%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        created_at = datetime.now()
+                edited_at = None
+                if row.get('edited_at'):
+                    try:
+                        edited_at = datetime.fromisoformat(str(row['edited_at']).replace('Z', '+00:00'))
+                    except (ValueError, AttributeError):
+                        pass
+                expires_at = self._parse_datetime(row['expires_at']) if row.get('expires_at') else None
+                return Message(
+                    id=row['id'],
+                    channel_id=row['channel_id'],
+                    user_id=row['user_id'],
+                    content=row['content'] or '',
+                    message_type=msg_type,
+                    created_at=created_at,
+                    thread_id=row.get('thread_id'),
+                    parent_message_id=row.get('parent_message_id'),
+                    reactions=json.loads(row['reactions']) if row.get('reactions') else None,
+                    attachments=json.loads(row['attachments']) if row.get('attachments') else None,
+                    security=json.loads(row['security']) if row.get('security') else None,
+                    edited_at=edited_at,
+                    expires_at=expires_at,
+                    origin_peer=row.get('origin_peer'),
+                )
+        except Exception as e:
+            logger.error(f"Failed to get channel message {message_id}: {e}", exc_info=True)
+            return None
+
     def get_channel_activity_since(self, user_id: str, since: datetime, limit: int = 50) -> List[Dict[str, Any]]:
         """Return per-channel activity since a timestamp (counts + latest preview)."""
         if not user_id or not since:
