@@ -937,14 +937,47 @@ class DatabaseManager:
             return False
 
     def delete_user(self, user_id: str) -> bool:
-        """Delete a user and their related data (api_keys, etc.). System/local_user cannot be deleted."""
+        """Delete a user and all data that references them. System/local_user cannot be deleted.
+
+        With PRAGMA foreign_keys = ON, the DB has FKs from api_keys, user_keys, messages,
+        feed_posts, post_permissions, agent_inbox, agent_inbox_config, user_feed_preferences.
+        We must remove or reassign all dependent rows before deleting the user row.
+        """
         if user_id in ('system', 'local_user'):
             return False
         try:
             with self.get_connection() as conn:
+                # API and channel membership
                 conn.execute("DELETE FROM api_keys WHERE user_id = ?", (user_id,))
                 conn.execute("DELETE FROM user_keys WHERE user_id = ?", (user_id,))
                 conn.execute("DELETE FROM channel_members WHERE user_id = ?", (user_id,))
+                # Feed and posts
+                conn.execute("DELETE FROM post_permissions WHERE user_id = ?", (user_id,))
+                conn.execute("DELETE FROM post_content_keys WHERE user_id = ?", (user_id,))
+                conn.execute("DELETE FROM agent_inbox WHERE agent_user_id = ? OR sender_user_id = ?", (user_id, user_id))
+                conn.execute("DELETE FROM agent_inbox_config WHERE user_id = ?", (user_id,))
+                conn.execute("DELETE FROM user_feed_preferences WHERE user_id = ?", (user_id,))
+                conn.execute("DELETE FROM messages WHERE sender_id = ?", (user_id,))
+                conn.execute("DELETE FROM feed_posts WHERE author_id = ?", (user_id,))
+                # Best-effort cleanup (no FK in schema but avoid orphan rows)
+                conn.execute("DELETE FROM content_contexts WHERE owner_user_id = ?", (user_id,))
+                # mention_events: created in mentions.py, same DB
+                conn.execute("DELETE FROM mention_events WHERE user_id = ? OR author_id = ?", (user_id, user_id))
+                # Channel messages (table in channels.py, same DB): likes then parent refs then messages
+                try:
+                    msg_ids = [r[0] for r in conn.execute("SELECT id FROM channel_messages WHERE user_id = ?", (user_id,)).fetchall()]
+                    if msg_ids:
+                        placeholders = ",".join("?" for _ in msg_ids)
+                        conn.execute(f"DELETE FROM likes WHERE message_id IN ({placeholders})", msg_ids)
+                        conn.execute(
+                            f"UPDATE channel_messages SET parent_message_id = NULL WHERE parent_message_id IN ({placeholders})",
+                            msg_ids,
+                        )
+                        conn.execute(f"DELETE FROM channel_messages WHERE user_id = ?", (user_id,))
+                except sqlite3.OperationalError as e:
+                    if "no such table" not in str(e).lower():
+                        raise
+                # Finally remove the user (must be last due to FKs)
                 conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
                 conn.commit()
                 return True

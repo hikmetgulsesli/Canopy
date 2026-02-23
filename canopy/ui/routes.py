@@ -3496,9 +3496,9 @@ def create_ui_blueprint() -> Blueprint:
                 return jsonify({'error': 'Cannot delete the instance owner'}), 400
             if db_manager.delete_user(user_id):
                 return jsonify({'success': True})
-            return jsonify({'error': 'User not found or delete failed'}), 400
+            return jsonify({'error': 'User not found or delete failed (check server logs for details)'}), 400
         except Exception as e:
-            logger.error(f"Admin delete user error: {e}")
+            logger.error(f"Admin delete user error: {e}", exc_info=True)
             return jsonify({'error': 'Internal server error'}), 500
 
     @ui.route('/ajax/admin/users/<user_id>/keys', methods=['GET'])
