@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ---
 
+## [0.3.102] – 2026-02-22
+
+### Fixed
+- **Admin delete user:** "User not found or delete failed" when deleting a user (e.g. an agent) from Admin → All users. The DB has foreign keys enabled; `delete_user()` only removed api_keys, user_keys, and channel_members, so the final `DELETE FROM users` failed on constraints from messages, feed_posts, agent_inbox, mention_events, channel_messages, etc. `delete_user()` now removes all dependent rows (messages, feed_posts, post_permissions, agent_inbox, mention_events, channel_messages and related likes, content_contexts, etc.) before deleting the user row.
+
+---
+
 ## [0.3.101] – 2026-02-22
 
 ### Added
