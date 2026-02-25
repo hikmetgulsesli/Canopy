@@ -758,6 +758,7 @@ class InboxManager:
         display_name: Optional[str] = None,
         window_hours: int = 168,
         limit: int = 2000,
+        channel_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Scan recent channel messages for @mentions of this user and
         create any missing inbox items, bypassing rate limits.
@@ -765,7 +766,8 @@ class InboxManager:
         This is a catch-up / recovery operation — it fills gaps caused by
         P2P downtime, rate-limit drops, or cooldown suppressions.  It is
         idempotent: already-existing items are left untouched (IGNORE on
-        the unique index prevents duplicates).
+        the unique index prevents duplicates). Only channels the user is
+        currently a member of are considered.
         """
         if not user_id or not username:
             return {"scanned": 0, "created": 0, "skipped": 0}
@@ -792,18 +794,28 @@ class InboxManager:
             with self.db.get_connection() as conn:
                 like_clauses = " OR ".join(["LOWER(content) LIKE ?" for _ in handles])
                 like_args = [f"%{h.lower()}%" for h in handles]
+                params = [user_id] + like_args
+                channel_clause = ""
+                if channel_id:
+                    channel_clause = "AND cm.channel_id = ?"
+                    params.append(channel_id)
+                params.extend([since_iso, limit])
                 rows = conn.execute(
                     f"""
-                    SELECT id, channel_id, user_id AS sender_id, content,
+                    SELECT cm.id, cm.channel_id, cm.user_id AS sender_id, cm.content,
                            created_at, origin_peer
-                    FROM channel_messages
+                    FROM channel_messages cm
+                    INNER JOIN channel_members cmm
+                      ON cmm.channel_id = cm.channel_id
+                     AND cmm.user_id = ?
                     WHERE ({like_clauses})
-                      AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-                      AND created_at >= ?
-                    ORDER BY created_at DESC
+                      {channel_clause}
+                      AND (cm.expires_at IS NULL OR cm.expires_at > CURRENT_TIMESTAMP)
+                      AND cm.created_at >= ?
+                    ORDER BY cm.created_at DESC
                     LIMIT ?
                     """,
-                    like_args + [since_iso, limit],
+                    params,
                 ).fetchall()
         except Exception as e:
             logger.error(f"inbox rebuild query failed for {user_id}: {e}")
@@ -821,8 +833,9 @@ class InboxManager:
             content = row["content"] or ""
             origin_peer = row["origin_peer"]
 
-            # Build a short preview (first 200 chars, no newlines)
-            preview = content.replace("\n", " ")[:200]
+            # Build a short preview (first 200 chars, no newlines); never leave empty (clients show "N/A")
+            raw = (content or "").replace("\n", " ").strip()[:200]
+            preview = raw if raw else "(no content available)"
 
             payload = json.dumps({
                 "preview": preview,

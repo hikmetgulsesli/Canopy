@@ -161,6 +161,8 @@ class ChannelManager:
     SECURITY_MAX_JSON_BYTES = 16384
     SECURITY_MAX_VALUE_BYTES = 4096
     SECURITY_MAX_LIST_ITEMS = 64
+    GOVERNANCE_MAX_ALLOWED_CHANNELS = 512
+    GOVERNANCE_MAX_CHANNEL_ID_LENGTH = 128
     
     def __init__(self, db: DatabaseManager, api_key_manager: ApiKeyManager):
         """Initialize channel manager."""
@@ -458,6 +460,24 @@ class ChannelManager:
                     CREATE INDEX IF NOT EXISTS idx_processed_messages_at
                     ON processed_messages(processed_at)
                 """)
+
+                # Per-user channel governance policy.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS user_channel_governance (
+                        user_id TEXT PRIMARY KEY,
+                        enabled BOOLEAN NOT NULL DEFAULT 0,
+                        block_public_channels BOOLEAN NOT NULL DEFAULT 0,
+                        restrict_to_allowed_channels BOOLEAN NOT NULL DEFAULT 0,
+                        allowed_channel_ids TEXT NOT NULL DEFAULT '[]',
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_by TEXT,
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_user_channel_governance_enabled
+                    ON user_channel_governance(enabled)
+                """)
                 
                 conn.commit()
                 logger.info("Channel database tables ensured successfully")
@@ -520,6 +540,356 @@ class ChannelManager:
         except Exception as e:
             logger.error(f"Failed to ensure default channels: {e}", exc_info=True)
             raise
+
+    # ------------------------------------------------------------------
+    #  Channel governance helpers
+    # ------------------------------------------------------------------
+
+    def _default_channel_governance_policy(self, user_id: str) -> Dict[str, Any]:
+        return {
+            'user_id': user_id,
+            'enabled': False,
+            'block_public_channels': False,
+            'restrict_to_allowed_channels': False,
+            'allowed_channel_ids': [],
+            'updated_at': None,
+            'updated_by': None,
+        }
+
+    def _normalize_allowed_channel_ids(self, raw: Any) -> List[str]:
+        values: list[Any]
+        if raw is None:
+            values = []
+        elif isinstance(raw, str):
+            parsed: Any = None
+            txt = raw.strip()
+            if txt:
+                try:
+                    parsed = json.loads(txt)
+                except Exception:
+                    parsed = [part.strip() for part in txt.split(',')]
+            values = parsed if isinstance(parsed, list) else []
+        elif isinstance(raw, (list, tuple, set)):
+            values = list(raw)
+        else:
+            values = []
+
+        out: List[str] = []
+        seen = set()
+        for item in values:
+            cid = str(item or '').strip()
+            if not cid:
+                continue
+            if len(cid) > self.GOVERNANCE_MAX_CHANNEL_ID_LENGTH:
+                continue
+            if cid in seen:
+                continue
+            seen.add(cid)
+            out.append(cid)
+            if len(out) >= self.GOVERNANCE_MAX_ALLOWED_CHANNELS:
+                break
+        return out
+
+    def _is_public_channel(self, channel_type: Any, privacy_mode: Any) -> bool:
+        ctype = str(channel_type or '').strip().lower()
+        mode = self._normalize_privacy_mode(privacy_mode, default='open')
+        return mode == 'open' and ctype in {'public', 'general'}
+
+    def _is_channel_allowed_by_policy(
+        self,
+        policy: Dict[str, Any],
+        channel_id: str,
+        channel_type: Any,
+        privacy_mode: Any,
+    ) -> Tuple[bool, str]:
+        if not bool(policy.get('enabled')):
+            return True, 'policy_disabled'
+        if bool(policy.get('block_public_channels')) and self._is_public_channel(channel_type, privacy_mode):
+            return False, 'governance_public_channels_blocked'
+        if bool(policy.get('restrict_to_allowed_channels')):
+            allowed = set(self._normalize_allowed_channel_ids(policy.get('allowed_channel_ids')))
+            if channel_id not in allowed:
+                return False, 'governance_channel_not_allowlisted'
+        return True, 'ok'
+
+    def _load_user_channel_governance(self, conn: Any, user_id: str) -> Dict[str, Any]:
+        policy = self._default_channel_governance_policy(user_id)
+        if not user_id:
+            return policy
+        row = conn.execute(
+            """
+            SELECT enabled, block_public_channels, restrict_to_allowed_channels,
+                   allowed_channel_ids, updated_at, updated_by
+            FROM user_channel_governance
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return policy
+
+        def _get(name: str, default: Any = None) -> Any:
+            try:
+                return row[name]
+            except Exception:
+                return default
+
+        def _as_bool(value: Any) -> bool:
+            if isinstance(value, bool):
+                return value
+            if value is None:
+                return False
+            if isinstance(value, (int, float)):
+                return value != 0
+            return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+        policy['enabled'] = _as_bool(_get('enabled', 0))
+        policy['block_public_channels'] = _as_bool(_get('block_public_channels', 0))
+        policy['restrict_to_allowed_channels'] = _as_bool(_get('restrict_to_allowed_channels', 0))
+        policy['allowed_channel_ids'] = self._normalize_allowed_channel_ids(_get('allowed_channel_ids', '[]'))
+        policy['updated_at'] = _get('updated_at')
+        policy['updated_by'] = _get('updated_by')
+        return policy
+
+    def get_user_channel_governance(self, user_id: str) -> Dict[str, Any]:
+        """Return persisted channel governance policy for a user."""
+        if not user_id:
+            return self._default_channel_governance_policy('')
+        try:
+            with self.db.get_connection() as conn:
+                return self._load_user_channel_governance(conn, user_id)
+        except Exception as e:
+            logger.error(f"Failed to load channel governance for {user_id}: {e}", exc_info=True)
+            return self._default_channel_governance_policy(user_id)
+
+    def set_user_channel_governance(
+        self,
+        user_id: str,
+        *,
+        enabled: bool,
+        block_public_channels: bool,
+        restrict_to_allowed_channels: bool,
+        allowed_channel_ids: Optional[List[str]] = None,
+        updated_by: Optional[str] = None,
+    ) -> bool:
+        """Create or update a user's channel governance policy."""
+        if not user_id:
+            return False
+        normalized_ids = self._normalize_allowed_channel_ids(allowed_channel_ids)
+        try:
+            with self.db.get_connection() as conn:
+                exists = conn.execute(
+                    "SELECT 1 FROM users WHERE id = ?",
+                    (user_id,),
+                ).fetchone()
+                if not exists:
+                    return False
+
+                conn.execute(
+                    """
+                    INSERT INTO user_channel_governance (
+                        user_id, enabled, block_public_channels,
+                        restrict_to_allowed_channels, allowed_channel_ids,
+                        updated_at, updated_by
+                    ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        enabled = excluded.enabled,
+                        block_public_channels = excluded.block_public_channels,
+                        restrict_to_allowed_channels = excluded.restrict_to_allowed_channels,
+                        allowed_channel_ids = excluded.allowed_channel_ids,
+                        updated_at = CURRENT_TIMESTAMP,
+                        updated_by = excluded.updated_by
+                    """,
+                    (
+                        user_id,
+                        1 if enabled else 0,
+                        1 if block_public_channels else 0,
+                        1 if restrict_to_allowed_channels else 0,
+                        json.dumps(normalized_ids),
+                        updated_by,
+                    ),
+                )
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Failed to update channel governance for {user_id}: {e}", exc_info=True)
+            return False
+
+    def get_channel_access_decision(
+        self,
+        channel_id: str,
+        user_id: str,
+        *,
+        require_membership: bool = True,
+    ) -> Dict[str, Any]:
+        """Resolve whether a user can access a channel under membership + governance."""
+        decision = {
+            'allowed': False,
+            'reason': 'invalid_request',
+            'role': None,
+            'channel_exists': False,
+            'policy': self._default_channel_governance_policy(user_id),
+        }
+        if not channel_id or not user_id:
+            return decision
+        try:
+            with self.db.get_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT c.id, c.channel_type, COALESCE(c.privacy_mode, 'open') AS privacy_mode,
+                           cm.role AS member_role
+                    FROM channels c
+                    LEFT JOIN channel_members cm
+                      ON cm.channel_id = c.id AND cm.user_id = ?
+                    WHERE c.id = ?
+                    """,
+                    (user_id, channel_id),
+                ).fetchone()
+                if not row:
+                    decision['reason'] = 'channel_not_found'
+                    return decision
+
+                decision['channel_exists'] = True
+                role = row['member_role'] if 'member_role' in row.keys() else None
+                decision['role'] = role
+                if require_membership and not role:
+                    decision['reason'] = 'not_member'
+                    return decision
+
+                policy = self._load_user_channel_governance(conn, user_id)
+                decision['policy'] = policy
+                allowed, reason = self._is_channel_allowed_by_policy(
+                    policy=policy,
+                    channel_id=channel_id,
+                    channel_type=row['channel_type'],
+                    privacy_mode=row['privacy_mode'],
+                )
+                decision['allowed'] = allowed
+                decision['reason'] = reason
+                return decision
+        except Exception as e:
+            logger.error(
+                f"Failed to evaluate channel access for user={user_id} channel={channel_id}: {e}",
+                exc_info=True,
+            )
+            decision['reason'] = 'internal_error'
+            return decision
+
+    def enforce_user_channel_governance(self, user_id: str) -> Dict[str, Any]:
+        """Prune disallowed memberships based on current governance policy."""
+        result = {
+            'user_id': user_id,
+            'enabled': False,
+            'checked_count': 0,
+            'removed_count': 0,
+            'removed_channel_ids': [],
+        }
+        if not user_id:
+            return result
+        try:
+            with self.db.get_connection() as conn:
+                policy = self._load_user_channel_governance(conn, user_id)
+                result['enabled'] = bool(policy.get('enabled'))
+                rows = conn.execute(
+                    """
+                    SELECT cm.channel_id, c.channel_type, COALESCE(c.privacy_mode, 'open') AS privacy_mode
+                    FROM channel_members cm
+                    JOIN channels c ON c.id = cm.channel_id
+                    WHERE cm.user_id = ?
+                    """,
+                    (user_id,),
+                ).fetchall()
+                result['checked_count'] = len(rows)
+                if not policy.get('enabled'):
+                    return result
+
+                removed_ids: List[str] = []
+                for row in rows:
+                    channel_id = row['channel_id']
+                    allowed, _ = self._is_channel_allowed_by_policy(
+                        policy=policy,
+                        channel_id=channel_id,
+                        channel_type=row['channel_type'],
+                        privacy_mode=row['privacy_mode'],
+                    )
+                    if allowed:
+                        continue
+                    conn.execute(
+                        "DELETE FROM channel_members WHERE channel_id = ? AND user_id = ?",
+                        (channel_id, user_id),
+                    )
+                    removed_ids.append(channel_id)
+                conn.commit()
+
+                result['removed_count'] = len(removed_ids)
+                result['removed_channel_ids'] = removed_ids
+                return result
+        except Exception as e:
+            logger.error(f"Failed to enforce channel governance for {user_id}: {e}", exc_info=True)
+            return result
+
+    def list_channels_for_governance(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List channels for admin governance UI with optional user-specific flags."""
+        try:
+            with self.db.get_connection() as conn:
+                policy = self._load_user_channel_governance(conn, user_id) if user_id else None
+                if user_id:
+                    rows = conn.execute(
+                        """
+                        SELECT c.id, c.name, c.channel_type, COALESCE(c.privacy_mode, 'open') AS privacy_mode,
+                               COUNT(DISTINCT cm.user_id) AS member_count,
+                               MAX(CASE WHEN cmu.user_id IS NOT NULL THEN 1 ELSE 0 END) AS is_member
+                        FROM channels c
+                        LEFT JOIN channel_members cm ON cm.channel_id = c.id
+                        LEFT JOIN channel_members cmu
+                          ON cmu.channel_id = c.id AND cmu.user_id = ?
+                        GROUP BY c.id, c.name, c.channel_type, COALESCE(c.privacy_mode, 'open')
+                        ORDER BY CASE WHEN c.id = 'general' THEN 0 ELSE 1 END, LOWER(c.name) ASC
+                        """,
+                        (user_id,),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT c.id, c.name, c.channel_type, COALESCE(c.privacy_mode, 'open') AS privacy_mode,
+                               COUNT(DISTINCT cm.user_id) AS member_count
+                        FROM channels c
+                        LEFT JOIN channel_members cm ON cm.channel_id = c.id
+                        GROUP BY c.id, c.name, c.channel_type, COALESCE(c.privacy_mode, 'open')
+                        ORDER BY CASE WHEN c.id = 'general' THEN 0 ELSE 1 END, LOWER(c.name) ASC
+                        """
+                    ).fetchall()
+
+                payload: List[Dict[str, Any]] = []
+                for row in rows:
+                    channel_id = row['id']
+                    channel_type = row['channel_type']
+                    privacy_mode = row['privacy_mode']
+                    is_public = self._is_public_channel(channel_type, privacy_mode)
+                    entry: Dict[str, Any] = {
+                        'id': channel_id,
+                        'name': row['name'],
+                        'channel_type': channel_type,
+                        'privacy_mode': privacy_mode,
+                        'member_count': int(row['member_count'] or 0),
+                        'is_public_open': bool(is_public),
+                    }
+                    if user_id:
+                        entry['is_member'] = bool(row['is_member'])
+                        if policy:
+                            allowed, reason = self._is_channel_allowed_by_policy(
+                                policy=policy,
+                                channel_id=channel_id,
+                                channel_type=channel_type,
+                                privacy_mode=privacy_mode,
+                            )
+                            entry['governance_allowed'] = bool(allowed)
+                            entry['governance_reason'] = reason
+                    payload.append(entry)
+                return payload
+        except Exception as e:
+            logger.error(f"Failed to list channels for governance: {e}", exc_info=True)
+            return []
 
     # ------------------------------------------------------------------
     #  Peer device profile helpers
@@ -669,7 +1039,7 @@ class ChannelManager:
         # Normalize — strip leading '#' so the UI doesn't double-prefix
         name = self._normalize_channel_name(name)
         logger.info(f"Creating channel: name={name}, type={channel_type.value}, created_by={created_by}")
-        
+
         try:
             # Validate channel name
             if not name or len(name) < 1:
@@ -678,6 +1048,24 @@ class ChannelManager:
             
             if len(name) > 80:
                 logger.error(f"Channel name too long: {len(name)} > 80")
+                return None
+
+            creator_policy = self.get_user_channel_governance(created_by)
+            if (
+                creator_policy.get('enabled')
+                and creator_policy.get('block_public_channels')
+                and self._is_public_channel(channel_type.value, privacy_mode)
+            ):
+                logger.warning(
+                    f"Governance denied public channel creation for {created_by}: "
+                    f"name={name}, channel_type={channel_type.value}, privacy_mode={privacy_mode}"
+                )
+                return None
+            if creator_policy.get('enabled') and creator_policy.get('restrict_to_allowed_channels'):
+                logger.warning(
+                    f"Governance denied channel creation for {created_by}: "
+                    f"allowlist mode active for user"
+                )
                 return None
             
             # Generate unique channel ID
@@ -731,6 +1119,19 @@ class ChannelManager:
                     if initial_members:
                         for user_id in initial_members:
                             if user_id != created_by:  # Don't add creator twice
+                                target_policy = self._load_user_channel_governance(conn, user_id)
+                                allowed, reason = self._is_channel_allowed_by_policy(
+                                    policy=target_policy,
+                                    channel_id=channel_id,
+                                    channel_type=channel_type.value,
+                                    privacy_mode=privacy_mode,
+                                )
+                                if not allowed:
+                                    logger.warning(
+                                        f"Skipping member {user_id} for channel {channel_id} "
+                                        f"due to governance policy ({reason})"
+                                    )
+                                    continue
                                 conn.execute("""
                                     INSERT OR IGNORE INTO channel_members (channel_id, user_id)
                                     VALUES (?, ?)
@@ -844,6 +1245,19 @@ class ChannelManager:
                                         f"from peer {origin_peer} for channel {channel_id}"
                                     )
                                     continue
+                                target_policy = self._load_user_channel_governance(conn, uid)
+                                allowed, reason = self._is_channel_allowed_by_policy(
+                                    policy=target_policy,
+                                    channel_id=channel_id,
+                                    channel_type=channel_type,
+                                    privacy_mode=privacy_mode,
+                                )
+                                if not allowed:
+                                    logger.warning(
+                                        f"SECURITY: Skipping targeted member {uid} for channel {channel_id} "
+                                        f"due to governance policy ({reason})"
+                                    )
+                                    continue
                                 conn.execute("""
                                     INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
                                     VALUES (?, ?, 'member')
@@ -859,6 +1273,19 @@ class ChannelManager:
                     """).fetchall()
 
                     for (uid,) in human_users:
+                        target_policy = self._load_user_channel_governance(conn, uid)
+                        allowed, reason = self._is_channel_allowed_by_policy(
+                            policy=target_policy,
+                            channel_id=channel_id,
+                            channel_type=channel_type,
+                            privacy_mode=privacy_mode,
+                        )
+                        if not allowed:
+                            logger.info(
+                                f"Skipping auto-membership for {uid} in synced channel {channel_id} "
+                                f"due to governance policy ({reason})"
+                            )
+                            continue
                         conn.execute("""
                             INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
                             VALUES (?, ?, 'member')
@@ -867,10 +1294,23 @@ class ChannelManager:
 
                 # Fallback: if no human users found, add the provided user (open/guarded only)
                 if added == 0 and local_user_id and not is_targeted:
-                    conn.execute("""
-                        INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
-                        VALUES (?, ?, 'member')
-                    """, (channel_id, local_user_id))
+                    fallback_policy = self._load_user_channel_governance(conn, local_user_id)
+                    fallback_allowed, fallback_reason = self._is_channel_allowed_by_policy(
+                        policy=fallback_policy,
+                        channel_id=channel_id,
+                        channel_type=channel_type,
+                        privacy_mode=privacy_mode,
+                    )
+                    if not fallback_allowed:
+                        logger.info(
+                            f"Skipped fallback member {local_user_id} for synced channel {channel_id} "
+                            f"due to governance policy ({fallback_reason})"
+                        )
+                    else:
+                        conn.execute("""
+                            INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
+                            VALUES (?, ?, 'member')
+                        """, (channel_id, local_user_id))
 
                 conn.commit()
 
@@ -1205,16 +1645,17 @@ class ChannelManager:
         logger.debug(f"Content length: {len(content)}, type: {message_type.value}")
         
         try:
-            # Validate user is member of channel
-            with self.db.get_connection() as conn:
-                cursor = conn.execute("""
-                    SELECT 1 FROM channel_members 
-                    WHERE channel_id = ? AND user_id = ?
-                """, (channel_id, user_id))
-                
-                if not cursor.fetchone():
-                    logger.error(f"User {user_id} is not a member of channel {channel_id}")
-                    return None
+            access = self.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                logger.warning(
+                    f"Channel send denied for user={user_id}, channel={channel_id}, "
+                    f"reason={access.get('reason')}"
+                )
+                return None
 
             security_clean, sec_error = self.validate_security_metadata(security, strict=False)
             if sec_error:
@@ -1387,15 +1828,15 @@ class ChannelManager:
 
     def get_member_role(self, channel_id: str, user_id: str) -> Optional[str]:
         """Return the role of a user in a channel ('admin' | 'member'), or None."""
-        try:
-            with self.db.get_connection() as conn:
-                row = conn.execute(
-                    "SELECT role FROM channel_members WHERE channel_id = ? AND user_id = ?",
-                    (channel_id, user_id)
-                ).fetchone()
-                return row['role'] if row else None
-        except Exception:
+        decision = self.get_channel_access_decision(
+            channel_id=channel_id,
+            user_id=user_id,
+            require_membership=True,
+        )
+        if not decision.get('allowed'):
             return None
+        role = decision.get('role')
+        return str(role) if role else None
 
     def mark_channel_read(self, channel_id: str, user_id: str) -> None:
         """Update last_read_at for a user in a channel to now, clearing its unread count."""
@@ -1480,6 +1921,20 @@ class ChannelManager:
                 if not user_check:
                     logger.warning(
                         f"SECURITY: Add member denied: user {target_user_id} does not exist"
+                    )
+                    return False
+
+                target_policy = self._load_user_channel_governance(conn, target_user_id)
+                allowed, reason = self._is_channel_allowed_by_policy(
+                    policy=target_policy,
+                    channel_id=channel_id,
+                    channel_type=channel_type,
+                    privacy_mode=privacy_mode,
+                )
+                if not allowed:
+                    logger.warning(
+                        f"SECURITY: Add member denied by governance policy for user={target_user_id}, "
+                        f"channel={channel_id}, reason={reason}"
                     )
                     return False
 
@@ -1685,17 +2140,19 @@ class ChannelManager:
         logger.debug(f"Getting messages for channel {channel_id}, user {user_id}, limit {limit}")
         
         try:
-            # Verify user is member of channel
+            access = self.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                logger.warning(
+                    f"Channel read denied for user={user_id}, channel={channel_id}, "
+                    f"reason={access.get('reason')}"
+                )
+                return []
+
             with self.db.get_connection() as conn:
-                cursor = conn.execute("""
-                    SELECT 1 FROM channel_members 
-                    WHERE channel_id = ? AND user_id = ?
-                """, (channel_id, user_id))
-                
-                if not cursor.fetchone():
-                    logger.warning(f"User {user_id} is not a member of channel {channel_id}")
-                    return []
-                
                 # Build query — sort root messages by activity time
                 # (resurfaced parents appear at the bottom/newest position).
                 # Replies sort with their parent via COALESCE on the parent row.
@@ -1897,12 +2354,14 @@ class ChannelManager:
         if not channel_id or not message_id or not user_id:
             return None
         try:
+            access = self.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                return None
             with self.db.get_connection() as conn:
-                if not conn.execute(
-                    "SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?",
-                    (channel_id, user_id),
-                ).fetchone():
-                    return None
                 row = conn.execute(
                     """
                     SELECT * FROM channel_messages
@@ -1967,9 +2426,12 @@ class ChannelManager:
 
         try:
             with self.db.get_connection() as conn:
+                policy = self._load_user_channel_governance(conn, user_id)
                 rows = conn.execute(
                     """
                     SELECT m.channel_id, c.name as channel_name,
+                           c.channel_type,
+                           COALESCE(c.privacy_mode, 'open') AS privacy_mode,
                            COUNT(*) as new_messages,
                            MAX(m.created_at) as latest_at
                     FROM channel_messages m
@@ -1987,6 +2449,14 @@ class ChannelManager:
 
                 for row in rows:
                     channel_id = row['channel_id']
+                    allowed, _ = self._is_channel_allowed_by_policy(
+                        policy=policy,
+                        channel_id=channel_id,
+                        channel_type=row['channel_type'],
+                        privacy_mode=row['privacy_mode'],
+                    )
+                    if not allowed:
+                        continue
                     latest = conn.execute(
                         """
                         SELECT m.id, m.user_id, m.content, m.created_at, u.username as author_username
@@ -2039,6 +2509,7 @@ class ChannelManager:
         
         try:
             with self.db.get_connection() as conn:
+                policy = self._load_user_channel_governance(conn, user_id)
                 cursor = conn.execute("""
                     SELECT c.*, cm.last_read_at, cm.notifications_enabled, cm.role as user_role,
                            COUNT(DISTINCT cm2.user_id) as member_count,
@@ -2061,6 +2532,17 @@ class ChannelManager:
                 
                 channels = []
                 for row in cursor.fetchall():
+                    allowed, reason = self._is_channel_allowed_by_policy(
+                        policy=policy,
+                        channel_id=row['id'],
+                        channel_type=row['channel_type'],
+                        privacy_mode=(row['privacy_mode'] if 'privacy_mode' in row.keys() else 'open'),
+                    )
+                    if not allowed:
+                        logger.debug(
+                            f"Skipping channel {row['id']} for user {user_id} due to governance ({reason})"
+                        )
+                        continue
                     # origin_peer may not exist in older DBs
                     try:
                         origin_peer = row['origin_peer']
@@ -2259,15 +2741,14 @@ class ChannelManager:
         if not query or not query.strip():
             return []
         try:
+            access = self.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                return []
             with self.db.get_connection() as conn:
-                # Verify membership
-                member = conn.execute(
-                    "SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?",
-                    (channel_id, user_id)
-                ).fetchone()
-                if not member:
-                    return []
-
                 search_term = f"%{query.strip()}%"
                 rows = conn.execute("""
                     SELECT m.*, u.username as author_username

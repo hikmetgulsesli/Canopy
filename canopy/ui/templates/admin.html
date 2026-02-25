@@ -656,6 +656,7 @@
                         </div>
                         <div class="d-flex flex-wrap gap-1">
                             <span class="workspace-chip">Profile</span>
+                            <span class="workspace-chip">Governance</span>
                             <span class="workspace-chip">Inbox</span>
                             <span class="workspace-chip">Mentions</span>
                         </div>
@@ -699,6 +700,42 @@
                         This user belongs to a remote peer, so profile edits are disabled on this instance.
                     </div>
                     <div class="small text-muted mb-3" id="workspace-status-line"></div>
+
+                    <div class="border rounded p-2 mb-3">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                            <div>
+                                <h6 class="mb-0">Channel Governance</h6>
+                                <div class="small text-muted">Restrict agent access to selected channels and block public channels.</div>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button type="button" class="btn btn-outline-success btn-sm" id="workspace-save-governance-btn">Save Governance</button>
+                                <button type="button" class="btn btn-outline-warning btn-sm" id="workspace-enforce-governance-btn">Enforce Now</button>
+                            </div>
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-md-4">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="workspace-governance-enabled">
+                                    <label class="form-check-label small" for="workspace-governance-enabled">Enable governance policy</label>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="workspace-governance-block-public">
+                                    <label class="form-check-label small" for="workspace-governance-block-public">Block open/public channels</label>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="workspace-governance-allowlist">
+                                    <label class="form-check-label small" for="workspace-governance-allowlist">Restrict to allowlist</label>
+                                </div>
+                            </div>
+                        </div>
+                        <label class="form-label small mb-1" for="workspace-governance-allowed-channels">Allowed channels (multi-select)</label>
+                        <select class="form-select form-select-sm" id="workspace-governance-allowed-channels" multiple size="6"></select>
+                        <div class="small text-muted mt-1" id="workspace-governance-summary">No policy loaded.</div>
+                    </div>
 
                     <div class="row g-3">
                         <div class="col-md-6">
@@ -1100,6 +1137,13 @@
     const workspaceMentionUnackedCount = document.getElementById('workspace-mention-unacked-count');
     const workspaceMentionItems = document.getElementById('workspace-mention-items');
     const workspaceInboxConfig = document.getElementById('workspace-inbox-config');
+    const workspaceGovernanceEnabled = document.getElementById('workspace-governance-enabled');
+    const workspaceGovernanceBlockPublic = document.getElementById('workspace-governance-block-public');
+    const workspaceGovernanceAllowlist = document.getElementById('workspace-governance-allowlist');
+    const workspaceGovernanceAllowedChannels = document.getElementById('workspace-governance-allowed-channels');
+    const workspaceGovernanceSummary = document.getElementById('workspace-governance-summary');
+    const workspaceSaveGovernanceBtn = document.getElementById('workspace-save-governance-btn');
+    const workspaceEnforceGovernanceBtn = document.getElementById('workspace-enforce-governance-btn');
 
     let selectedWorkspaceUserId = null;
     let selectedWorkspaceUserLabel = null;
@@ -1128,14 +1172,30 @@
         workspaceStatusLine.classList.toggle('text-success', !isError && !!text);
     }
 
+    function getSelectedOptions(selectEl) {
+        if (!selectEl) return [];
+        return Array.from(selectEl.selectedOptions || [])
+            .map(opt => String(opt.value || '').trim())
+            .filter(Boolean);
+    }
+
+    function syncGovernanceControlState() {
+        const canEdit = !!selectedWorkspaceIsLocal;
+        if (workspaceGovernanceAllowedChannels) {
+            const allowlistEnabled = !!workspaceGovernanceAllowlist?.checked;
+            workspaceGovernanceAllowedChannels.disabled = !canEdit || !allowlistEnabled;
+        }
+    }
+
     function setWorkspaceEditable(canEdit) {
         selectedWorkspaceIsLocal = !!canEdit;
-        [workspaceDisplayNameInput, workspaceAccountTypeSelect, workspaceThemeSelect, workspaceBioInput, workspaceSaveProfileBtn, workspaceAvatarUploadBtn, workspaceAvatarClearBtn]
+        [workspaceDisplayNameInput, workspaceAccountTypeSelect, workspaceThemeSelect, workspaceBioInput, workspaceSaveProfileBtn, workspaceAvatarUploadBtn, workspaceAvatarClearBtn, workspaceGovernanceEnabled, workspaceGovernanceBlockPublic, workspaceGovernanceAllowlist, workspaceSaveGovernanceBtn, workspaceEnforceGovernanceBtn]
             .filter(Boolean)
             .forEach(el => { el.disabled = !canEdit; });
         if (workspaceReadonlyNote) {
             workspaceReadonlyNote.style.display = canEdit ? 'none' : 'block';
         }
+        syncGovernanceControlState();
     }
 
     function renderWorkspaceList(container, rows, emptyText, renderRow) {
@@ -1152,6 +1212,9 @@
         const user = workspace.user || {};
         const inbox = workspace.inbox || {};
         const mentions = workspace.mentions || {};
+        const governance = workspace.governance || {};
+        const governancePolicy = governance.policy || {};
+        const governanceChannels = Array.isArray(governance.channels) ? governance.channels : [];
 
         selectedWorkspaceUserId = user.id || null;
         selectedWorkspaceUserLabel = user.display_name || user.username || user.id || null;
@@ -1195,6 +1258,46 @@
         if (workspaceInboxConfig) {
             workspaceInboxConfig.textContent = JSON.stringify(inbox.config || {}, null, 2);
         }
+
+        if (workspaceGovernanceEnabled) workspaceGovernanceEnabled.checked = !!governancePolicy.enabled;
+        if (workspaceGovernanceBlockPublic) workspaceGovernanceBlockPublic.checked = !!governancePolicy.block_public_channels;
+        if (workspaceGovernanceAllowlist) workspaceGovernanceAllowlist.checked = !!governancePolicy.restrict_to_allowed_channels;
+
+        if (workspaceGovernanceAllowedChannels) {
+            const allowedSet = new Set((governancePolicy.allowed_channel_ids || []).map(id => String(id)));
+            workspaceGovernanceAllowedChannels.innerHTML = '';
+            governanceChannels.forEach((channel) => {
+                const channelId = String(channel.id || '').trim();
+                if (!channelId) return;
+                const channelName = channel.name || channelId;
+                const mode = channel.privacy_mode || 'open';
+                const memberState = channel.is_member ? 'member' : 'not member';
+                const option = document.createElement('option');
+                option.value = channelId;
+                option.selected = allowedSet.has(channelId);
+                option.textContent = `#${channelName} [${mode}] \u00b7 ${memberState}`;
+                workspaceGovernanceAllowedChannels.appendChild(option);
+            });
+            if (!workspaceGovernanceAllowedChannels.options.length) {
+                const emptyOption = document.createElement('option');
+                emptyOption.value = '';
+                emptyOption.textContent = 'No channels available';
+                emptyOption.disabled = true;
+                workspaceGovernanceAllowedChannels.appendChild(emptyOption);
+            }
+        }
+
+        if (workspaceGovernanceSummary) {
+            const allowedCount = (governancePolicy.allowed_channel_ids || []).length;
+            const updatedAt = governancePolicy.updated_at ? formatTime(governancePolicy.updated_at) : 'never';
+            const updatedBy = governancePolicy.updated_by ? ` by ${governancePolicy.updated_by}` : '';
+            workspaceGovernanceSummary.textContent =
+                `enabled=${governancePolicy.enabled ? 'yes' : 'no'} \u00b7 ` +
+                `block_public=${governancePolicy.block_public_channels ? 'yes' : 'no'} \u00b7 ` +
+                `allowlist=${governancePolicy.restrict_to_allowed_channels ? 'yes' : 'no'} (${allowedCount}) \u00b7 ` +
+                `updated ${updatedAt}${updatedBy}`;
+        }
+        syncGovernanceControlState();
 
         renderWorkspaceList(
             workspaceInboxItems,
@@ -1400,6 +1503,68 @@
             }
             if (data.workspace) renderWorkspace(data.workspace);
             setWorkspaceStatus(data.message || 'Inbox rebuild complete');
+        });
+    }
+
+    [workspaceGovernanceAllowlist, workspaceGovernanceEnabled].filter(Boolean).forEach((el) => {
+        el.addEventListener('change', () => {
+            syncGovernanceControlState();
+        });
+    });
+
+    if (workspaceSaveGovernanceBtn) {
+        workspaceSaveGovernanceBtn.addEventListener('click', async () => {
+            if (!selectedWorkspaceUserId) {
+                setWorkspaceStatus('Select a user first', true);
+                return;
+            }
+            if (!selectedWorkspaceIsLocal) {
+                setWorkspaceStatus('Remote peer users are read-only on this instance', true);
+                return;
+            }
+            const payload = {
+                enabled: !!workspaceGovernanceEnabled?.checked,
+                block_public_channels: !!workspaceGovernanceBlockPublic?.checked,
+                restrict_to_allowed_channels: !!workspaceGovernanceAllowlist?.checked,
+                allowed_channel_ids: getSelectedOptions(workspaceGovernanceAllowedChannels),
+                enforce_now: false,
+            };
+            const { ok, data } = await api('POST', `/ajax/admin/users/${selectedWorkspaceUserId}/governance`, payload);
+            if (!ok) {
+                setWorkspaceStatus(data.error || 'Failed to save governance policy', true);
+                return;
+            }
+            if (data.workspace) renderWorkspace(data.workspace);
+            setWorkspaceStatus(data.message || 'Governance policy updated');
+        });
+    }
+
+    if (workspaceEnforceGovernanceBtn) {
+        workspaceEnforceGovernanceBtn.addEventListener('click', async () => {
+            if (!selectedWorkspaceUserId) {
+                setWorkspaceStatus('Select a user first', true);
+                return;
+            }
+            if (!selectedWorkspaceIsLocal) {
+                setWorkspaceStatus('Remote peer users are read-only on this instance', true);
+                return;
+            }
+            if (!confirm('Apply governance policy now and remove disallowed memberships for this user?')) return;
+            const payload = {
+                enabled: !!workspaceGovernanceEnabled?.checked,
+                block_public_channels: !!workspaceGovernanceBlockPublic?.checked,
+                restrict_to_allowed_channels: !!workspaceGovernanceAllowlist?.checked,
+                allowed_channel_ids: getSelectedOptions(workspaceGovernanceAllowedChannels),
+                enforce_now: true,
+            };
+            const { ok, data } = await api('POST', `/ajax/admin/users/${selectedWorkspaceUserId}/governance`, payload);
+            if (!ok) {
+                setWorkspaceStatus(data.error || 'Failed to enforce governance policy', true);
+                return;
+            }
+            if (data.workspace) renderWorkspace(data.workspace);
+            const removed = Number((data.enforcement || {}).removed_count || 0);
+            setWorkspaceStatus(data.message || `Governance enforced (removed ${removed} memberships)`);
         });
     }
 

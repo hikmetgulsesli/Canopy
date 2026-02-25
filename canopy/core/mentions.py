@@ -1024,9 +1024,59 @@ def record_mention_activity(
     source_content: Optional[str] = None,
 ) -> None:
     """Persist mention events and surface a UI activity notification."""
-    if mention_manager and target_ids:
+    resolved_target_ids = list(dict.fromkeys([tid for tid in target_ids if tid]))
+    if source_type == 'channel_message' and channel_id:
+        if not mention_manager:
+            logger.warning(
+                "Skipping channel mention activity without mention manager "
+                "(source_id=%s channel_id=%s)",
+                source_id,
+                channel_id,
+            )
+            return
+        try:
+            with mention_manager.db.get_connection() as conn:
+                placeholders = ",".join("?" for _ in resolved_target_ids)
+                if placeholders:
+                    rows = conn.execute(
+                        f"""
+                        SELECT user_id
+                        FROM channel_members
+                        WHERE channel_id = ? AND user_id IN ({placeholders})
+                        """,
+                        [channel_id] + resolved_target_ids,
+                    ).fetchall()
+                else:
+                    rows = []
+            allowed_user_ids = {
+                (row['user_id'] if hasattr(row, 'keys') and 'user_id' in row.keys() else row[0])
+                for row in rows
+            }
+            filtered_ids = [uid for uid in resolved_target_ids if uid in allowed_user_ids]
+            dropped_ids = [uid for uid in resolved_target_ids if uid not in allowed_user_ids]
+            if dropped_ids:
+                logger.info(
+                    "Dropped %d mention target(s) without channel membership "
+                    "(source_id=%s channel_id=%s users=%s)",
+                    len(dropped_ids),
+                    source_id,
+                    channel_id,
+                    dropped_ids,
+                )
+            resolved_target_ids = filtered_ids
+        except Exception as e:
+            logger.warning(
+                "Mention membership verification failed; dropping channel mention "
+                "(source_id=%s channel_id=%s error=%s)",
+                source_id,
+                channel_id,
+                e,
+            )
+            return
+
+    if mention_manager and resolved_target_ids:
         mention_manager.record_mentions(
-            user_ids=target_ids,
+            user_ids=resolved_target_ids,
             source_type=source_type,
             source_id=source_id,
             author_id=author_id,
@@ -1036,15 +1086,15 @@ def record_mention_activity(
             metadata=extra_ref,
         )
 
-    if target_ids and not inbox_manager:
+    if resolved_target_ids and not inbox_manager:
         logger.warning(
             "Inbox skipped: INBOX_MANAGER not configured (mention targets=%s, source_type=%s, source_id=%s)",
-            list(target_ids), source_type, source_id,
+            list(resolved_target_ids), source_type, source_id,
         )
-    if inbox_manager and target_ids:
+    if inbox_manager and resolved_target_ids:
         try:
             inserted = inbox_manager.record_mention_triggers(
-                target_ids=target_ids,
+                target_ids=resolved_target_ids,
                 source_type=source_type,
                 source_id=source_id,
                 author_id=author_id,
@@ -1058,18 +1108,18 @@ def record_mention_activity(
                 logger.info(
                     "Inbox: 0 triggers created for %d target(s) (source_type=%s, source_id=%s, targets=%s) "
                     "- check agent_inbox_audit for rejection reasons",
-                    len(target_ids), source_type, source_id, list(target_ids),
+                    len(resolved_target_ids), source_type, source_id, list(resolved_target_ids),
                 )
         except Exception as e:
             logger.warning(
                 "Inbox trigger creation failed: %s (source_type=%s, source_id=%s, targets=%s)",
-                e, source_type, source_id, list(target_ids),
+                e, source_type, source_id, list(resolved_target_ids),
             )
 
-    if p2p_manager and target_ids:
+    if p2p_manager and resolved_target_ids:
         try:
             ref = dict(extra_ref or {})
-            ref.setdefault('mention_targets', list(target_ids))
+            ref.setdefault('mention_targets', list(resolved_target_ids))
             if source_type == 'channel_message':
                 ref.setdefault('message_id', source_id)
                 ref.setdefault('channel_id', channel_id)

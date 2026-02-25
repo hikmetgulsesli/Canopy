@@ -223,6 +223,10 @@ def create_api_blueprint() -> Blueprint:
             return False
         return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
 
+    def _channel_not_found_response() -> tuple[Any, int]:
+        """Generic channel-scope miss to reduce enumeration leakage."""
+        return jsonify({'error': 'Not found', 'message': 'Resource not found'}), 404
+
     def _touch_agent_presence(user_id: Optional[str], source: str) -> Optional[str]:
         """Record a lightweight check-in timestamp for agent presence badges."""
         uid = (user_id or '').strip()
@@ -5861,8 +5865,18 @@ def create_api_blueprint() -> Blueprint:
             limit = int(request.args.get('limit', 50))
             before_message_id = request.args.get('before')
 
-            if channel_manager.get_member_role(channel_id, g.api_key_info.user_id) is None:
-                return jsonify({'error': 'You are not a member of this channel'}), 403
+            access = channel_manager.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=g.api_key_info.user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                if str(access.get('reason') or '').startswith('governance_'):
+                    return jsonify({
+                        'error': 'Channel access blocked by admin governance policy',
+                        'reason': access.get('reason'),
+                    }), 403
+                return _channel_not_found_response()
 
             messages = channel_manager.get_channel_messages(
                 channel_id, g.api_key_info.user_id, limit, before_message_id
@@ -6597,8 +6611,18 @@ def create_api_blueprint() -> Blueprint:
             if parent_message_id and not _ID_PATTERN.match(str(parent_message_id)):
                 return jsonify({'error': 'Invalid parent_message_id format'}), 400
 
-            if channel_manager.get_member_role(channel_id, g.api_key_info.user_id) is None:
-                return jsonify({'error': 'You are not a member of this channel'}), 403
+            access = channel_manager.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=g.api_key_info.user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                if str(access.get('reason') or '').startswith('governance_'):
+                    return jsonify({
+                        'error': 'Channel access blocked by admin governance policy',
+                        'reason': access.get('reason'),
+                    }), 403
+                return _channel_not_found_response()
 
             security_clean = None
             if security is not None:
@@ -7074,8 +7098,18 @@ def create_api_blueprint() -> Blueprint:
             if not query:
                 return jsonify({'error': 'Search query (q) is required'}), 400
 
-            if channel_manager.get_member_role(channel_id, g.api_key_info.user_id) is None:
-                return jsonify({'error': 'You are not a member of this channel'}), 403
+            access = channel_manager.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=g.api_key_info.user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                if str(access.get('reason') or '').startswith('governance_'):
+                    return jsonify({
+                        'error': 'Channel access blocked by admin governance policy',
+                        'reason': access.get('reason'),
+                    }), 403
+                return _channel_not_found_response()
 
             results = channel_manager.search_channel_messages(
                 channel_id, query, g.api_key_info.user_id, limit)
@@ -7133,6 +7167,23 @@ def create_api_blueprint() -> Blueprint:
                 channel_type = ChannelType(channel_type_str)
             except ValueError:
                 return jsonify({'error': f'Invalid channel type: {channel_type_str}'}), 400
+
+            governance = channel_manager.get_user_channel_governance(g.api_key_info.user_id)
+            if governance.get('enabled'):
+                is_public_open = (
+                    privacy_mode == 'open'
+                    and channel_type in {ChannelType.PUBLIC, ChannelType.GENERAL}
+                )
+                if governance.get('block_public_channels') and is_public_open:
+                    return jsonify({
+                        'error': 'Channel creation blocked by admin governance policy',
+                        'reason': 'governance_public_channels_blocked',
+                    }), 403
+                if governance.get('restrict_to_allowed_channels'):
+                    return jsonify({
+                        'error': 'Channel creation blocked by admin governance policy',
+                        'reason': 'governance_channel_creation_not_allowlisted',
+                    }), 403
             
             channel = channel_manager.create_channel(
                 name, channel_type, g.api_key_info.user_id, description,
@@ -7273,8 +7324,18 @@ def create_api_blueprint() -> Blueprint:
         if not channel_manager:
             return jsonify({'error': 'Channels not available'}), 503
         try:
-            if channel_manager.get_member_role(channel_id, g.api_key_info.user_id) is None:
-                return jsonify({'error': 'You are not a member of this channel'}), 403
+            access = channel_manager.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=g.api_key_info.user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                if str(access.get('reason') or '').startswith('governance_'):
+                    return jsonify({
+                        'error': 'Channel access blocked by admin governance policy',
+                        'reason': access.get('reason'),
+                    }), 403
+                return _channel_not_found_response()
             members = channel_manager.get_channel_members_list(channel_id)
             return jsonify({'members': members, 'count': len(members)})
         except Exception as e:

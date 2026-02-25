@@ -17,7 +17,7 @@ import re
 import secrets
 import threading
 import time
-from flask import Flask
+from flask import Flask, jsonify
 from pathlib import Path
 from typing import Any, Optional, cast
 
@@ -451,6 +451,8 @@ def create_app(config: Optional[Config] = None) -> Flask:
                             logger.debug(f"Duplicate-message inbox patch failed: {_patch_err}")
                     return
 
+                effective_origin_peer = origin_peer or from_peer
+
                 # Ensure remote user exists as a shadow account so FK works.
                 # IMPORTANT: shadow users are created per user_id (not per
                 # peer) so that different users on the same peer device
@@ -469,24 +471,29 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     pass
 
                 # Ensure the channel exists locally (auto-create if received
-                # from a peer who has a channel we don't know about yet)
+                # from a peer who has a channel we don't know about yet).
+                # Fail closed: unknown channels start as private until an
+                # explicit channel/member sync defines broader visibility.
                 with db_manager.get_connection() as conn:
                     existing_ch = conn.execute(
-                        "SELECT 1 FROM channels WHERE id = ?", (channel_id,)
+                        "SELECT privacy_mode FROM channels WHERE id = ?", (channel_id,)
                     ).fetchone()
                     if not existing_ch:
                         conn.execute(
                             "INSERT OR IGNORE INTO channels "
                             "(id, name, channel_type, created_by, description, "
-                            " origin_peer, created_at) "
-                            "VALUES (?, ?, 'public', ?, 'Auto-created from P2P sync', "
-                            " ?, datetime('now'))",
+                            " origin_peer, privacy_mode, created_at) "
+                            "VALUES (?, ?, 'private', ?, 'Auto-created from P2P sync', "
+                            " ?, 'private', datetime('now'))",
                             (channel_id, f"peer-channel-{channel_id[:8]}",
-                             user_id, from_peer)
+                             user_id, effective_origin_peer)
                         )
                         conn.commit()
                         logger.info(f"Auto-created channel {channel_id} from P2P sync "
-                                    f"(origin_peer={from_peer})")
+                                    f"(origin_peer={effective_origin_peer}, privacy_mode=private)")
+                        channel_privacy_mode = 'private'
+                    else:
+                        channel_privacy_mode = str(existing_ch['privacy_mode'] or 'open').strip().lower()
 
                     # Ensure shadow user is a member
                     conn.execute(
@@ -495,21 +502,21 @@ def create_app(config: Optional[Config] = None) -> Flask:
                         (channel_id, user_id)
                     )
 
-                    # Ensure ALL local users (humans and agents) are members
-                    # so they can see P2P messages in the UI and receive
-                    # mention inbox items for every channel.
-                    human_users = conn.execute(
-                        "SELECT id FROM users "
-                        "WHERE id != 'system' AND id != 'local_user' "
-                        "AND (password_hash IS NOT NULL AND password_hash != '' "
-                        "     OR account_type = 'agent')",
-                    ).fetchall()
-                    for (uid,) in human_users:
-                        conn.execute(
-                            "INSERT OR IGNORE INTO channel_members "
-                            "(channel_id, user_id, role) VALUES (?, ?, 'member')",
-                            (channel_id, uid)
-                        )
+                    # Only open/public channels auto-include all local users.
+                    # Restricted channels must keep explicit membership.
+                    if channel_privacy_mode in ('open', 'public'):
+                        human_users = conn.execute(
+                            "SELECT id FROM users "
+                            "WHERE id != 'system' AND id != 'local_user' "
+                            "AND (password_hash IS NOT NULL AND password_hash != '' "
+                            "     OR account_type = 'agent')",
+                        ).fetchall()
+                        for (uid,) in human_users:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO channel_members "
+                                "(channel_id, user_id, role) VALUES (?, ?, 'member')",
+                                (channel_id, uid)
+                            )
 
                     conn.commit()
 
@@ -692,8 +699,6 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     logger.info(f"Updated P2P channel message {message_id} in #{channel_id}")
                     return
 
-                origin_peer = origin_peer or from_peer
-
                 with db_manager.get_connection() as conn:
                     conn.execute("""
                         INSERT OR IGNORE INTO channel_messages
@@ -702,7 +707,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                         VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?)
                     """, (mid, channel_id, user_id, content_rewritten,
                           message_type, attachments_json, security_json, normalised_ts,
-                          origin_peer,
+                          effective_origin_peer,
                           expires_db,
                           int(ttl_seconds) if ttl_seconds is not None else None,
                           (ttl_mode or '').strip() or None,
@@ -1465,6 +1470,46 @@ def create_app(config: Optional[Config] = None) -> Flask:
                                 (channel_id, target_user_id, role or 'member'))
                             conn.commit()
                     logger.info(f"Member sync: added {target_user_id} to {channel_id}")
+
+                    # Recover any mention inbox items that may have raced ahead
+                    # of membership sync delivery for this user/channel.
+                    if inbox_manager:
+                        try:
+                            with db_manager.get_connection() as conn:
+                                user_row = conn.execute(
+                                    "SELECT username, display_name FROM users WHERE id = ?",
+                                    (target_user_id,),
+                                ).fetchone()
+                            username = ((user_row['username'] if user_row and 'username' in user_row.keys() else None) or '').strip()
+                            display_name = (user_row['display_name'] if user_row and 'display_name' in user_row.keys() else None)
+                            # Fall back to display_name so inbox rebuild runs even if
+                            # username column is empty on a legacy shadow user row.
+                            effective_username = username or (display_name or '').strip()
+                            if effective_username:
+                                rebuild = inbox_manager.rebuild_from_channel_messages(
+                                    user_id=target_user_id,
+                                    username=effective_username,
+                                    display_name=display_name,
+                                    window_hours=72,
+                                    limit=500,
+                                    channel_id=channel_id,
+                                )
+                                created = int((rebuild or {}).get('created') or 0)
+                                if created > 0:
+                                    logger.info(
+                                        "Member sync mention backfill created %d inbox item(s) "
+                                        "for user %s channel %s",
+                                        created,
+                                        target_user_id,
+                                        channel_id,
+                                    )
+                        except Exception as backfill_err:
+                            logger.debug(
+                                "Member sync mention backfill skipped for user %s channel %s: %s",
+                                target_user_id,
+                                channel_id,
+                                backfill_err,
+                            )
 
                 elif action == 'remove':
                     with db_manager.get_connection() as conn:
@@ -3950,7 +3995,11 @@ def register_error_handlers(app: Flask) -> None:
     
     @app.errorhandler(429)
     def rate_limit_exceeded(error):
-        return {'error': 'Rate limit exceeded', 'message': 'Too many requests'}, 429
+        retry_after = str(int(float(os.getenv('CANOPY_RETRY_AFTER_SECONDS', '1') or '1')))
+        response = jsonify({'error': 'Rate limit exceeded', 'message': 'Too many requests'})
+        response.status_code = 429
+        response.headers['Retry-After'] = retry_after
+        return response
     
     @app.errorhandler(500)
     def internal_error(error):

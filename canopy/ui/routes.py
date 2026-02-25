@@ -1312,7 +1312,7 @@ def create_ui_blueprint() -> Blueprint:
         audit_limit: int = 25,
     ) -> dict[str, Any]:
         user_id = user_row.get('id')
-        db_manager, _, _, _, _, _, _, _, profile_manager, _, _ = _get_app_components_any(current_app)
+        db_manager, _, _, _, channel_manager, _, _, _, profile_manager, _, _ = _get_app_components_any(current_app)
         mention_manager = current_app.config.get('MENTION_MANAGER')
         inbox_manager = current_app.config.get('INBOX_MANAGER')
 
@@ -1368,6 +1368,16 @@ def create_ui_blueprint() -> Blueprint:
                 'available': bool(mention_manager),
                 'unacked_count': 0,
                 'items': [],
+            },
+            'governance': {
+                'available': bool(channel_manager),
+                'policy': {
+                    'enabled': False,
+                    'block_public_channels': False,
+                    'restrict_to_allowed_channels': False,
+                    'allowed_channel_ids': [],
+                },
+                'channels': [],
             },
         }
 
@@ -1448,6 +1458,28 @@ def create_ui_blueprint() -> Blueprint:
                 })
             except Exception as mention_err:
                 logger.warning(f"Admin workspace mentions snapshot failed for {user_id}: {mention_err}")
+
+        if channel_manager and user_id:
+            try:
+                policy = channel_manager.get_user_channel_governance(user_id)
+                channels = channel_manager.list_channels_for_governance(user_id=user_id)
+                if not isinstance(policy, dict):
+                    policy = {}
+                if not isinstance(channels, list):
+                    channels = []
+                workspace['governance'].update({
+                    'policy': {
+                        'enabled': bool(policy.get('enabled', False)),
+                        'block_public_channels': bool(policy.get('block_public_channels', False)),
+                        'restrict_to_allowed_channels': bool(policy.get('restrict_to_allowed_channels', False)),
+                        'allowed_channel_ids': list(policy.get('allowed_channel_ids') or []),
+                        'updated_at': policy.get('updated_at'),
+                        'updated_by': policy.get('updated_by'),
+                    },
+                    'channels': channels,
+                })
+            except Exception as gov_err:
+                logger.warning(f"Admin workspace governance snapshot failed for {user_id}: {gov_err}")
 
         return workspace
 
@@ -3984,6 +4016,99 @@ def create_ui_blueprint() -> Blueprint:
             return jsonify({'success': True, 'workspace': workspace, 'message': 'Profile updated'})
         except Exception as e:
             logger.error(f"Admin profile update error: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @ui.route('/ajax/admin/users/<user_id>/governance', methods=['POST'])
+    @require_login
+    @require_admin
+    def ajax_admin_update_user_governance(user_id: str):
+        """Admin: update per-user channel governance policy for a local user."""
+        try:
+            db_manager, _, _, _, channel_manager, _, _, _, _, _, _ = _get_app_components_any(current_app)
+            user = _admin_registered_user_row(db_manager, user_id)
+            if not user:
+                return jsonify({'error': 'User not found'}), 404
+            if user.get('origin_peer'):
+                return jsonify({'error': 'Remote peer users are read-only on this instance'}), 403
+            if not channel_manager:
+                return jsonify({'error': 'Channel service unavailable'}), 503
+
+            data = request.get_json(silent=True) or {}
+
+            def _to_bool(value: Any) -> bool:
+                if isinstance(value, bool):
+                    return value
+                if value is None:
+                    return False
+                return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+            enabled = _to_bool(data.get('enabled'))
+            block_public_channels = _to_bool(data.get('block_public_channels'))
+            restrict_to_allowed_channels = _to_bool(data.get('restrict_to_allowed_channels'))
+            enforce_now = _to_bool(data.get('enforce_now', True))
+
+            raw_allowed = data.get('allowed_channel_ids') or []
+            if not isinstance(raw_allowed, list):
+                return jsonify({'error': 'allowed_channel_ids must be an array'}), 400
+            if len(raw_allowed) > 1024:
+                return jsonify({'error': 'Too many allowed channels provided'}), 400
+
+            available_channels = channel_manager.list_channels_for_governance()
+            valid_channel_ids = {
+                str(row.get('id')).strip()
+                for row in (available_channels or [])
+                if row and row.get('id')
+            }
+            allowed_channel_ids = []
+            seen = set()
+            for cid in raw_allowed:
+                channel_id = str(cid or '').strip()
+                if not channel_id or channel_id in seen:
+                    continue
+                if channel_id not in valid_channel_ids:
+                    continue
+                seen.add(channel_id)
+                allowed_channel_ids.append(channel_id)
+
+            if enabled and restrict_to_allowed_channels and not allowed_channel_ids:
+                return jsonify({
+                    'error': 'Allowlist mode is enabled but no valid allowed channels were selected'
+                }), 400
+
+            saved = channel_manager.set_user_channel_governance(
+                user_id=user_id,
+                enabled=enabled,
+                block_public_channels=block_public_channels,
+                restrict_to_allowed_channels=restrict_to_allowed_channels,
+                allowed_channel_ids=allowed_channel_ids,
+                updated_by=get_current_user(),
+            )
+            if not saved:
+                return jsonify({'error': 'Failed to save governance policy'}), 500
+
+            enforcement_result: dict[str, Any] = {
+                'enabled': enabled,
+                'checked_count': 0,
+                'removed_count': 0,
+                'removed_channel_ids': [],
+            }
+            if enforce_now:
+                enforcement_result = channel_manager.enforce_user_channel_governance(user_id)
+
+            updated_user = db_manager.get_user(user_id) or user
+            workspace = _build_admin_workspace_snapshot(updated_user)
+            message = 'Governance policy updated'
+            if enforce_now:
+                removed = int((enforcement_result or {}).get('removed_count') or 0)
+                message = f'Governance policy updated (removed {removed} disallowed memberships)'
+            return jsonify({
+                'success': True,
+                'workspace': workspace,
+                'enforcement': enforcement_result,
+                'message': message,
+            })
+        except Exception as e:
+            logger.error(f"Admin governance update error: {e}", exc_info=True)
             return jsonify({'error': 'Internal server error'}), 500
 
     @ui.route('/ajax/admin/users/<user_id>/avatar', methods=['POST'])
@@ -7044,7 +7169,17 @@ def create_ui_blueprint() -> Blueprint:
         try:
             db_manager, _, _, _, channel_manager, file_manager, _, interaction_manager, profile_manager, _, p2p_manager = _get_app_components_any(current_app)
             user_id = get_current_user()
-            if channel_manager.get_member_role(channel_id, user_id) is None:
+            access = channel_manager.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                if str(access.get('reason') or '').startswith('governance_'):
+                    return jsonify({
+                        'error': 'Channel access blocked by admin governance policy',
+                        'reason': access.get('reason'),
+                    }), 403
                 return jsonify({'error': 'You are not a member of this channel'}), 403
             # Mark channel as read now that the user is viewing it
             channel_manager.mark_channel_read(channel_id, user_id)
@@ -7645,7 +7780,17 @@ def create_ui_blueprint() -> Blueprint:
         try:
             db_manager, _, _, _, channel_manager, file_manager, _, interaction_manager, profile_manager, _, p2p_manager = _get_app_components_any(current_app)
             user_id = get_current_user()
-            if channel_manager.get_member_role(channel_id, user_id) is None:
+            access = channel_manager.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                if str(access.get('reason') or '').startswith('governance_'):
+                    return jsonify({
+                        'error': 'Channel access blocked by admin governance policy',
+                        'reason': access.get('reason'),
+                    }), 403
                 return jsonify({'error': 'You are not a member of this channel'}), 403
             query = request.args.get('q', '').strip()
             limit = int(request.args.get('limit', 50))
@@ -7992,6 +8137,19 @@ def create_ui_blueprint() -> Blueprint:
             
             if not channel_id:
                 return jsonify({'error': 'Channel ID required'}), 400
+
+            access = channel_manager.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                if str(access.get('reason') or '').startswith('governance_'):
+                    return jsonify({
+                        'error': 'Channel access blocked by admin governance policy',
+                        'reason': access.get('reason'),
+                    }), 403
+                return jsonify({'error': 'You are not a member of this channel'}), 403
 
             security_clean = None
             if security is not None:
@@ -9284,6 +9442,23 @@ def create_ui_blueprint() -> Blueprint:
                 channel_type = ChannelType(channel_type_str)
             except ValueError:
                 return jsonify({'error': f'Invalid channel type: {channel_type_str}'}), 400
+
+            governance = channel_manager.get_user_channel_governance(user_id)
+            if governance.get('enabled'):
+                is_public_open = (
+                    privacy_mode == 'open'
+                    and channel_type in {ChannelType.PUBLIC, ChannelType.GENERAL}
+                )
+                if governance.get('block_public_channels') and is_public_open:
+                    return jsonify({
+                        'error': 'Channel creation blocked by admin governance policy',
+                        'reason': 'governance_public_channels_blocked',
+                    }), 403
+                if governance.get('restrict_to_allowed_channels'):
+                    return jsonify({
+                        'error': 'Channel creation blocked by admin governance policy',
+                        'reason': 'governance_channel_creation_not_allowlisted',
+                    }), 403
             
             logger.info(f"Calling channel_manager.create_channel: name={name}, type={channel_type}, user_id={user_id}")
             channel = channel_manager.create_channel(

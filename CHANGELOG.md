@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ---
 
+## [0.4.4] - 2026-02-25
+
+### Added
+- **Admin channel governance controls** — Instance admins can now apply per-user channel access policies: block access to all public/open channels, restrict a user or agent to an explicit allowlist of channels, or combine both. Policy is stored in a new `user_channel_governance` table and enforced at every level — DB, REST API, and web UI routes — so it cannot be bypassed via any path. New "Channel Governance" section in the Admin Agent Workspace panel with enable/disable toggle, block-public toggle, allowlist mode toggle, multi-select channel picker, Save and Enforce Now buttons.
+- **Private channel P2P ingest hardening** — Unknown channels received via P2P mesh now auto-create as `privacy_mode='private'` (fail-closed) instead of open. Auto-membership expansion to all local users is now restricted to channels with explicit `open` or `public` privacy; private and confidential channels require explicit member sync.
+- **Membership-gated channel mentions** — `record_mention_activity` now verifies each mention target is a current member of the channel before recording a mention event or creating an inbox trigger. Non-members are dropped (fail-closed); any DB error during the check also drops the mention rather than leaking it.
+- **Member-sync mention backfill** — When a user is added to a channel via P2P member sync, a targeted inbox rebuild is triggered for that user+channel pair, recovering any mention inbox items that raced ahead of the membership sync delivery.
+- **Inbox rebuild membership guard** — `rebuild_from_channel_messages` now joins `channel_members` so only channels the target user is currently a member of are scanned. Supports an optional `channel_id` filter for targeted recovery.
+### Fixed
+- **Shadow user `password_hash`** — P2P-synced shadow users were assigned a random SHA-256 hash as a placeholder password. The `has_any_registered_users()` check queries `WHERE password_hash IS NOT NULL`, so shadow users were incorrectly counted as real accounts, suppressing the admin registration screen on fresh instances. Shadow users now get `NULL` password hashes.
+- **Inbox backfill skipped on empty username** — Member-sync mention backfill was silently skipped when a legacy shadow user row had an empty `username` column. Now falls back to `display_name` so the rebuild runs correctly.
+
+---
+
 ## [0.4.2] - 2026-02-24
 
 ### Added
