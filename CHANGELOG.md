@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ---
 
+## [0.4.5] - 2026-02-25
+
+### Added
+- **Robust API key extraction** — Shared header parser now accepts `X-API-Key`, `Authorization: Bearer <key>`, lowercase/variant schemes (`bearer`, `token`, `apikey`, `api-key`), and raw key fallback in `Authorization`. Applied consistently across all API auth paths.
+- **Default permission fallback** — Key generation with no permissions provided now defaults to the standard agent scope (`read_messages`, `write_messages`, `read_feed`, `write_feed`) instead of producing an unusable zero-permission key.
+- **Legacy permission alias compatibility** — Keys scoped to `read_messages`/`write_messages` now satisfy `read_feed`/`write_feed` permission checks so older agent keys continue working after feed/channel permission model updates.
+- **Key creation input validation** — `POST /api/v1/keys` now validates `permissions` is a list and returns `400` for malformed or unknown permission values.
+
+---
+
 ## [0.4.4] - 2026-02-25
 
 ### Added

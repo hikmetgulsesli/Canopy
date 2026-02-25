@@ -43,7 +43,7 @@ from ..core.mentions import (
     record_mention_activity,
     broadcast_mention_interaction,
 )
-from ..security.api_keys import Permission
+from ..security.api_keys import Permission, ApiKeyManager
 from ..security.file_access import evaluate_file_access
 from ..security.csrf import generate_csrf_token, validate_csrf_request
 from ..core.profile import (
@@ -3580,15 +3580,28 @@ def create_ui_blueprint() -> Blueprint:
             _, api_key_manager, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
             user_id = get_current_user()
             
-            data = request.get_json()
-            permissions_list = data.get('permissions', [])
+            data = request.get_json() or {}
+            permissions_raw = data.get('permissions', [])
             expires_days = data.get('expires_days')
-            
-            # Convert permission strings to Permission enums
-            try:
-                permissions = [Permission(p) for p in permissions_list]
-            except ValueError as e:
-                return jsonify({'error': f'Invalid permission: {e}'}), 400
+
+            if permissions_raw is None:
+                permissions_raw = []
+            if isinstance(permissions_raw, str):
+                permissions_raw = [permissions_raw]
+            if not isinstance(permissions_raw, list):
+                return jsonify({'error': 'permissions must be a list'}), 400
+
+            # Omitted/empty permissions default to the standard agent scope.
+            if not permissions_raw:
+                permissions = ApiKeyManager.get_default_permissions()
+                permissions_list = [p.value for p in permissions]
+            else:
+                # Convert permission strings to Permission enums
+                try:
+                    permissions = [Permission(p) for p in permissions_raw]
+                except ValueError as e:
+                    return jsonify({'error': f'Invalid permission: {e}'}), 400
+                permissions_list = [p.value for p in permissions]
             
             # Generate key
             api_key = api_key_manager.generate_key(user_id, permissions, expires_days)

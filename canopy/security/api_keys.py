@@ -85,6 +85,14 @@ class ApiKeyManager:
                     expires_days: Optional[int] = None) -> Optional[str]:
         """Generate a new API key with specified permissions."""
         try:
+            # Backward-compatible safety: prevent unusable zero-permission keys.
+            if not permissions:
+                permissions = self.get_default_permissions()
+                logger.info(
+                    "No permissions provided for API key generation; "
+                    f"applying defaults for user {user_id}"
+                )
+
             # Generate secure random key
             raw_key = secrets.token_urlsafe(32)
             key_hash = self._hash_key(raw_key)
@@ -146,8 +154,16 @@ class ApiKeyManager:
                     return None
                 
                 # Check required permission if specified
-                if required_permission and not key_info.has_permission(required_permission):
-                    logger.warning(f"API key {key_info.id} lacks required permission: {required_permission}")
+                if required_permission and not self._has_effective_permission(
+                    key_info.permissions,
+                    required_permission,
+                ):
+                    logger.warning(
+                        "API key %s lacks required permission: %s (granted=%s)",
+                        key_info.id,
+                        required_permission.value,
+                        sorted(p.value for p in key_info.permissions),
+                    )
                     return None
 
                 # Check user account status: suspended => invalid; pending_approval => limited (auth/status only)
@@ -297,6 +313,22 @@ class ApiKeyManager:
     def _hash_key(self, raw_key: str) -> str:
         """Hash an API key for secure storage."""
         return hashlib.sha256(raw_key.encode()).hexdigest()
+
+    @staticmethod
+    def _has_effective_permission(
+        granted_permissions: Set[Permission],
+        required_permission: Permission,
+    ) -> bool:
+        """Resolve permission with legacy compatibility aliases."""
+        if required_permission in granted_permissions:
+            return True
+        legacy_aliases = {
+            # Legacy agent keys were often scoped to message perms only.
+            Permission.READ_FEED: Permission.READ_MESSAGES,
+            Permission.WRITE_FEED: Permission.WRITE_MESSAGES,
+        }
+        alias = legacy_aliases.get(required_permission)
+        return bool(alias and alias in granted_permissions)
     
     @staticmethod
     def get_default_permissions() -> List[Permission]:

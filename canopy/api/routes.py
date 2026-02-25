@@ -87,6 +87,34 @@ def _record_connection_event(p2p_manager: Any, peer_id: str, status: str,
         pass
 
 
+def _extract_api_key_from_headers(req: Any) -> str:
+    """Extract API key from X-API-Key or Authorization headers."""
+    direct = str(req.headers.get('X-API-Key') or '').strip()
+    if direct:
+        return direct
+
+    auth = str(req.headers.get('Authorization') or '').strip()
+    if not auth:
+        return ''
+
+    parts = auth.split(None, 1)
+    if len(parts) == 2 and parts[0].strip().lower() in {'bearer', 'token', 'apikey', 'api-key'}:
+        return parts[1].strip()
+
+    # Backward compatibility: allow raw key in Authorization header.
+    return auth
+
+
+def _default_agent_api_permissions() -> list[Permission]:
+    """Default key scope for agent usage."""
+    return [
+        Permission.READ_MESSAGES,
+        Permission.WRITE_MESSAGES,
+        Permission.READ_FEED,
+        Permission.WRITE_FEED,
+    ]
+
+
 def create_api_blueprint() -> Blueprint:
     """Create and configure the API blueprint."""
     api = Blueprint('api', __name__)
@@ -106,7 +134,7 @@ def create_api_blueprint() -> Blueprint:
                 _, api_key_manager, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
 
                 # Get API key from header
-                api_key = request.headers.get('X-API-Key') or request.headers.get('Authorization', '').replace('Bearer ', '')
+                api_key = _extract_api_key_from_headers(request)
 
                 if api_key:
                     # Validate key
@@ -1387,7 +1415,7 @@ def create_api_blueprint() -> Blueprint:
         # Keeps endpoint public while enabling lightweight per-agent guidance.
         try:
             db_manager, api_key_manager, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
-            raw_key = request.headers.get('X-API-Key') or request.headers.get('Authorization', '').replace('Bearer ', '')
+            raw_key = _extract_api_key_from_headers(request)
             if raw_key and api_key_manager and db_manager:
                 key_info = api_key_manager.validate_key(raw_key)
                 if key_info:
@@ -1644,7 +1672,7 @@ def create_api_blueprint() -> Blueprint:
             from canopy import __version__ as canopy_version
         except Exception:
             canopy_version = '0.1.0'
-        api_key = request.headers.get('X-API-Key') or request.headers.get('Authorization', '').replace('Bearer ', '')
+        api_key = _extract_api_key_from_headers(request)
         key_info = api_key_manager.validate_key(api_key) if api_key and api_key_manager else None
 
         if not key_info:
@@ -2329,10 +2357,10 @@ def create_api_blueprint() -> Blueprint:
             if not data:
                 return jsonify({'error': 'JSON data required'}), 400
             
-            permissions_list = data.get('permissions', [])
+            permissions_raw = data.get('permissions', [])
             expires_days = data.get('expires_days')
             
-            api_key_header = request.headers.get('X-API-Key') or request.headers.get('Authorization', '').replace('Bearer ', '')
+            api_key_header = _extract_api_key_from_headers(request)
             
             # Authentication options:
             # 1) API key with MANAGE_KEYS permission
@@ -2357,11 +2385,24 @@ def create_api_blueprint() -> Blueprint:
             # Keys are always created for the authenticated user — you cannot
             # create keys for other users (prevents impersonation).
             
-            # Convert permission strings to Permission enums
-            try:
-                permissions = [Permission(p) for p in permissions_list]
-            except ValueError as e:
-                return jsonify({'error': f'Invalid permission: {e}'}), 400
+            if permissions_raw is None:
+                permissions_raw = []
+            if isinstance(permissions_raw, str):
+                permissions_raw = [permissions_raw]
+            if not isinstance(permissions_raw, list):
+                return jsonify({'error': 'permissions must be a list'}), 400
+
+            # Omitted/empty permissions default to the common agent scope.
+            if not permissions_raw:
+                permissions = _default_agent_api_permissions()
+                permissions_list = [p.value for p in permissions]
+            else:
+                # Convert permission strings to Permission enums
+                try:
+                    permissions = [Permission(p) for p in permissions_raw]
+                except ValueError as e:
+                    return jsonify({'error': f'Invalid permission: {e}'}), 400
+                permissions_list = [p.value for p in permissions]
             
             # Generate key
             api_key = api_key_manager.generate_key(user_id, permissions, expires_days)
