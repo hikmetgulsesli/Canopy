@@ -1324,23 +1324,28 @@ def create_app(config: Optional[Config] = None) -> Flask:
             channels, all local human users are added as before.
             """
             try:
-                mode = str(privacy_mode or '').lower()
-                is_private = mode in {'private', 'confidential'}
+                mode = str(privacy_mode or '').strip().lower()
+                channel_type_norm = str(channel_type or '').strip().lower()
+                if mode not in {'open', 'guarded', 'private', 'confidential'}:
+                    # Backward compatibility: older peers may omit privacy_mode.
+                    mode = 'private' if channel_type_norm == 'private' else 'open'
+                is_targeted = mode in {'private', 'confidential'} or channel_type_norm == 'private'
 
                 # SECURITY: Log channel announce for audit trail
                 logger.info(f"Channel announce from {from_peer}: '{name}' ({channel_id}) "
                            f"type={channel_type}, privacy={privacy_mode}")
 
                 # SECURITY: Strip initial_members from non-targeted channel announces
-                if initial_members and not is_private:
+                if initial_members and not is_targeted:
                     logger.warning(
                         f"SECURITY: Non-targeted channel announce from {from_peer} "
                         f"includes initial_members (suspicious). Ignoring initial_members."
                     )
                     initial_members = None
 
-                if is_private:
+                if is_targeted:
                     # Targeted channel announce — create with specific members
+                    targeted_mode = mode if mode in {'private', 'confidential'} else 'private'
                     logger.info(f"Targeted channel announce {channel_id} ('{name}') from {from_peer}, "
                                 f"initial_members={initial_members}")
                     result = channel_manager.create_channel_from_sync(
@@ -1350,7 +1355,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                         description=description,
                         local_user_id=cast(str, None),
                         origin_peer=from_peer,
-                        privacy_mode=mode or 'private',
+                        privacy_mode=targeted_mode,
                         initial_members=initial_members or [],
                     )
                     if result:
@@ -1381,7 +1386,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     remote_desc=description,
                     local_user_id=local_user,
                     from_peer=from_peer,
-                    privacy_mode=privacy_mode or 'open',
+                    privacy_mode=mode,
                 )
                 if merge_result:
                     logger.info(f"Channel announce from {from_peer}: "
@@ -1569,6 +1574,9 @@ def create_app(config: Optional[Config] = None) -> Flask:
         p2p_manager.get_circles_latest_timestamp = _get_circles_latest
         p2p_manager.get_tasks_latest_timestamp = _get_tasks_latest
 
+        denied_catchup_audit_ts: dict[tuple[str, str], float] = {}
+        denied_catchup_audit_interval_s = 120.0
+
         # --- Catch-up request handler ---
         def _on_catchup_request(channel_timestamps, from_peer,
                                 feed_latest=None, circle_entries_latest=None,
@@ -1609,11 +1617,23 @@ def create_app(config: Optional[Config] = None) -> Flask:
                         member_peers = channel_manager.get_member_peer_ids(
                             ch_id, local_peer_id)
                         if from_peer not in member_peers:
-                            # SECURITY: Log denied catch-up access for audit
-                            logger.info(
-                                f"SECURITY: Denied catch-up for restricted channel {ch_id} "
-                                f"to peer {from_peer} (no members from that peer)"
-                            )
+                            # SECURITY: Log denied catch-up access for audit, but
+                            # throttle repeats to avoid log floods during periodic
+                            # catch-up loops.
+                            deny_key = (from_peer, ch_id)
+                            now_ts = time.time()
+                            last_logged = denied_catchup_audit_ts.get(deny_key, 0.0)
+                            if now_ts - last_logged >= denied_catchup_audit_interval_s:
+                                denied_catchup_audit_ts[deny_key] = now_ts
+                                logger.info(
+                                    f"SECURITY: Denied catch-up for restricted channel {ch_id} "
+                                    f"to peer {from_peer} (no members from that peer)"
+                                )
+                            else:
+                                logger.debug(
+                                    f"SECURITY: Denied catch-up for restricted channel {ch_id} "
+                                    f"to peer {from_peer} (repeat suppressed)"
+                                )
                             continue  # requesting peer has no members here
 
                     peer_latest = channel_timestamps.get(ch_id)

@@ -197,8 +197,25 @@ class ProfileManager:
                 
                 row = cursor.fetchone()
                 if not row:
-                    logger.warning(f"User profile not found: {user_id}")
-                    return None
+                    # Compatibility fallback: some call sites may provide username
+                    # or display_name. Resolve only when the match is unique.
+                    alias_rows = conn.execute("""
+                        SELECT
+                            id, username, display_name, origin_peer, bio, avatar_file_id,
+                            agent_directives, theme_preference, notification_settings, privacy_settings,
+                            created_at, profile_updated_at
+                        FROM users
+                        WHERE username = ? OR display_name = ?
+                        LIMIT 2
+                    """, (user_id, user_id)).fetchall()
+                    if len(alias_rows) == 1:
+                        row = alias_rows[0]
+                        logger.debug(
+                            f"Resolved profile alias '{user_id}' to user_id '{row['id']}'"
+                        )
+                    else:
+                        logger.debug(f"User profile not found: {user_id}")
+                        return None
                 
                 # Generate avatar URL if avatar exists
                 avatar_url = None

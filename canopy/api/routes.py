@@ -1920,29 +1920,85 @@ def create_api_blueprint() -> Blueprint:
                 logger.warning(f"Connect to introduced {ep} failed: {ce}")
                 continue
 
-        # Direct connection failed — try connection brokering via introducer
-        introduced_by = intro.get('introduced_by')
-        if introduced_by and p2p_manager.relay_policy != 'off':
+        # Direct connection failed — try connection brokering.
+        # Prefer connected introducers, then other connected peers as fallback.
+        attempted_brokers: list[str] = []
+        if p2p_manager.relay_policy != 'off':
+            broker_candidates: list[str] = []
+            seen_brokers: set[str] = set()
+
+            connected_peers: list[str] = []
             try:
-                broker_sent = p2p_manager.send_broker_request(
-                    target_peer_id=peer_id,
-                    via_peer_id=introduced_by)
+                connected_peers = list(p2p_manager.get_connected_peers() or [])
+            except Exception:
+                connected_peers = []
+            connected_set = set(connected_peers)
+
+            local_peer_id = ''
+            try:
+                local_peer_id = p2p_manager.get_peer_id() or ''
+            except Exception:
+                local_peer_id = ''
+
+            introducers: list[str] = []
+            introduced_via = intro.get('introduced_via', [])
+            if isinstance(introduced_via, list):
+                for pid in introduced_via:
+                    if isinstance(pid, str) and pid:
+                        introducers.append(pid)
+            introduced_by = intro.get('introduced_by')
+            if isinstance(introduced_by, str) and introduced_by:
+                introducers.append(introduced_by)
+
+            connected_introducers = [pid for pid in introducers if pid in connected_set]
+            disconnected_introducers = [pid for pid in introducers if pid not in connected_set]
+
+            for pid in connected_introducers:
+                if pid not in seen_brokers:
+                    seen_brokers.add(pid)
+                    broker_candidates.append(pid)
+
+            for pid in connected_peers:
+                if not pid or pid == peer_id or pid == local_peer_id or pid in seen_brokers:
+                    continue
+                seen_brokers.add(pid)
+                broker_candidates.append(pid)
+
+            for pid in disconnected_introducers:
+                if pid not in seen_brokers:
+                    seen_brokers.add(pid)
+                    broker_candidates.append(pid)
+
+            for broker_peer in broker_candidates:
+                attempted_brokers.append(broker_peer)
+                try:
+                    broker_sent = p2p_manager.send_broker_request(
+                        target_peer_id=peer_id,
+                        via_peer_id=broker_peer,
+                    )
+                except Exception as be:
+                    logger.warning(f"Broker request via {broker_peer} failed: {be}")
+                    broker_sent = False
+
                 if broker_sent:
                     _record_connection_event(
                         p2p_manager,
                         peer_id,
                         status='broker',
                         detail='Broker request sent',
-                        via_peer=introduced_by,
+                        via_peer=broker_peer,
                     )
                     return jsonify({
                         'status': 'brokering',
                         'peer_id': peer_id,
-                        'message': 'Direct connection failed; broker request sent via introducer. '
-                                   'The target peer will attempt to connect back to you.'
+                        'via_peer': broker_peer,
+                        'attempted_brokers': attempted_brokers,
+                        'message': (
+                            'Direct connection failed; broker request sent. '
+                            'The target peer will attempt to connect back. '
+                            'If both peers remain unreachable, use a broker with Full Relay enabled.'
+                        ),
                     }), 202
-            except Exception as be:
-                logger.warning(f"Broker request failed: {be}")
 
         _record_connection_event(
             p2p_manager,
@@ -1950,8 +2006,20 @@ def create_api_blueprint() -> Blueprint:
             status='failed',
             detail='Introduced peer connection failed',
         )
-        return jsonify({'status': 'failed',
-                        'message': 'Could not connect to any endpoint'}), 502
+        guidance = 'Could not connect to any endpoint'
+        if attempted_brokers:
+            guidance += f" and no broker succeeded ({len(attempted_brokers)} attempted)"
+        if p2p_manager.relay_policy != 'full_relay':
+            guidance += (
+                '. Relay policy is broker_only. '
+                'For NAT-restricted peers, enable Full Relay on at least one intermediary.'
+            )
+        return jsonify({
+            'status': 'failed',
+            'message': guidance,
+            'attempted_brokers': attempted_brokers,
+            'relay_policy': getattr(p2p_manager, 'relay_policy', 'broker_only'),
+        }), 502
 
     @api.route('/p2p/reconnect', methods=['POST'])
     @require_auth(allow_session=True)

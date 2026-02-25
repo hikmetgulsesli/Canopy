@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import secrets
+import time
 from pathlib import Path
 from typing import Optional, cast
 
@@ -50,6 +51,8 @@ class DataEncryptor:
         self._cipher_key: Optional[bytes] = None
         self._enabled = False
         self.identity_path = identity_path
+        self._decrypt_error_seen: dict[str, float] = {}
+        self._decrypt_error_cooldown_s = 60.0
         
         if identity_path and identity_path.exists():
             self._derive_encryption_key(identity_path)
@@ -150,7 +153,18 @@ class DataEncryptor:
             return plaintext_bytes.decode('utf-8')
             
         except Exception as e:
-            logger.error(f"Decryption failed: {e}")
+            # Avoid flooding logs on repeated decrypt failures for the same value,
+            # which can happen when a DB contains data encrypted by a different
+            # instance key (e.g., imported/migrated database).
+            sample = stored_value[:256] if isinstance(stored_value, str) else str(stored_value)
+            fingerprint = hashlib.sha256(sample.encode('utf-8', errors='ignore')).hexdigest()[:12]
+            now = time.time()
+            last = self._decrypt_error_seen.get(fingerprint, 0.0)
+            if now - last >= self._decrypt_error_cooldown_s:
+                self._decrypt_error_seen[fingerprint] = now
+                logger.warning(f"Decryption failed (fingerprint={fingerprint}): {e}")
+            else:
+                logger.debug(f"Decryption failed (suppressed repeat, fingerprint={fingerprint}): {e}")
             return "[Decryption failed]"
     
     def is_encrypted(self, value: str) -> bool:

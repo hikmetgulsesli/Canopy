@@ -137,6 +137,12 @@ class ChannelManager:
     DEFAULT_TTL_DAYS = 90  # Quarterly default
     DEFAULT_TTL_SECONDS = DEFAULT_TTL_DAYS * 24 * 3600
     TARGETED_PRIVACY_MODES = {'private', 'confidential'}
+    PRIVACY_ORDER = {
+        'open': 0,
+        'guarded': 1,
+        'private': 2,
+        'confidential': 3,
+    }
     SECURITY_ALLOWED_KEYS = {
         'algorithm',
         'ciphertext',
@@ -600,6 +606,59 @@ class ChannelManager:
         """
         return name.lstrip('#').strip() if name else name
 
+    @classmethod
+    def _normalize_privacy_mode(cls, mode: Any, default: str = 'open') -> str:
+        """Normalize channel privacy mode to a known value."""
+        candidate = str(mode or '').strip().lower()
+        if candidate in cls.PRIVACY_ORDER:
+            return candidate
+        return default
+
+    @classmethod
+    def _is_privacy_downgrade(cls, old_mode: str, new_mode: str) -> bool:
+        """Return True if new_mode is less restrictive than old_mode."""
+        old_rank = cls.PRIVACY_ORDER.get(cls._normalize_privacy_mode(old_mode), 0)
+        new_rank = cls.PRIVACY_ORDER.get(cls._normalize_privacy_mode(new_mode), 0)
+        return new_rank < old_rank
+
+    def _resolve_sync_channel_creator(self, conn: Any,
+                                      local_user_id: Optional[str]) -> str:
+        """Resolve a valid local user ID for FK-safe synced channel creation."""
+        candidates: list[str] = []
+        if local_user_id and isinstance(local_user_id, str):
+            candidates.append(local_user_id)
+        candidates.extend(['system', 'local_user'])
+
+        for candidate in candidates:
+            row = conn.execute(
+                "SELECT id FROM users WHERE id = ?",
+                (candidate,),
+            ).fetchone()
+            if row:
+                return candidate
+
+        # Last-resort bootstrap for legacy installs where defaults were not seeded.
+        try:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO users (id, username, public_key)
+                VALUES ('system', 'System', 'system_public_key')
+                """
+            )
+            row = conn.execute(
+                "SELECT id FROM users WHERE id = 'system'"
+            ).fetchone()
+            if row:
+                return 'system'
+        except Exception as e:
+            logger.warning(f"Could not bootstrap system user for synced channel creator: {e}")
+
+        row = conn.execute("SELECT id FROM users LIMIT 1").fetchone()
+        if row:
+            return cast(str, row[0] if not hasattr(row, 'keys') else row['id'])
+
+        raise RuntimeError("No local users available to satisfy channels.created_by foreign key")
+
     @log_performance('channels')
     def create_channel(self, name: str, channel_type: ChannelType,
                       created_by: str, description: Optional[str] = None,
@@ -719,7 +778,7 @@ class ChannelManager:
 
     def create_channel_from_sync(self, channel_id: str, name: str,
                                   channel_type: str, description: str,
-                                  local_user_id: str,
+                                  local_user_id: Optional[str],
                                   origin_peer: Optional[str] = None,
                                   privacy_mode: str = 'open',
                                   initial_members: Optional[list[Any]] = None) -> Optional[Channel]:
@@ -737,7 +796,7 @@ class ChannelManager:
             name: Channel name
             channel_type: Channel type string (e.g. 'public')
             description: Channel description
-            local_user_id: Local user to add as initial member (fallback)
+            local_user_id: Preferred local user ID for FK-safe creator fallback
             origin_peer: Peer ID that originally owns this channel
             privacy_mode: Channel privacy mode ('open', 'guarded', 'private', 'confidential')
             initial_members: For targeted channels, explicit list of user IDs to add
@@ -748,6 +807,7 @@ class ChannelManager:
         # Normalize — strip leading '#' to prevent double-hash display
         name = self._normalize_channel_name(name)
         try:
+            sync_creator_id = 'system'
             with self.db.get_connection() as conn:
                 # Check if channel already exists
                 existing = conn.execute(
@@ -757,11 +817,13 @@ class ChannelManager:
                     logger.debug(f"Channel {channel_id} already exists, skipping sync-create")
                     return None
 
+                sync_creator_id = self._resolve_sync_channel_creator(conn, local_user_id)
+
                 conn.execute("""
                     INSERT INTO channels (id, name, channel_type, created_by,
                                           description, origin_peer, privacy_mode)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (channel_id, name, channel_type, 'p2p-sync',
+                """, (channel_id, name, channel_type, sync_creator_id,
                       description, origin_peer, privacy_mode or 'open'))
 
                 added = 0
@@ -816,7 +878,7 @@ class ChannelManager:
                 id=channel_id,
                 name=name,
                 channel_type=ChannelType(channel_type) if channel_type in [e.value for e in ChannelType] else ChannelType.PUBLIC,
-                created_by='p2p-sync',
+                created_by=sync_creator_id,
                 created_at=datetime.now(timezone.utc),
                 description=description,
                 privacy_mode=privacy_mode or 'open',
@@ -850,6 +912,7 @@ class ChannelManager:
         """
         # Normalize — strip leading '#' to prevent double-hash display
         remote_name = self._normalize_channel_name(remote_name)
+        privacy_mode = self._normalize_privacy_mode(privacy_mode, default='open')
         # General channel is always open, never downgraded by remote metadata
         if remote_id == 'general':
             privacy_mode = 'open'
@@ -857,31 +920,58 @@ class ChannelManager:
             with self.db.get_connection() as conn:
                 # Already have this exact channel?
                 existing = conn.execute(
-                    "SELECT name, description, privacy_mode FROM channels WHERE id = ?",
+                    "SELECT name, description, privacy_mode, origin_peer, created_by FROM channels WHERE id = ?",
                     (remote_id,)
                 ).fetchone()
                 if existing:
                     old_name = existing[0] or ''
                     old_desc = existing[1] or ''
-                    old_privacy = existing[2] or 'open'
+                    old_privacy = self._normalize_privacy_mode(existing[2], default='open')
+                    old_origin_peer = existing[3] or ''
+                    old_created_by = existing[4] or ''
+
+                    can_apply_remote_metadata = False
+                    if old_origin_peer:
+                        can_apply_remote_metadata = bool(from_peer and str(old_origin_peer) == str(from_peer))
+                    elif old_created_by == 'p2p-sync':
+                        # Legacy synced rows may have NULL origin_peer; allow updates cautiously.
+                        can_apply_remote_metadata = True
+
                     # Update placeholder names / empty descriptions
                     # with real metadata from the remote peer
                     needs_update = False
                     new_name = old_name
                     new_desc = old_desc
                     new_privacy = old_privacy
-                    if (old_name.startswith('peer-channel-') and remote_name
+                    if (can_apply_remote_metadata and old_name.startswith('peer-channel-') and remote_name
                             and not remote_name.startswith('peer-channel-')):
                         new_name = remote_name
                         needs_update = True
-                    if ((not old_desc or old_desc.startswith('Auto-created from P2P'))
+                    if (can_apply_remote_metadata and (not old_desc or old_desc.startswith('Auto-created from P2P'))
                             and remote_desc
                             and not remote_desc.startswith('Auto-created from P2P')):
                         new_desc = remote_desc
                         needs_update = True
                     if privacy_mode and privacy_mode != old_privacy:
-                        new_privacy = privacy_mode
-                        needs_update = True
+                        privacy_downgrade = self._is_privacy_downgrade(old_privacy, privacy_mode)
+                        if can_apply_remote_metadata:
+                            # For legacy rows with unknown origin, fail closed on downgrades.
+                            if old_origin_peer or not privacy_downgrade:
+                                new_privacy = privacy_mode
+                                needs_update = True
+                            else:
+                                logger.warning(
+                                    "SECURITY: Ignoring privacy downgrade for channel %s "
+                                    "(origin unknown, old=%s, new=%s, from=%s)",
+                                    remote_id, old_privacy, privacy_mode, from_peer,
+                                )
+                        else:
+                            logger.warning(
+                                "SECURITY: Ignoring privacy update for channel %s from non-origin peer %s "
+                                "(origin=%s, old=%s, incoming=%s)",
+                                remote_id, from_peer, old_origin_peer or 'local/unknown',
+                                old_privacy, privacy_mode,
+                            )
                     if needs_update:
                         try:
                             conn.execute(
@@ -896,14 +986,15 @@ class ChannelManager:
                             return remote_id
                         except Exception as ue:
                             logger.debug(f"Channel update for {remote_id} skipped: {ue}")
-                    # Still set origin_peer if not yet set
+                    # Still set origin_peer if not yet set (only for synced rows).
                     try:
-                        conn.execute(
-                            "UPDATE channels SET origin_peer = ? "
-                            "WHERE id = ? AND origin_peer IS NULL",
-                            (from_peer, remote_id)
-                        )
-                        conn.commit()
+                        if old_created_by == 'p2p-sync':
+                            conn.execute(
+                                "UPDATE channels SET origin_peer = ? "
+                                "WHERE id = ? AND origin_peer IS NULL",
+                                (from_peer, remote_id)
+                            )
+                            conn.commit()
                     except Exception:
                         pass
                     return None  # Already synced, no updates needed
@@ -925,6 +1016,7 @@ class ChannelManager:
                     if msg_count == 0:
                         # Local channel is empty — adopt remote ID
                         # Move members to the new channel, delete old one
+                        sync_creator_id = self._resolve_sync_channel_creator(conn, local_user_id)
                         members = conn.execute(
                             "SELECT user_id, role FROM channel_members WHERE channel_id = ?",
                             (local_id,)
@@ -937,7 +1029,7 @@ class ChannelManager:
                             INSERT INTO channels (id, name, channel_type, created_by,
                                                   description, origin_peer, privacy_mode)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (remote_id, remote_name, remote_type, 'p2p-sync',
+                        """, (remote_id, remote_name, remote_type, sync_creator_id,
                               remote_desc, from_peer, privacy_mode or 'open'))
 
                         for user_id, role in members:

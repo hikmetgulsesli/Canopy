@@ -1023,6 +1023,16 @@ class P2PNetworkManager:
                 endpoints = []
                 if conn:
                     endpoints.append(f"{self.ws_scheme}://{conn.address}:{self.config.network.mesh_port}")
+                # Include stored endpoints as well; they often contain better
+                # externally-reachable addresses than the current socket origin.
+                stored_eps = self._sanitize_endpoints(
+                    pid,
+                    self.identity_manager.peer_endpoints.get(pid, []),
+                )
+                for ep in stored_eps:
+                    if ep not in endpoints:
+                        endpoints.append(ep)
+                endpoints = self._sanitize_endpoints(pid, endpoints)
                 device_profile = None
                 if self.get_peer_device_profile:
                     try:
@@ -1129,10 +1139,37 @@ class P2PNetworkManager:
             if self.connection_manager and self.connection_manager.is_connected(pid):
                 continue
             # Sanitize endpoints so we don't persist unusable (127.*, 0.0.0.0, etc)
-            endpoints = self._sanitize_endpoints(pid, p.get('endpoints', []))
-            cleaned = dict(p)
+            # and keep historical endpoints announced by other introducers.
+            existing = self._introduced_peers.get(pid, {})
+            existing_eps = existing.get('endpoints', []) if isinstance(existing, dict) else []
+            combined_eps = []
+            if isinstance(existing_eps, list):
+                combined_eps.extend(existing_eps)
+            if isinstance(p.get('endpoints', []), list):
+                combined_eps.extend(p.get('endpoints', []))
+            endpoints = self._sanitize_endpoints(pid, combined_eps)
+
+            # Preserve prior metadata when possible, then overlay latest data.
+            cleaned = dict(existing) if isinstance(existing, dict) else {}
+            cleaned.update(dict(p))
             cleaned['endpoints'] = endpoints
-            self._introduced_peers[pid] = {**cleaned, 'introduced_by': from_peer}
+            cleaned['introduced_by'] = from_peer
+
+            # Track all known introducers for more reliable broker fallback.
+            introduced_via: list[str] = []
+            prior_via = existing.get('introduced_via', []) if isinstance(existing, dict) else []
+            if isinstance(prior_via, list):
+                for via in prior_via:
+                    if isinstance(via, str) and via and via not in introduced_via:
+                        introduced_via.append(via)
+            prior_single = existing.get('introduced_by') if isinstance(existing, dict) else None
+            if isinstance(prior_single, str) and prior_single and prior_single not in introduced_via:
+                introduced_via.append(prior_single)
+            if from_peer not in introduced_via:
+                introduced_via.append(from_peer)
+            cleaned['introduced_via'] = introduced_via
+
+            self._introduced_peers[pid] = cleaned
 
             # Register the peer's public keys in the identity manager
             # so we can verify relayed messages from this peer.
@@ -1385,14 +1422,26 @@ class P2PNetworkManager:
             self._event_loop
         )
         try:
-            result = future.result(timeout=5.0)
-            logger.info(f"Broker request sent to {via_peer_id} for {target_peer_id}")
-            self._record_connection_event(
-                target_peer_id,
-                status='broker',
-                detail=f"Broker request sent via {via_peer_id[:8]}",
-                via_peer=via_peer_id,
-            )
+            result = bool(future.result(timeout=5.0))
+            if result:
+                logger.info(f"Broker request sent to {via_peer_id} for {target_peer_id}")
+                self._record_connection_event(
+                    target_peer_id,
+                    status='broker',
+                    detail=f"Broker request sent via {via_peer_id[:8]}",
+                    via_peer=via_peer_id,
+                )
+            else:
+                logger.warning(
+                    f"Broker request via {via_peer_id} for {target_peer_id} "
+                    f"was not routed immediately"
+                )
+                self._record_connection_event(
+                    target_peer_id,
+                    status='pending',
+                    detail=f"Broker request not routed immediately via {via_peer_id[:8]}",
+                    via_peer=via_peer_id,
+                )
             return result
         except Exception as e:
             logger.error(f"Error sending broker request: {e}", exc_info=True)

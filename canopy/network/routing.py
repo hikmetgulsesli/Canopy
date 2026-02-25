@@ -152,11 +152,32 @@ class MessageRouter:
         self.max_seen_messages = 10000
         
         # Per-peer rate limiting (stricter sliding window to prevent DoS)
+        # for normal messaging traffic.
         self._peer_msg_counts: Dict[str, list] = {}  # peer -> [count, window_start]
         self._peer_rate_limit = 50  # Reduced from 100: max messages per 60s window per peer
         self._peer_burst_limit = 10  # Max messages in 5s burst per peer
         self._peer_burst_window = 5  # 5 second burst window
         self._peer_burst_counts: Dict[str, list] = {}  # peer -> [(timestamp, count)]
+
+        # Catch-up and bulk sync flows can legitimately be much burstier than
+        # interactive chat traffic. Keep separate counters so bulk sync doesn't
+        # throttle normal message handling or trigger false-positive warnings.
+        self._peer_sync_msg_counts: Dict[str, list] = {}  # peer -> [count, window_start]
+        self._peer_sync_rate_limit = 500  # Max sync msgs per 60s per peer
+        self._peer_sync_burst_limit = 120  # Max sync msgs in 5s burst per peer
+        self._peer_sync_burst_window = 5  # 5 second burst window
+        self._peer_sync_burst_counts: Dict[str, list] = {}  # peer -> [(timestamp, count)]
+        self._high_volume_sync_types: Set[MessageType] = {
+            MessageType.CHANNEL_CATCHUP_RESPONSE,
+            MessageType.CHANNEL_SYNC,
+            MessageType.PEER_ANNOUNCEMENT,
+            MessageType.PROFILE_SYNC,
+            MessageType.PROFILE_UPDATE,
+        }
+
+        # Avoid log flooding when a peer repeatedly exceeds limits.
+        self._rate_limit_warn_cooldown_s = 15.0
+        self._rate_limit_warned_at: Dict[str, float] = {}
         
         # Routing table (peer_id -> next_hop_peer_id)
         self.routing_table: Dict[str, str] = {}
@@ -187,7 +208,7 @@ class MessageRouter:
         
         logger.info(f"Initialized MessageRouter for {local_peer_id}")
     
-    def create_message(self, message_type: MessageType, to_peer: Optional[str],
+    def create_message(self, message_type: MessageType, to_peer: Optional[str], 
                       payload: Dict[str, Any], ttl: int = 5) -> P2PMessage:
         """
         Create a new P2P message.
@@ -213,6 +234,16 @@ class MessageRouter:
         
         logger.debug(f"Created message {message.id}: {message_type.value}")
         return message
+
+    def _should_log_rate_limit_warning(self, peer_id: str, scope: str,
+                                       now: Optional[float] = None) -> bool:
+        ts = now if now is not None else time.time()
+        key = f"{scope}:{peer_id}"
+        last = self._rate_limit_warned_at.get(key, 0.0)
+        if ts - last >= self._rate_limit_warn_cooldown_s:
+            self._rate_limit_warned_at[key] = ts
+            return True
+        return False
     
     def sign_message(self, message: P2PMessage) -> None:
         """
@@ -399,46 +430,86 @@ class MessageRouter:
         if message.from_peer and message.from_peer != self.local_peer_id:
             now = time.time()
 
-            # Prune stale entries from peers not seen in 5 minutes to prevent unbounded growth
+            # Prune stale entries from peers not seen in 5 minutes to prevent
+            # unbounded growth in regular + sync limiter maps.
             cutoff = now - 300
-            stale = [p for p, entry in self._peer_msg_counts.items()
-                     if isinstance(entry, list) and len(entry) >= 2 and entry[1] < cutoff]
-            for p in stale:
+            stale_regular = [
+                p for p, entry in self._peer_msg_counts.items()
+                if isinstance(entry, list) and len(entry) >= 2 and entry[1] < cutoff
+            ]
+            for p in stale_regular:
                 self._peer_msg_counts.pop(p, None)
                 self._peer_burst_counts.pop(p, None)
+                self._rate_limit_warned_at.pop(f"burst:{p}", None)
+                self._rate_limit_warned_at.pop(f"sustained:{p}", None)
+
+            stale_sync = [
+                p for p, entry in self._peer_sync_msg_counts.items()
+                if isinstance(entry, list) and len(entry) >= 2 and entry[1] < cutoff
+            ]
+            for p in stale_sync:
+                self._peer_sync_msg_counts.pop(p, None)
+                self._peer_sync_burst_counts.pop(p, None)
+                self._rate_limit_warned_at.pop(f"sync-burst:{p}", None)
+                self._rate_limit_warned_at.pop(f"sync-sustained:{p}", None)
+
+            # Choose limiter profile by message type.
+            is_sync_heavy = message.type in self._high_volume_sync_types
+            if is_sync_heavy:
+                msg_counts = self._peer_sync_msg_counts
+                burst_map = self._peer_sync_burst_counts
+                burst_window = self._peer_sync_burst_window
+                burst_limit = self._peer_sync_burst_limit
+                rate_limit = self._peer_sync_rate_limit
+                burst_scope = "sync-burst"
+                sustained_scope = "sync-sustained"
+            else:
+                msg_counts = self._peer_msg_counts
+                burst_map = self._peer_burst_counts
+                burst_window = self._peer_burst_window
+                burst_limit = self._peer_burst_limit
+                rate_limit = self._peer_rate_limit
+                burst_scope = "burst"
+                sustained_scope = "sustained"
 
             # Check burst rate (short window)
-            if message.from_peer not in self._peer_burst_counts:
-                self._peer_burst_counts[message.from_peer] = []
+            if message.from_peer not in burst_map:
+                burst_map[message.from_peer] = []
 
-            # Remove old burst entries
-            burst_counts = self._peer_burst_counts[message.from_peer]
-            burst_counts = [(ts, cnt) for ts, cnt in burst_counts if now - ts < self._peer_burst_window]
+            burst_counts = burst_map[message.from_peer]
+            burst_counts = [(ts, cnt) for ts, cnt in burst_counts if now - ts < burst_window]
             burst_count = sum(cnt for _, cnt in burst_counts)
 
-            if burst_count >= self._peer_burst_limit:
-                logger.warning(f"P2P burst rate limit exceeded for peer "
-                             f"{message.from_peer}: {burst_count} msgs in {self._peer_burst_window}s")
+            if burst_count >= burst_limit:
+                if self._should_log_rate_limit_warning(message.from_peer, burst_scope, now=now):
+                    logger.warning(
+                        f"P2P {burst_scope} rate limit exceeded for peer "
+                        f"{message.from_peer}: {burst_count} msgs in {burst_window}s "
+                        f"(type={message.type.value})"
+                    )
                 return False
 
             # Add current message to burst count
             burst_counts.append((now, 1))
-            self._peer_burst_counts[message.from_peer] = burst_counts
+            burst_map[message.from_peer] = burst_counts
 
             # Check sustained rate (60s window)
-            entry = self._peer_msg_counts.get(message.from_peer)
+            entry = msg_counts.get(message.from_peer)
             if entry is None:
-                self._peer_msg_counts[message.from_peer] = [1, now]
+                msg_counts[message.from_peer] = [1, now]
             else:
                 if now - entry[1] > 60:
-                    # New window
                     entry[0] = 1
                     entry[1] = now
                 else:
                     entry[0] += 1
-                    if entry[0] > self._peer_rate_limit:
-                        logger.warning(f"P2P sustained rate limit exceeded for peer "
-                                       f"{message.from_peer}: {entry[0]} msgs in 60s")
+                    if entry[0] > rate_limit:
+                        if self._should_log_rate_limit_warning(message.from_peer, sustained_scope, now=now):
+                            logger.warning(
+                                f"P2P {sustained_scope} rate limit exceeded for peer "
+                                f"{message.from_peer}: {entry[0]} msgs in 60s "
+                                f"(type={message.type.value})"
+                            )
                         return False
         
         # Add to seen messages (OrderedDict maintains insertion order)

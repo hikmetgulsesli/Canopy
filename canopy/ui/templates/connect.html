@@ -809,7 +809,7 @@ function connectToIntroduced(peerId, buttonEl) {
 
 function checkBrokeredConnection(peerId, btn, attempt) {
     attempt = attempt || 1;
-    const maxAttempts = 4;
+    const maxAttempts = 12;
     const pollInterval = 5000; // 5s between polls
 
     // Show progress on the button
@@ -837,30 +837,39 @@ function checkBrokeredConnection(peerId, btn, attempt) {
                     setTimeout(() => checkBrokeredConnection(peerId, btn, attempt + 1), pollInterval);
                 } else {
                     // Exhausted retries
+                    const relayPolicy = relay && relay.relay_policy ? relay.relay_policy : '';
+                    const policyHint = relayPolicy && relayPolicy !== 'full_relay'
+                        ? ' If both peers are behind NAT/firewall, set an intermediary to Full Relay in Settings.'
+                        : '';
                     btn.className = 'btn btn-sm btn-outline-danger';
-                    btn.innerHTML = '<i class="bi bi-x-circle"></i> Brokering failed — Retry';
+                    btn.innerHTML = '<i class="bi bi-x-circle"></i> Brokering timeout — Retry';
                     btn.disabled = false;
-                    btn.title = 'Broker could not arrange a direct or relay connection. The peer may be unreachable.';
+                    btn.title = 'Broker could not arrange a direct or relay connection.' +
+                        (relayPolicy ? (' Relay policy: ' + relayPolicy + '.') : '') + policyHint;
                     btn.onclick = function() { connectToIntroduced(peerId, btn); };
                 }
             })
-            .catch(() => {
+            .catch((err) => {
                 if (attempt < maxAttempts) {
                     setTimeout(() => checkBrokeredConnection(peerId, btn, attempt + 1), pollInterval);
                 } else {
+                    const msg = buildConnectErrorMessage(err);
                     btn.className = 'btn btn-sm btn-outline-secondary';
                     btn.innerHTML = '<i class="bi bi-plug"></i> Retry';
                     btn.disabled = false;
+                    btn.title = msg;
                 }
             });
     })
-    .catch(() => {
+    .catch((err) => {
         if (attempt < maxAttempts) {
             setTimeout(() => checkBrokeredConnection(peerId, btn, attempt + 1), pollInterval);
         } else {
+            const msg = buildConnectErrorMessage(err);
             btn.disabled = false;
             btn.className = 'btn btn-sm btn-outline-secondary';
             btn.innerHTML = '<i class="bi bi-plug"></i> Retry';
+            btn.title = msg;
         }
     });
 }
