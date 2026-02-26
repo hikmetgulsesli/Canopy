@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ---
 
+## [0.4.8] - 2026-02-26
+
+### Added
+- **Mention-aware tool block generation** — Promote → Request now populates `assignees:` with all detected `@mentions`; Promote → Objective writes `members:` with the first mention as `(lead)`; Promote → Task/Handoff/Signal sets single `assignee:`/`owner:` from first mention. All fields are parser-compatible with backend `[request]`, `[objective]`, `[handoff]`, `[signal]` parsers.
+- **Signal tag inference** — `[signal]` blocks generated from Promote now auto-derive domain tags (`metrics`, `security`, `network`, `incident`, `evidence`) from message content instead of fixed static tags. Falls back to `update` when no domain matches.
+- **Tuned composer nudge scoring** — Higher weighting for direct asks with mentions, action verbs, multi-agent assignment patterns, and benchmark/evidence language (`latency`, `p95`, `p99`, `SLO`, `KPI`, `endpoint`, `payload`, `n=`, field-like lines, table lines). Suppression added for acknowledgement-only text (`thanks`, `ack`, `on it`, `noted`, etc.). Nudge threshold raised to `maxScore >= 4`; display capped to top 2 recommendations.
+- **Nudge quality guards** — Minimum 28 characters and 7 words required; messages already containing a structured block are skipped; numeric-only text suppressed.
+
+---
+
 ## [0.4.7] - 2026-02-26
 
 ### Fixed

@@ -649,6 +649,19 @@
         text-transform: uppercase;
         letter-spacing: 0.08em;
     }
+    .structured-nudge-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+    }
+    .structured-nudge-actions .btn {
+        padding: 0.2rem 0.5rem;
+        font-size: 0.74rem;
+    }
+    .structured-nudge-summary {
+        font-size: 0.76rem;
+        color: var(--canopy-text-secondary);
+    }
     .channel-custom-expiry .form-control,
     .channel-custom-expiry .form-select {
         font-size: 0.8rem;
@@ -1389,6 +1402,13 @@
                             <input class="form-check-input" type="checkbox" id="channel-task-confirm" checked>
                             <label class="form-check-label" for="channel-task-confirm">Create task</label>
                         </div>
+                    </div>
+                    <div id="channel-structured-nudge" class="task-inline-toggle mb-2" style="display: none;">
+                        <div class="task-inline-info">
+                            <span class="badge bg-info-subtle text-info-emphasis">Structured hint</span>
+                            <small id="channel-structured-nudge-summary" class="structured-nudge-summary ms-2"></small>
+                        </div>
+                        <div id="channel-structured-nudge-actions" class="structured-nudge-actions"></div>
                     </div>
                     <div class="input-group">
                         <div class="position-relative flex-grow-1">
@@ -3791,6 +3811,24 @@ function renderMessage(message, userInfo, isReply) {
                                 onclick="setReplyTo('${message.id}', '${user.display_name.replace(/'/g, "\\'")}', \`${escapeHtml(message.content || '').slice(0, 80).replace(/`/g, "'")}\`)">
                             <i class="bi bi-reply"></i> Reply
                         </button>
+                        ${(message.content || '').trim() ? `
+                        <div class="btn-group">
+                            <button class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                                    type="button"
+                                    data-bs-toggle="dropdown"
+                                    aria-expanded="false"
+                                    title="Promote this message into a structured tool block">
+                                <i class="bi bi-magic me-1"></i>Promote
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li><h6 class="dropdown-header">Promote to tool</h6></li>
+                                <li><a class="dropdown-item" href="#" onclick="promoteMessageToTool('${message.id}', 'task'); return false;">Task</a></li>
+                                <li><a class="dropdown-item" href="#" onclick="promoteMessageToTool('${message.id}', 'request'); return false;">Request</a></li>
+                                <li><a class="dropdown-item" href="#" onclick="promoteMessageToTool('${message.id}', 'objective'); return false;">Objective</a></li>
+                                <li><a class="dropdown-item" href="#" onclick="promoteMessageToTool('${message.id}', 'handoff'); return false;">Handoff</a></li>
+                                <li><a class="dropdown-item" href="#" onclick="promoteMessageToTool('${message.id}', 'signal'); return false;">Signal</a></li>
+                            </ul>
+                        </div>` : ''}
                         ${message.user_id === currentUserId ? `
                         <button class="btn btn-sm btn-outline-secondary"
                                 onclick="editChannelMessage('${message.id}')"
@@ -6110,6 +6148,309 @@ function formatFileSize(bytes) {
     return Math.round(n / (1024 * 1024)) + ' MB';
 }
 
+function hasStructuredToolBlock(text) {
+    if (!text) return false;
+    return /(\[task\]|\[objective\]|\[request\]|\[signal\]|\[handoff\]|\[circle\]|\[contract\]|::task|::objective|::request|::signal|::handoff|::circle|::contract)/i.test(String(text));
+}
+
+function normalizeToolBody(text) {
+    if (!text) return '';
+    return String(text)
+        .replace(/\r\n?/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function toSingleLineSummary(text, maxLen = 360) {
+    const clean = normalizeToolBody(text)
+        .replace(/\s*\n+\s*/g, ' / ')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+    if (!clean) return '';
+    return clean.length > maxLen ? `${clean.slice(0, maxLen - 3).trim()}...` : clean;
+}
+
+function deriveToolTitle(text, fallback) {
+    const clean = normalizeToolBody(text);
+    if (!clean) return fallback;
+    const first = clean.split('\n')[0] || '';
+    const compact = first
+        .replace(/^(?:[@#][\w.\-]+\s*)+/, '')
+        .replace(/^[>\-*0-9.\s]+/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!compact) return fallback;
+    return compact.length > 90 ? `${compact.slice(0, 87).trim()}...` : compact;
+}
+
+function extractMentionHandles(text, limit = 8) {
+    if (!text || limit <= 0) return [];
+    const matches = String(text).matchAll(/(?:^|\s)@([A-Za-z0-9_.-]{1,64})/g);
+    const seen = new Set();
+    const handles = [];
+    for (const match of matches) {
+        const raw = String(match && match[1] ? match[1] : '').trim();
+        if (!raw) continue;
+        const key = raw.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        handles.push(`@${raw}`);
+        if (handles.length >= limit) break;
+    }
+    return handles;
+}
+
+function deriveSignalTags(text) {
+    const lc = String(text || '').toLowerCase();
+    const tags = [];
+    const addTag = (tag) => {
+        if (tags.indexOf(tag) === -1) tags.push(tag);
+    };
+
+    if (/\b(latency|benchmark|p50|p95|p99|slo|kpi|metric|throughput|mean|median|ci|confidence)\b/.test(lc)) addTag('metrics');
+    if (/\b(security|access|forbidden|auth|permission|private|governance|trust)\b/.test(lc)) addTag('security');
+    if (/\b(relay|mesh|peer|catchup|sync|connect|ws:|websocket|nat|turn|stun)\b/.test(lc)) addTag('network');
+    if (/\b(fix|bug|error|regression|issue|failed|failure|incident)\b/.test(lc)) addTag('incident');
+    if (/\b(experiment|dataset|csv|json|evidence|figure|chart|plot|artifact)\b/.test(lc)) addTag('evidence');
+    if (!tags.length) addTag('update');
+    return tags.slice(0, 3);
+}
+
+function buildToolBlock(toolType, sourceText) {
+    const body = toSingleLineSummary(sourceText);
+    const mentions = extractMentionHandles(sourceText);
+    const leadMention = mentions[0] || '';
+    const assigneesCsv = mentions.join(', ');
+    const objectiveMembersCsv = mentions.map((handle, idx) => (idx === 0 ? `${handle} (lead)` : handle)).join(', ');
+    const defaults = {
+        task: 'Action item',
+        request: 'Coordination request',
+        objective: 'Execution objective',
+        handoff: 'Ownership handoff',
+        signal: 'Operational finding',
+    };
+    const fallback = defaults[toolType] || 'Structured item';
+    const title = deriveToolTitle(sourceText, fallback);
+    const assigneeLine = leadMention ? `\nassignee: ${leadMention}` : '';
+    const requestMemberLine = assigneesCsv ? `\nassignees: ${assigneesCsv}` : '';
+    const objectiveMemberLine = objectiveMembersCsv ? `\nmembers: ${objectiveMembersCsv}` : '';
+    const handoffOwnerLine = leadMention ? `\nowner: ${leadMention}` : '';
+    const signalOwnerLine = leadMention ? `\nowner: ${leadMention}` : '';
+    const signalTags = deriveSignalTags(sourceText).join(', ');
+
+    if (toolType === 'task') {
+        return `[task]\ntitle: ${title}\ndescription: ${body || 'Define the work to execute.'}${assigneeLine}\npriority: normal\n[/task]`;
+    }
+    if (toolType === 'request') {
+        return `[request]\ntitle: ${title}\nrequest: ${body || 'Please complete this request.'}${requestMemberLine}\nrequired_output: Reply with owner, status, and evidence.\npriority: normal\n[/request]`;
+    }
+    if (toolType === 'objective') {
+        return `[objective]\ntitle: ${title}\ndescription: ${body || 'Track this as a multi-step objective.'}${objectiveMemberLine}\ntasks:\n- [ ] Confirm owner\n- [ ] Execute\n- [ ] Report results\n[/objective]`;
+    }
+    if (toolType === 'handoff') {
+        return `[handoff]\ntitle: ${title}\nsummary: ${body || 'Transfer ownership with clear next steps.'}${handoffOwnerLine}\nnext:\n- Confirm owner\n- Execute and report back\n[/handoff]`;
+    }
+    if (toolType === 'signal') {
+        return `[signal]\ntype: finding\ntitle: ${title}\nsummary: ${body || 'Record this as durable structured context.'}${signalOwnerLine}\ntags: ${signalTags}\n[/signal]`;
+    }
+    return sourceText || '';
+}
+
+function notifyComposerUpdate() {
+    const input = document.getElementById('message-input');
+    if (!input) return;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function insertToolBlockIntoComposer(blockText, opts = {}) {
+    const input = document.getElementById('message-input');
+    if (!input || !blockText) return false;
+    const current = String(input.value || '').trim();
+    input.value = current ? `${current}\n\n${blockText}` : blockText;
+    input.focus();
+    notifyComposerUpdate();
+
+    if (opts.replyMessageId) {
+        const preview = (opts.replyPreview || '').toString().slice(0, 120);
+        const author = (opts.replyAuthor || 'author').toString();
+        setReplyTo(opts.replyMessageId, author, preview || '(promoted context)');
+    }
+    return true;
+}
+
+function promoteMessageToTool(messageId, toolType) {
+    const message = channelMessageCache[messageId];
+    const content = (message && message.content) ? String(message.content) : '';
+    if (!message || !content.trim()) {
+        alert('Cannot promote this message because it has no text content.');
+        return;
+    }
+    const block = buildToolBlock(toolType, content);
+    const author = (message.display_name || message.username || message.user_id || 'author');
+    const preview = toSingleLineSummary(content, 120);
+    const ok = insertToolBlockIntoComposer(block, {
+        replyMessageId: messageId,
+        replyAuthor: author,
+        replyPreview: preview,
+    });
+    if (ok && typeof showAlert === 'function') {
+        showAlert(`Promoted to ${toolType}. Review and send.`, 'success');
+    }
+}
+
+function promoteDraftToTool(toolType) {
+    const input = document.getElementById('message-input');
+    if (!input) return;
+    const raw = String(input.value || '').trim();
+    if (!raw) return;
+    if (hasStructuredToolBlock(raw)) {
+        if (typeof showAlert === 'function') {
+            showAlert('Message already contains a structured block.', 'info');
+        }
+        return;
+    }
+    input.value = buildToolBlock(toolType, raw);
+    input.focus();
+    notifyComposerUpdate();
+    if (typeof showAlert === 'function') {
+        showAlert(`Draft wrapped as ${toolType}.`, 'success');
+    }
+}
+
+function getToolLabel(toolType) {
+    const labels = {
+        task: 'Task',
+        request: 'Request',
+        objective: 'Objective',
+        handoff: 'Handoff',
+        signal: 'Signal',
+    };
+    return labels[toolType] || toolType;
+}
+
+function inferStructuredToolSuggestions(text) {
+    const raw = normalizeToolBody(text);
+    const lc = raw.toLowerCase();
+    if (!raw || raw.length < 28 || hasStructuredToolBlock(raw)) return [];
+    const quickAck = /^(?:(?:@[A-Za-z0-9_.-]+\s+){0,4})?(?:thanks|thank you|ack|acknowledged|roger|copy|copy that|sgtm|sounds good|perfect|excellent|done|on it|will do|noted|received|understood)\b[.!]*$/i;
+    if (raw.length < 220 && quickAck.test(raw)) return [];
+    const lines = raw.split('\n').map(s => s.trim()).filter(Boolean);
+    const words = raw.split(/\s+/).filter(Boolean).length;
+    if (words < 7) return [];
+    if (!/[A-Za-z]/.test(raw)) return [];
+    const bulletCount = lines.filter(line => /^[-*]\s+/.test(line)).length;
+    const numberedCount = lines.filter(line => /^\d+\.\s+/.test(line)).length;
+    const mentions = extractMentionHandles(raw, 12);
+    const mentionCount = mentions.length;
+    const questionCount = (raw.match(/\?/g) || []).length;
+    const numericCount = (raw.match(/\b\d+(?:\.\d+)?%?\b/g) || []).length;
+    const fieldLineCount = lines.filter(line => /^[A-Za-z][A-Za-z0-9 _/\-]{1,28}\s*:\s+\S+/.test(line)).length;
+    const tableLineCount = lines.filter(line => line.includes('|')).length;
+    const countMatches = (pattern) => {
+        const matches = lc.match(pattern);
+        return matches ? matches.length : 0;
+    };
+    const imperativeCount = countMatches(/\b(post|share|collect|run|verify|fix|integrate|review|prepare|upload|issue|drop|build|measure|probe|compile|draft|summarize|triage|check|confirm|execute|test)\b/g);
+    const score = {};
+    const reasons = {};
+    const add = (kind, value, reason) => {
+        score[kind] = (score[kind] || 0) + value;
+        if (!reasons[kind]) reasons[kind] = [];
+        if (reason && reasons[kind].indexOf(reason) === -1) reasons[kind].push(reason);
+    };
+
+    if (/\b(can you|could you|would you|please|need you to|i need|let'?s|kindly)\b/.test(lc)) {
+        add('request', 5, 'direct ask');
+    }
+    if (questionCount > 0 && mentionCount > 0) add('request', 2, 'question to specific peer');
+    if (mentionCount > 0 && imperativeCount > 0) {
+        add('request', 3, 'action requested');
+    }
+
+    if (/\b(todo|next step|action item|fix|implement|investigate|follow up|owner|due|blocker|blocked|bug|issue)\b/.test(lc)) {
+        add('task', 4, 'execution cues');
+    }
+    if (mentionCount === 1 && imperativeCount > 0) {
+        add('task', 2, 'single-owner execution');
+    }
+
+    if (/\b(objective|goal|milestone|roadmap|plan|phases?|deliverable)\b/.test(lc)) {
+        add('objective', 4, 'multi-step goal language');
+    }
+    if (bulletCount + numberedCount >= 3) add('objective', 3, 'multi-step list');
+    if (mentionCount >= 3 && ((bulletCount + numberedCount) >= 2 || /\b(owner|assignee|status|deliverable|task)\b/.test(lc))) {
+        add('objective', 7, 'multi-agent coordination');
+    }
+
+    if (/\b(handoff|handover|take over|ownership|pass to|return to|ready for review|ready for integration)\b/.test(lc)) {
+        add('handoff', 5, 'ownership transfer');
+    }
+    if (/\b(status|progress update|completed|complete|done|ready|blocked|unblocked)\b/.test(lc) && mentionCount > 0) {
+        add('handoff', 2, 'status checkpoint');
+    }
+
+    if (/\b(decision|finding|evidence|metric|latency|p50|p95|p99|benchmark|result|observed|measured|slo|kpi|reconciliation|variance|confidence|endpoint|payload|environment|timestamp|sample size|n=|time window)\b/.test(lc)) {
+        add('signal', 6, 'measurement/reporting');
+    }
+    if (fieldLineCount >= 3) add('signal', 3, 'structured evidence fields');
+    if (tableLineCount >= 2) add('signal', 2, 'tabular metrics');
+    if (/\b(utc|timestamp|time window|sample size|n=|csv|json|artifact|dataset|figure|chart|plot)\b/.test(lc)) {
+        add('signal', 2, 'reproducible artifact');
+    }
+    if (numericCount >= 3) add('signal', 2, 'quantitative detail');
+    if (/\b(owner:|assignee:|assignees:|members:|tasks:)\b/.test(lc)) {
+        add('objective', 2, 'explicit ownership fields');
+        add('request', 1, 'explicit assignees');
+    }
+
+    if (!Object.keys(score).length) return [];
+    const maxScore = Math.max(...Object.values(score));
+    if (maxScore < 4) return [];
+    const cutoff = Math.max(4, maxScore - 2);
+    const priority = ['signal', 'request', 'objective', 'task', 'handoff'];
+
+    return Object.entries(score)
+        .filter(([, value]) => value >= cutoff)
+        .sort((a, b) => {
+            if (b[1] !== a[1]) return b[1] - a[1];
+            return priority.indexOf(a[0]) - priority.indexOf(b[0]);
+        })
+        .slice(0, 2)
+        .map(([kind, value]) => ({
+            kind,
+            score: value,
+            reason: (reasons[kind] || [])[0] || 'structured coordination',
+        }));
+}
+
+function updateChannelStructuredNudge() {
+    const input = document.getElementById('message-input');
+    const wrap = document.getElementById('channel-structured-nudge');
+    const summary = document.getElementById('channel-structured-nudge-summary');
+    const actions = document.getElementById('channel-structured-nudge-actions');
+    if (!input || !wrap || !summary || !actions) return;
+
+    const raw = String(input.value || '').trim();
+    const suggestions = inferStructuredToolSuggestions(raw);
+    if (!suggestions.length) {
+        wrap.style.display = 'none';
+        actions.innerHTML = '';
+        summary.textContent = '';
+        return;
+    }
+
+    const labels = suggestions.map(item => getToolLabel(item.kind));
+    const primaryReason = suggestions[0].reason || 'structured coordination';
+    summary.textContent = labels.length > 1
+        ? `Looks like ${labels.slice(0, -1).join(', ')} or ${labels[labels.length - 1]} (${primaryReason}).`
+        : `Looks like a ${labels[0].toLowerCase()} (${primaryReason}).`;
+
+    actions.innerHTML = suggestions.map(item =>
+        `<button type="button" class="btn btn-sm btn-outline-info" onclick="promoteDraftToTool('${item.kind}')">${getToolLabel(item.kind)}</button>`
+    ).join('');
+    wrap.style.display = 'flex';
+}
+
 // Message sending
 function sendMessage(event) {
     event.preventDefault();
@@ -6176,6 +6517,7 @@ function sendMessage(event) {
             updateFilePreview();
             cancelReply();  // clear reply context
             updateChannelTaskToggle();
+            updateChannelStructuredNudge();
             // Always append incrementally after sending — avoids the
             // flash/spinner from a full loadChannelMessages() reload
             apiCall(`/ajax/channel_messages/${currentChannelId}`)
@@ -7734,6 +8076,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 msgInput.addEventListener('input', () => {
                     handleChannelMentionInput();
                     updateChannelTaskToggle();
+                    updateChannelStructuredNudge();
                 });
                 msgInput.addEventListener('keydown', (e) => {
                     if (e.key === 'Escape') {
@@ -7752,6 +8095,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
             }
             updateChannelTaskToggle();
+            updateChannelStructuredNudge();
 
 	        // Deep-linking: /channels?channel=... or /channels?focus_channel=...&focus_message=...
 	        const params = new URLSearchParams(window.location.search);
