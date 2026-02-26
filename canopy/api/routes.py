@@ -1898,10 +1898,15 @@ def create_api_blueprint() -> Blueprint:
         if not p2p_manager or not p2p_manager.connection_manager:
             return jsonify({'error': 'P2P not running'}), 500
 
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         peer_id = data.get('peer_id')
         if not peer_id:
             return jsonify({'error': 'peer_id required'}), 400
+        force_broker = _as_bool(
+            data.get('force_broker')
+            or data.get('force_failover')
+            or data.get('skip_direct')
+        )
 
         # Look up introduced peer info
         intro = p2p_manager._introduced_peers.get(peer_id)
@@ -1916,41 +1921,57 @@ def create_api_blueprint() -> Blueprint:
         if not ev_loop or ev_loop.is_closed():
             return jsonify({'error': 'P2P event loop unavailable'}), 500
 
-        for ep in endpoints:
-            try:
-                _record_connection_event(
-                    p2p_manager,
-                    peer_id,
-                    status='attempt',
-                    detail='Introduced peer connect attempt',
-                    endpoint=ep,
-                )
-                addr = ep.replace('ws://', '').replace('wss://', '')
-                host, port_str = addr.rsplit(':', 1)
-                port = int(port_str)
-                future = asyncio.run_coroutine_threadsafe(
-                    p2p_manager.connection_manager.connect_to_peer(
-                        peer_id, host, port),
-                    ev_loop
-                )
-                connected = future.result(timeout=10.0)
-                if connected:
-                    try:
-                        p2p_manager.trigger_peer_sync(peer_id)
-                    except Exception:
-                        pass
+        direct_attempt_count = 0
+        if force_broker:
+            _record_connection_event(
+                p2p_manager,
+                peer_id,
+                status='forced_failover',
+                detail='Direct connect skipped by caller; testing broker/relay path',
+            )
+        else:
+            for ep in endpoints:
+                direct_attempt_count += 1
+                try:
                     _record_connection_event(
                         p2p_manager,
                         peer_id,
-                        status='connected',
-                        detail='Introduced peer connected',
+                        status='attempt',
+                        detail='Introduced peer connect attempt',
                         endpoint=ep,
                     )
-                    return jsonify({'status': 'connected', 'peer_id': peer_id,
-                                    'endpoint': ep})
-            except Exception as ce:
-                logger.warning(f"Connect to introduced {ep} failed: {ce}")
-                continue
+                    addr = ep.replace('ws://', '').replace('wss://', '')
+                    host, port_str = addr.rsplit(':', 1)
+                    port = int(port_str)
+                    future = asyncio.run_coroutine_threadsafe(
+                        p2p_manager.connection_manager.connect_to_peer(
+                            peer_id, host, port),
+                        ev_loop
+                    )
+                    connected = future.result(timeout=10.0)
+                    if connected:
+                        try:
+                            p2p_manager.trigger_peer_sync(peer_id)
+                        except Exception:
+                            pass
+                        _record_connection_event(
+                            p2p_manager,
+                            peer_id,
+                            status='connected',
+                            detail='Introduced peer connected',
+                            endpoint=ep,
+                        )
+                        return jsonify({
+                            'status': 'connected',
+                            'peer_id': peer_id,
+                            'endpoint': ep,
+                            'forced_failover': False,
+                            'direct_attempted': True,
+                            'direct_attempt_count': direct_attempt_count,
+                        })
+                except Exception as ce:
+                    logger.warning(f"Connect to introduced {ep} failed: {ce}")
+                    continue
 
         # Direct connection failed — try connection brokering.
         # Prefer connected introducers, then other connected peers as fallback.
@@ -2025,6 +2046,9 @@ def create_api_blueprint() -> Blueprint:
                         'peer_id': peer_id,
                         'via_peer': broker_peer,
                         'attempted_brokers': attempted_brokers,
+                        'forced_failover': force_broker,
+                        'direct_attempted': not force_broker,
+                        'direct_attempt_count': direct_attempt_count,
                         'message': (
                             'Direct connection failed; broker request sent. '
                             'The target peer will attempt to connect back. '
@@ -2051,6 +2075,9 @@ def create_api_blueprint() -> Blueprint:
             'message': guidance,
             'attempted_brokers': attempted_brokers,
             'relay_policy': getattr(p2p_manager, 'relay_policy', 'broker_only'),
+            'forced_failover': force_broker,
+            'direct_attempted': not force_broker,
+            'direct_attempt_count': direct_attempt_count,
         }), 502
 
     @api.route('/p2p/reconnect', methods=['POST'])
@@ -2232,6 +2259,110 @@ def create_api_blueprint() -> Blueprint:
         if not p2p_manager:
             return jsonify({'error': 'P2P not running'}), 500
         return jsonify(p2p_manager.get_relay_status())
+
+    @api.route('/p2p/activity', methods=['GET'])
+    @require_auth(allow_session=True)
+    def p2p_activity():
+        """Return connection activity events and per-peer activity timestamps."""
+        *_, p2p_manager = _get_app_components_any(current_app)
+        if not p2p_manager:
+            return jsonify({
+                'server_time': time.time(),
+                'peers': {},
+                'events': [],
+                'relay_status': {
+                    'relay_policy': 'off',
+                    'active_relays': {},
+                    'routing_table': {},
+                },
+                'validation': {
+                    'forced_failover_events': 0,
+                    'broker_events': 0,
+                    'failed_connection_events': 0,
+                },
+            })
+
+        since = request.args.get('since')
+        limit = request.args.get('limit', 100)
+        kind_filter = (request.args.get('kind') or '').strip().lower()
+        try:
+            since_val = float(since) if since is not None and str(since).strip() else None
+        except Exception:
+            since_val = None
+        try:
+            limit_val = int(limit)
+        except Exception:
+            limit_val = 100
+        limit_val = max(1, min(limit_val, 500))
+
+        peers: dict[str, dict[str, Any]] = {}
+        conn_mgr = getattr(p2p_manager, 'connection_manager', None)
+        if conn_mgr:
+            try:
+                connected_peer_ids = list(conn_mgr.get_connected_peers() or [])
+            except Exception:
+                connected_peer_ids = []
+            for connected_peer_id in connected_peer_ids:
+                try:
+                    conn = conn_mgr.get_connection(connected_peer_id)
+                except Exception:
+                    conn = None
+                if not conn:
+                    continue
+                peers[connected_peer_id] = {
+                    'connected_at': getattr(conn, 'connected_at', None),
+                    'last_activity': getattr(conn, 'last_activity', None),
+                    'last_inbound_activity': getattr(conn, 'last_inbound_activity', None),
+                    'last_outbound_activity': getattr(conn, 'last_outbound_activity', None),
+                }
+
+        events: list[dict[str, Any]] = []
+        if hasattr(p2p_manager, 'get_activity_events'):
+            try:
+                events = p2p_manager.get_activity_events(since=since_val, limit=limit_val)
+            except Exception:
+                events = []
+        if kind_filter:
+            events = [evt for evt in events if str(evt.get('kind') or '').strip().lower() == kind_filter]
+
+        forced_failover_events = 0
+        broker_events = 0
+        failed_connection_events = 0
+        for evt in events:
+            if str(evt.get('kind') or '').strip().lower() != 'connection':
+                continue
+            status = str(evt.get('status') or '').strip().lower()
+            if status == 'forced_failover':
+                forced_failover_events += 1
+            elif status == 'broker':
+                broker_events += 1
+            elif status in {'failed', 'disconnected'}:
+                failed_connection_events += 1
+
+        relay_status_payload = {
+            'relay_policy': getattr(p2p_manager, 'relay_policy', 'off'),
+            'active_relays': {},
+            'routing_table': {},
+        }
+        if hasattr(p2p_manager, 'get_relay_status'):
+            try:
+                live_status = p2p_manager.get_relay_status()
+                if isinstance(live_status, dict):
+                    relay_status_payload = live_status
+            except Exception:
+                pass
+
+        return jsonify({
+            'server_time': time.time(),
+            'peers': peers,
+            'events': events,
+            'relay_status': relay_status_payload,
+            'validation': {
+                'forced_failover_events': forced_failover_events,
+                'broker_events': broker_events,
+                'failed_connection_events': failed_connection_events,
+            },
+        })
 
     @api.route('/p2p/relay_policy', methods=['POST'])
     @require_auth(allow_session=True)
@@ -3968,12 +4099,35 @@ def create_api_blueprint() -> Blueprint:
                 metadata=claim_metadata or None,
             )
             status = 200 if result.get('claimed') else (409 if result.get('reason') == 'already_claimed' else 400)
-            return jsonify({
+            payload = {
                 'inbox_id': inbox_id or None,
                 'source_type': source_type,
                 'source_id': source_id,
                 **result,
-            }), status
+            }
+
+            retry_after_seconds: Optional[int] = None
+            if status == 409:
+                claim = payload.get('claim') or {}
+                expires_at = claim.get('expires_at')
+                if expires_at:
+                    try:
+                        expires_dt = datetime.fromisoformat(str(expires_at).replace('Z', '+00:00'))
+                        if expires_dt.tzinfo is None:
+                            expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+                        remaining = int((expires_dt.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds())
+                        retry_after_seconds = max(0, remaining)
+                    except Exception:
+                        retry_after_seconds = None
+
+                payload.setdefault('action_hint', 'retry_after_ttl')
+                if retry_after_seconds is not None:
+                    payload['retry_after_seconds'] = retry_after_seconds
+
+            response = jsonify(payload)
+            if retry_after_seconds is not None:
+                response.headers['Retry-After'] = str(retry_after_seconds)
+            return response, status
         except Exception as e:
             logger.error(f"Mention claim API failed: {e}")
             return jsonify({'error': 'Internal server error'}), 500

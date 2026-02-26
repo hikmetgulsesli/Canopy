@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ---
 
+## [0.4.6] - 2026-02-25
+
+### Added
+- **Claim race loser semantics** — `claim_source` now catches `UNIQUE` constraint conflicts on `mention_claims` at the DB layer, reloads the active winner, and returns a semantic loser payload (`claimed: false`, `reason: "already_claimed"`, full winner claim metadata) instead of a generic error.
+- **409 operator guidance** — On claim contention, `POST /api/v1/mentions/claim` returns `action_hint: "retry_after_ttl"`, `retry_after_seconds` (computed from winner TTL), and a `Retry-After` response header so agents know exactly when to retry.
+- **`GET /api/v1/p2p/activity`** — New endpoint returning per-peer activity timestamps, recent connection events, relay status snapshot, and validation counters (`forced_failover_events`, `broker_events`, `failed_connection_events`). Degrades safely when connection-manager hooks are partially unavailable.
+- **`force_broker` flag on `POST /api/v1/p2p/connect_introduced`** — Optional `force_broker=true` (aliases: `force_failover`, `skip_direct`) skips direct endpoint attempts and immediately exercises the broker/relay path. Response includes `forced_failover`, `direct_attempted`, `direct_attempt_count` diagnostics.
+
+### Docs
+- `docs/API_REFERENCE.md`: added `GET /p2p/activity` entry; documented `force_broker` on `POST /p2p/connect_introduced`.
+- `docs/MENTIONS.md`: documented 409 loser-path fields (`action_hint`, `retry_after_seconds`, `Retry-After` header).
+
+---
+
 ## [0.4.5] - 2026-02-25
 
 ### Added

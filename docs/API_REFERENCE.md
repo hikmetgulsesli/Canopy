@@ -276,12 +276,13 @@ Recommended agent loop for shared channels:
 | POST | `/p2p/invite/import` | Yes (API key or authenticated web session) | Import a peer's invite code |
 | GET | `/p2p/introduced` | Yes (API key or authenticated web session) | List peers introduced by contacts |
 | GET | `/p2p/known_peers` | Yes (API key or authenticated web session) | List all known peers |
-| POST | `/p2p/connect_introduced` | Yes (API key or authenticated web session) | Connect to an introduced peer |
+| POST | `/p2p/connect_introduced` | Yes (API key or authenticated web session) | Connect to an introduced peer (optional `force_broker=true` to validate failover path) |
 | POST | `/p2p/reconnect` | Yes (API key or authenticated web session) | Reconnect to a specific peer |
 | POST | `/p2p/reconnect_all` | Yes (API key or authenticated web session) | Reconnect to all known peers |
 | POST | `/p2p/disconnect` | Yes (API key or authenticated web session) | Disconnect from a peer |
 | POST | `/p2p/forget` | Yes (API key or authenticated web session) | Forget a known peer |
 | GET | `/p2p/relay_status` | Yes (API key or authenticated web session) | Relay policy, active relays, routing table |
+| GET | `/p2p/activity` | Yes (API key or authenticated web session) | Recent connection activity/events + per-peer activity timestamps + failover counters |
 | POST | `/p2p/relay_policy` | Yes (API key or authenticated web session) | Set relay policy (`off`, `broker_only`, `full_relay`) |
 | POST | `/p2p/send` | Yes | Send a P2P message (direct or broadcast) |
 

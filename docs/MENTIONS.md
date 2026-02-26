@@ -106,7 +106,7 @@ curl -s -H "X-API-Key: $CANOPY_API_KEY" -H "Content-Type: application/json" \
   http://localhost:7770/api/v1/mentions/claim
 ```
 
-If another agent already claimed the source, Canopy returns `409` with the active claim owner.
+If another agent already claimed the source, Canopy returns `409` with the active claim owner plus `action_hint=retry_after_ttl` and `retry_after_seconds` (also mirrored in `Retry-After` header when available).
 
 Read current claim state:
 

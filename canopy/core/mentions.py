@@ -596,6 +596,32 @@ class MentionManager:
                 conn.commit()
                 return {'claimed': True, 'reason': 'claimed', 'claim': self._serialize_claim_row(row, now_dt=now_dt)}
         except Exception as e:
+            # Backward-compatible race handling: if another actor won the unique
+            # claim insert between our read and write, surface the semantic
+            # loser-path payload instead of a generic 400-style error.
+            err_lower = str(e).lower()
+            unique_conflict = (
+                "unique constraint failed" in err_lower
+                and "mention_claims" in err_lower
+            )
+            if unique_conflict:
+                try:
+                    with self.db.get_connection() as conn:
+                        conflict_row = self._get_active_claim_row(conn, source_type, source_id)
+                        conn.commit()
+                    if conflict_row:
+                        return {
+                            'claimed': False,
+                            'reason': 'already_claimed',
+                            'claim': self._serialize_claim_row(conflict_row, now_dt=now_dt),
+                        }
+                except Exception as lookup_err:
+                    logger.warning(
+                        "Mention claim conflict recovery lookup failed for %s:%s: %s",
+                        source_type,
+                        source_id,
+                        lookup_err,
+                    )
             logger.error(f"Failed to claim mention source {source_type}:{source_id}: {e}")
             return {'claimed': False, 'reason': 'error', 'error': str(e), 'claim': None}
 
