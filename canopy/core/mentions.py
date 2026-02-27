@@ -1167,6 +1167,131 @@ def record_mention_activity(
             pass
 
 
+def record_thread_reply_activity(
+    *,
+    channel_manager: Any,
+    inbox_manager: Any,
+    channel_id: str,
+    reply_message_id: str,
+    parent_message_id: str,
+    author_id: Optional[str],
+    origin_peer: Optional[str],
+    source_content: Optional[str] = None,
+    preview: Optional[str] = None,
+    mentioned_user_ids: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """Create inbox reply triggers for thread subscribers.
+
+    Behavior:
+    - If no explicit subscription exists for the thread root author and that
+      author has `auto_subscribe_own_threads=true`, create an auto subscription.
+    - Notify subscribed users on reply (`trigger_type='reply'`), excluding
+      the reply author and users already explicitly @mentioned in the reply.
+    """
+    result: Dict[str, Any] = {
+        'thread_root_message_id': None,
+        'root_author_id': None,
+        'target_user_ids': [],
+        'notified_count': 0,
+    }
+    if not inbox_manager or not channel_manager:
+        return result
+    if not channel_id or not reply_message_id or not parent_message_id:
+        return result
+
+    mentioned = {
+        str(uid).strip() for uid in (mentioned_user_ids or []) if str(uid).strip()
+    }
+    author = str(author_id).strip() if author_id else ''
+
+    try:
+        thread_root_id = (
+            channel_manager.resolve_thread_root_message_id(channel_id, parent_message_id)
+            or parent_message_id
+        )
+        if not thread_root_id:
+            return result
+        result['thread_root_message_id'] = thread_root_id
+
+        root_author_id = channel_manager.get_thread_root_author_id(channel_id, thread_root_id)
+        if root_author_id:
+            root_author_id = str(root_author_id).strip()
+        result['root_author_id'] = root_author_id
+
+        target_ids: set[str] = set(
+            channel_manager.get_thread_subscriber_ids(channel_id, thread_root_id) or []
+        )
+
+        # Root authors are subscribed by default unless they explicitly mute.
+        if root_author_id and root_author_id != author:
+            root_state = channel_manager.get_thread_subscription_state(
+                root_author_id,
+                channel_id,
+                thread_root_id,
+            )
+            explicit = root_state.get('explicit_subscribed')
+            if explicit is True:
+                target_ids.add(root_author_id)
+            elif explicit is None:
+                root_config = inbox_manager.get_config(root_author_id) if inbox_manager else {}
+                auto_subscribe = bool(root_config.get('auto_subscribe_own_threads', True))
+                if auto_subscribe:
+                    upsert = channel_manager.set_thread_subscription(
+                        root_author_id,
+                        channel_id,
+                        thread_root_id,
+                        True,
+                        source='auto',
+                        require_membership=False,
+                    )
+                    if upsert.get('success'):
+                        target_ids.add(root_author_id)
+
+        final_targets: List[str] = []
+        for uid in sorted(target_ids):
+            clean_uid = str(uid).strip()
+            if not clean_uid or clean_uid == author or clean_uid in mentioned:
+                continue
+            cfg = inbox_manager.get_config(clean_uid)
+            if not bool(cfg.get('thread_reply_notifications', True)):
+                continue
+            final_targets.append(clean_uid)
+
+        if not final_targets:
+            return result
+
+        preview_text = build_preview(source_content or preview or '')
+        inserted = inbox_manager.record_mention_triggers(
+            target_ids=final_targets,
+            source_type='channel_message',
+            source_id=reply_message_id,
+            author_id=author or None,
+            origin_peer=origin_peer,
+            channel_id=channel_id,
+            preview=preview_text,
+            extra_ref={
+                'channel_id': channel_id,
+                'message_id': reply_message_id,
+                'parent_message_id': parent_message_id,
+                'thread_root_message_id': thread_root_id,
+            },
+            source_content=source_content,
+            trigger_type='reply',
+        )
+        result['target_user_ids'] = final_targets
+        result['notified_count'] = int(inserted or 0)
+        return result
+    except Exception as e:
+        logger.debug(
+            "Thread reply notification skipped (channel=%s reply=%s parent=%s): %s",
+            channel_id,
+            reply_message_id,
+            parent_message_id,
+            e,
+        )
+        return result
+
+
 def broadcast_mention_interaction(
     p2p_manager: Any,
     source_type: str,

@@ -41,6 +41,7 @@ from .mentions import (
     split_mention_targets,
     build_preview,
     record_mention_activity,
+    record_thread_reply_activity,
     broadcast_mention_interaction,
 )
 from ..network.manager import P2PNetworkManager
@@ -826,35 +827,28 @@ def create_app(config: Optional[Config] = None) -> Flask:
                             source_content=content,
                         )
 
-                    # Notify original author when their message is replied to
-                    # (parent_message_id set but author not already @mentioned).
+                    # Notify thread subscribers for replies (including root
+                    # author auto-subscription unless explicitly muted).
                     if parent_message_id and inbox_manager:
                         try:
-                            with db_manager.get_connection() as conn:
-                                parent_row = conn.execute(
-                                    "SELECT user_id FROM channel_messages WHERE id = ?",
-                                    (parent_message_id,)
-                                ).fetchone()
-                            if parent_row:
-                                parent_author_id = parent_row['user_id'] if hasattr(parent_row, '__getitem__') else parent_row[0]
-                                already_mentioned = any(
-                                    t.get('user_id') == parent_author_id for t in (targets or [])
-                                )
-                                if not already_mentioned and parent_author_id != user_id:
-                                    preview = build_preview(content or '')
-                                    inbox_manager.record_mention_triggers(
-                                        target_ids=[parent_author_id],
-                                        source_type='channel_message',
-                                        source_id=mid,
-                                        author_id=user_id,
-                                        origin_peer=from_peer,
-                                        channel_id=channel_id,
-                                        preview=preview,
-                                        source_content=content,
-                                        trigger_type='reply',
-                                    )
+                            record_thread_reply_activity(
+                                channel_manager=channel_manager,
+                                inbox_manager=inbox_manager,
+                                channel_id=channel_id,
+                                reply_message_id=mid,
+                                parent_message_id=parent_message_id,
+                                author_id=user_id,
+                                origin_peer=from_peer,
+                                source_content=content,
+                                preview=build_preview(content or ''),
+                                mentioned_user_ids=[
+                                    cast(str, t.get('user_id'))
+                                    for t in (targets or [])
+                                    if t.get('user_id')
+                                ],
+                            )
                         except Exception as _reply_err:
-                            logger.debug(f"Reply-to-author inbox trigger skipped: {_reply_err}")
+                            logger.debug(f"Thread reply inbox trigger skipped: {_reply_err}")
 
                     # Inline tasks from [task] blocks
                     try:

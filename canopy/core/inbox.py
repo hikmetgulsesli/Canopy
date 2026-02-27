@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_INBOX_CONFIG: Dict[str, Any] = {
     "channels": [],
     "allowed_senders": [],
-    "allowed_trigger_types": ["mention", "dm"],
+    "allowed_trigger_types": ["mention", "dm", "reply"],
+    "thread_reply_notifications": True,
+    "auto_subscribe_own_threads": True,
     "min_trust_score": 50,
     "cooldown_seconds": 10,
     "sender_cooldown_seconds": 30,
@@ -51,7 +53,9 @@ DEFAULT_INBOX_CONFIG: Dict[str, Any] = {
 DEFAULT_AGENT_INBOX_CONFIG: Dict[str, Any] = {
     "channels": [],
     "allowed_senders": [],
-    "allowed_trigger_types": ["mention", "dm"],
+    "allowed_trigger_types": ["mention", "dm", "reply"],
+    "thread_reply_notifications": True,
+    "auto_subscribe_own_threads": True,
     # Mesh peers are implicitly trusted; TrustManager default_trust_score=100
     # so this is belt-and-suspenders, but disabling it avoids false rejections
     # when a peer hasn't been explicitly added to trust_scores yet.
@@ -204,6 +208,37 @@ class InboxManager:
                     pass
         except Exception as e:
             logger.warning(f"Failed to fetch inbox config for {user_id}: {e}")
+
+        # Backward-compatible normalization:
+        # - keep old configs working,
+        # - enable reply notifications by default unless explicitly disabled.
+        allowed_types_raw = config.get('allowed_trigger_types') or []
+        if isinstance(allowed_types_raw, (list, tuple, set)):
+            allowed_types = [str(v).strip().lower() for v in allowed_types_raw if str(v).strip()]
+        else:
+            allowed_types = []
+        allowed_types = list(dict.fromkeys(allowed_types))
+
+        thread_reply_notifications = config.get('thread_reply_notifications')
+        if thread_reply_notifications is None:
+            thread_reply_notifications = True
+            # Migrate legacy allowlists that only had mention+dm.
+            if allowed_types and set(allowed_types).issubset({'mention', 'dm'}):
+                allowed_types.append('reply')
+        else:
+            thread_reply_notifications = bool(thread_reply_notifications)
+            if thread_reply_notifications and 'reply' not in allowed_types:
+                allowed_types.append('reply')
+            if not thread_reply_notifications and 'reply' in allowed_types:
+                allowed_types = [t for t in allowed_types if t != 'reply']
+
+        if not allowed_types:
+            allowed_types = ['mention', 'dm', 'reply']
+
+        config['allowed_trigger_types'] = allowed_types
+        config['thread_reply_notifications'] = thread_reply_notifications
+        if config.get('auto_subscribe_own_threads') is None:
+            config['auto_subscribe_own_threads'] = True
         return config
 
     def set_config(self, user_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:

@@ -41,6 +41,7 @@ from ..core.mentions import (
     split_mention_targets,
     build_preview,
     record_mention_activity,
+    record_thread_reply_activity,
     broadcast_mention_interaction,
 )
 from ..security.api_keys import Permission, ApiKeyManager
@@ -8726,6 +8727,8 @@ def create_ui_blueprint() -> Blueprint:
                     except Exception as bcast_err:
                         logger.warning(f"P2P broadcast of channel message failed (non-fatal): {bcast_err}")
 
+                local_mentioned_user_ids: list[str] = []
+
                 # Emit mention events for @handles
                 try:
                     mention_manager = current_app.config.get('MENTION_MANAGER')
@@ -8748,10 +8751,15 @@ def create_ui_blueprint() -> Blueprint:
                         origin_peer = p2p_manager.get_peer_id() if p2p_manager else None
 
                         if local_targets:
+                            local_mentioned_user_ids = [
+                                cast(str, t.get('user_id'))
+                                for t in local_targets
+                                if t.get('user_id')
+                            ]
                             record_mention_activity(
                                 mention_manager,
                                 p2p_manager,
-                                target_ids=[cast(str, t.get('user_id')) for t in local_targets if t.get('user_id')],
+                                target_ids=local_mentioned_user_ids,
                                 source_type='channel_message',
                                 source_id=message.id,
                                 author_id=user_id,
@@ -8776,6 +8784,24 @@ def create_ui_blueprint() -> Blueprint:
                 except Exception as mention_err:
                     logger.warning(f"Channel mention processing failed: {mention_err}")
 
+                # Reply notifications for thread subscribers/root author.
+                if parent_message_id:
+                    try:
+                        record_thread_reply_activity(
+                            channel_manager=channel_manager,
+                            inbox_manager=current_app.config.get('INBOX_MANAGER'),
+                            channel_id=channel_id,
+                            reply_message_id=message.id,
+                            parent_message_id=parent_message_id,
+                            author_id=user_id,
+                            origin_peer=p2p_manager.get_peer_id() if p2p_manager else None,
+                            source_content=content,
+                            preview=build_preview(content or ''),
+                            mentioned_user_ids=local_mentioned_user_ids,
+                        )
+                    except Exception as reply_err:
+                        logger.debug(f"Thread reply inbox trigger skipped: {reply_err}")
+
                 return jsonify({
                     'success': True,
                     'message': message.to_dict()
@@ -8786,6 +8812,87 @@ def create_ui_blueprint() -> Blueprint:
                 
         except Exception as e:
             logger.error(f"Send channel message error: {e}")
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @ui.route('/ajax/channel_threads/subscription', methods=['GET', 'POST'])
+    @require_login
+    def ajax_channel_thread_subscription():
+        """Get or update per-thread inbox subscription state for current user."""
+        try:
+            _, _, _, _, channel_manager, _, _, _, _, _, _ = _get_app_components_any(current_app)
+            inbox_manager = current_app.config.get('INBOX_MANAGER')
+            user_id = get_current_user()
+
+            payload = request.get_json(silent=True) or {}
+            if request.method == 'GET':
+                channel_id = str(request.args.get('channel_id') or '').strip()
+                message_id = str(request.args.get('message_id') or '').strip()
+            else:
+                channel_id = str(payload.get('channel_id') or '').strip()
+                message_id = str(payload.get('message_id') or '').strip()
+
+            if not channel_id or not message_id:
+                return jsonify({'error': 'channel_id and message_id are required'}), 400
+
+            access = channel_manager.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                return jsonify({'error': 'You are not a member of this channel'}), 403
+
+            state = channel_manager.get_thread_subscription_state(user_id, channel_id, message_id)
+            root_id = state.get('thread_root_message_id')
+            if not root_id:
+                return jsonify({'error': 'Thread not found'}), 404
+
+            explicit = state.get('explicit_subscribed')
+            auto_subscribe = True
+            if inbox_manager:
+                try:
+                    cfg = inbox_manager.get_config(user_id)
+                    auto_subscribe = bool(cfg.get('auto_subscribe_own_threads', True))
+                except Exception:
+                    auto_subscribe = True
+            effective = bool(explicit) if explicit is not None else bool(state.get('is_root_author') and auto_subscribe)
+
+            if request.method == 'POST':
+                subscribed_raw = payload.get('subscribed')
+                if subscribed_raw is None:
+                    subscribed = not effective
+                elif isinstance(subscribed_raw, bool):
+                    subscribed = subscribed_raw
+                else:
+                    subscribed = str(subscribed_raw).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+                update = channel_manager.set_thread_subscription(
+                    user_id=user_id,
+                    channel_id=channel_id,
+                    message_id=message_id,
+                    subscribed=subscribed,
+                    source='manual',
+                )
+                if not update.get('success'):
+                    return jsonify({'error': 'Failed to update thread subscription'}), 500
+
+                state = channel_manager.get_thread_subscription_state(user_id, channel_id, message_id)
+                explicit = state.get('explicit_subscribed')
+                effective = bool(explicit) if explicit is not None else bool(state.get('is_root_author') and auto_subscribe)
+
+            return jsonify({
+                'success': True,
+                'channel_id': channel_id,
+                'message_id': message_id,
+                'thread_root_message_id': state.get('thread_root_message_id'),
+                'root_author_id': state.get('root_author_id'),
+                'is_root_author': bool(state.get('is_root_author')),
+                'explicit_subscribed': explicit,
+                'auto_subscribe_own_threads': auto_subscribe,
+                'subscribed': effective,
+            })
+        except Exception as e:
+            logger.error(f"Channel thread subscription error: {e}", exc_info=True)
             return jsonify({'error': 'Internal server error'}), 500
 
     @ui.route('/ajax/delete_channel_message', methods=['POST'])

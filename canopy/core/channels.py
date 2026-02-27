@@ -552,6 +552,30 @@ class ChannelManager:
                     CREATE INDEX IF NOT EXISTS idx_user_channel_governance_enabled
                     ON user_channel_governance(enabled)
                 """)
+
+                # Per-user subscriptions for thread reply inbox notifications.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS channel_thread_subscriptions (
+                        channel_id TEXT NOT NULL,
+                        thread_root_message_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        subscribed BOOLEAN NOT NULL DEFAULT 1,
+                        source TEXT NOT NULL DEFAULT 'manual',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (thread_root_message_id, user_id),
+                        FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_channel_thread_subscriptions_channel
+                    ON channel_thread_subscriptions(channel_id, thread_root_message_id, subscribed)
+                """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_channel_thread_subscriptions_user
+                    ON channel_thread_subscriptions(user_id, subscribed)
+                """)
                 
                 conn.commit()
                 logger.info("Channel database tables ensured successfully")
@@ -1703,6 +1727,229 @@ class ChannelManager:
         except Exception as e:
             logger.error(f"Failed to update channel notifications: {e}", exc_info=True)
             return False
+
+    def _resolve_thread_root_id_conn(
+        self,
+        conn: Any,
+        channel_id: str,
+        message_id: str,
+    ) -> Optional[str]:
+        """Return the root message id for a message inside a channel thread."""
+        if not channel_id or not message_id:
+            return None
+
+        current_id = str(message_id).strip()
+        if not current_id:
+            return None
+
+        visited: set[str] = set()
+        max_hops = 64
+        hops = 0
+
+        while current_id and current_id not in visited and hops < max_hops:
+            visited.add(current_id)
+            row = conn.execute(
+                """
+                SELECT parent_message_id
+                FROM channel_messages
+                WHERE id = ? AND channel_id = ?
+                """,
+                (current_id, channel_id),
+            ).fetchone()
+            if not row:
+                return None
+            parent_id = str(row['parent_message_id']).strip() if row['parent_message_id'] else ''
+            if not parent_id:
+                return current_id
+            current_id = parent_id
+            hops += 1
+
+        return current_id if current_id else None
+
+    def resolve_thread_root_message_id(self, channel_id: str, message_id: str) -> Optional[str]:
+        """Resolve a message id to its thread root id."""
+        if not channel_id or not message_id:
+            return None
+        try:
+            with self.db.get_connection() as conn:
+                return self._resolve_thread_root_id_conn(conn, channel_id, message_id)
+        except Exception as e:
+            logger.debug(f"Failed to resolve thread root for {message_id}: {e}")
+            return None
+
+    def get_thread_root_author_id(self, channel_id: str, message_id: str) -> Optional[str]:
+        """Return the root-author user id for a thread message."""
+        if not channel_id or not message_id:
+            return None
+        try:
+            with self.db.get_connection() as conn:
+                root_id = self._resolve_thread_root_id_conn(conn, channel_id, message_id)
+                if not root_id:
+                    return None
+                row = conn.execute(
+                    """
+                    SELECT user_id
+                    FROM channel_messages
+                    WHERE id = ? AND channel_id = ?
+                    """,
+                    (root_id, channel_id),
+                ).fetchone()
+                if not row:
+                    return None
+                return str(row['user_id']).strip() if row['user_id'] else None
+        except Exception as e:
+            logger.debug(f"Failed to fetch thread root author for {message_id}: {e}")
+            return None
+
+    def get_thread_subscription_state(
+        self,
+        user_id: str,
+        channel_id: str,
+        message_id: str,
+    ) -> Dict[str, Any]:
+        """Return explicit thread subscription state for a user/message."""
+        result = {
+            'thread_root_message_id': None,
+            'root_author_id': None,
+            'is_root_author': False,
+            'explicit_subscribed': None,
+            'subscribed': None,
+        }
+        if not user_id or not channel_id or not message_id:
+            return result
+
+        try:
+            with self.db.get_connection() as conn:
+                root_id = self._resolve_thread_root_id_conn(conn, channel_id, message_id)
+                if not root_id:
+                    return result
+                result['thread_root_message_id'] = root_id
+
+                root_row = conn.execute(
+                    """
+                    SELECT user_id
+                    FROM channel_messages
+                    WHERE id = ? AND channel_id = ?
+                    """,
+                    (root_id, channel_id),
+                ).fetchone()
+                if root_row and root_row['user_id']:
+                    root_author_id = str(root_row['user_id']).strip()
+                    result['root_author_id'] = root_author_id
+                    result['is_root_author'] = bool(root_author_id and root_author_id == user_id)
+
+                sub_row = conn.execute(
+                    """
+                    SELECT subscribed
+                    FROM channel_thread_subscriptions
+                    WHERE thread_root_message_id = ? AND user_id = ?
+                    LIMIT 1
+                    """,
+                    (root_id, user_id),
+                ).fetchone()
+                if sub_row is not None:
+                    explicit = bool(sub_row['subscribed'])
+                    result['explicit_subscribed'] = explicit
+                    result['subscribed'] = explicit
+                return result
+        except Exception as e:
+            logger.debug(
+                f"Failed to fetch thread subscription state user={user_id} channel={channel_id} message={message_id}: {e}"
+            )
+            return result
+
+    def set_thread_subscription(
+        self,
+        user_id: str,
+        channel_id: str,
+        message_id: str,
+        subscribed: bool,
+        *,
+        source: str = 'manual',
+        require_membership: bool = True,
+    ) -> Dict[str, Any]:
+        """Persist a per-thread subscription preference for a user."""
+        result = {
+            'success': False,
+            'thread_root_message_id': None,
+            'subscribed': bool(subscribed),
+        }
+        if not user_id or not channel_id or not message_id:
+            return result
+
+        try:
+            with self.db.get_connection() as conn:
+                if require_membership:
+                    member_row = conn.execute(
+                        """
+                        SELECT 1
+                        FROM channel_members
+                        WHERE channel_id = ? AND user_id = ?
+                        LIMIT 1
+                        """,
+                        (channel_id, user_id),
+                    ).fetchone()
+                    if not member_row:
+                        return result
+
+                root_id = self._resolve_thread_root_id_conn(conn, channel_id, message_id)
+                if not root_id:
+                    return result
+
+                conn.execute(
+                    """
+                    INSERT INTO channel_thread_subscriptions
+                    (channel_id, thread_root_message_id, user_id, subscribed, source, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ON CONFLICT(thread_root_message_id, user_id) DO UPDATE SET
+                        subscribed = excluded.subscribed,
+                        source = excluded.source,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        channel_id,
+                        root_id,
+                        user_id,
+                        1 if subscribed else 0,
+                        source or 'manual',
+                    ),
+                )
+                conn.commit()
+                result['success'] = True
+                result['thread_root_message_id'] = root_id
+                return result
+        except Exception as e:
+            logger.error(
+                f"Failed to set thread subscription user={user_id} channel={channel_id} message={message_id}: {e}",
+                exc_info=True,
+            )
+            return result
+
+    def get_thread_subscriber_ids(self, channel_id: str, thread_root_message_id: str) -> List[str]:
+        """Return subscribed user ids for a channel thread root."""
+        if not channel_id or not thread_root_message_id:
+            return []
+        try:
+            with self.db.get_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT ts.user_id
+                    FROM channel_thread_subscriptions ts
+                    INNER JOIN channel_members cm
+                      ON cm.channel_id = ts.channel_id
+                     AND cm.user_id = ts.user_id
+                    WHERE ts.channel_id = ?
+                      AND ts.thread_root_message_id = ?
+                      AND ts.subscribed = 1
+                    """,
+                    (channel_id, thread_root_message_id),
+                ).fetchall()
+                return [str(row['user_id']) for row in rows if row and row['user_id']]
+        except Exception as e:
+            logger.debug(
+                f"Failed to list thread subscribers channel={channel_id} root={thread_root_message_id}: {e}"
+            )
+            return []
 
     @log_performance('channels')
     def send_message(self, channel_id: str, user_id: str, content: str,

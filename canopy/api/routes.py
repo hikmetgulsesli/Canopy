@@ -37,6 +37,7 @@ from ..core.mentions import (
     split_mention_targets,
     build_preview,
     record_mention_activity,
+    record_thread_reply_activity,
     broadcast_mention_interaction,
 )
 from ..core.profile import (
@@ -113,6 +114,98 @@ def _default_agent_api_permissions() -> list[Permission]:
         Permission.READ_FEED,
         Permission.WRITE_FEED,
     ]
+
+
+_GENERIC_UPLOAD_CONTENT_TYPES = {
+    '',
+    'application/octet-stream',
+    'binary/octet-stream',
+    'application/x-binary',
+    'application/unknown',
+}
+_GENERIC_UPLOAD_FILENAMES = {
+    '',
+    'file',
+    'upload',
+    'attachment',
+    'unnamed_file',
+}
+
+
+def _is_generic_upload_metadata(filename: Any, content_type: Any) -> bool:
+    name = str(filename or '').strip()
+    ctype = str(content_type or '').strip().lower()
+    stem = os.path.splitext(name)[0].strip().lower()
+    return (
+        ctype in _GENERIC_UPLOAD_CONTENT_TYPES
+        or stem in _GENERIC_UPLOAD_FILENAMES
+        or not os.path.splitext(name)[1]
+    )
+
+
+def _normalize_channel_attachments(raw_attachments: Any, file_manager: Any) -> list[dict[str, Any]]:
+    """Canonicalize attachment payloads and hydrate metadata from file_id when possible."""
+    if not isinstance(raw_attachments, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for item in raw_attachments:
+        if isinstance(item, str):
+            att: dict[str, Any] = {'id': item}
+        elif isinstance(item, dict):
+            att = dict(item)
+        else:
+            continue
+
+        alias_name = (
+            att.get('name')
+            or att.get('filename')
+            or att.get('original_name')
+            or att.get('file_name')
+        )
+        if alias_name:
+            att['name'] = str(alias_name)
+        alias_type = (
+            att.get('type')
+            or att.get('content_type')
+            or att.get('mime_type')
+            or att.get('mime')
+        )
+        if alias_type:
+            att['type'] = str(alias_type)
+
+        file_id = str(att.get('id') or att.get('file_id') or '').strip()
+        if file_id:
+            att['id'] = file_id
+            att.setdefault('file_id', file_id)
+            try:
+                if file_manager:
+                    file_info = file_manager.get_file(file_id)
+                else:
+                    file_info = None
+            except Exception:
+                file_info = None
+            if file_info:
+                if not att.get('name') or str(att.get('name')).strip().lower() in _GENERIC_UPLOAD_FILENAMES:
+                    att['name'] = file_info.original_name
+                if not att.get('type') or str(att.get('type')).strip().lower() in _GENERIC_UPLOAD_CONTENT_TYPES:
+                    att['type'] = file_info.content_type
+                if att.get('size') in (None, '', 0):
+                    att['size'] = file_info.size
+
+        if not att.get('name'):
+            att['name'] = 'file'
+        if not att.get('type'):
+            att['type'] = 'application/octet-stream'
+        if att.get('size') is not None:
+            try:
+                att['size'] = int(att.get('size'))
+            except (TypeError, ValueError):
+                pass
+
+        normalized.append(att)
+
+    return normalized
 
 
 def create_api_blueprint() -> Blueprint:
@@ -3440,6 +3533,8 @@ def create_api_blueprint() -> Blueprint:
                     except Exception as p2p_err:
                         logger.warning(f"Failed to broadcast feed post via P2P: {p2p_err}")
 
+                local_mentioned_user_ids: list[str] = []
+
                 # Emit mention events for @handles
                 try:
                     mention_manager = current_app.config.get('MENTION_MANAGER')
@@ -6210,7 +6305,7 @@ def create_api_blueprint() -> Blueprint:
     def update_channel_message(channel_id, message_id):
         """Update a channel message. Only the author can edit their own message."""
         try:
-            db_manager, _, _, _, channel_manager, _, _, interaction_manager, profile_manager, _, p2p_manager = _get_app_components_any(current_app)
+            db_manager, _, _, _, channel_manager, file_manager, _, interaction_manager, profile_manager, _, p2p_manager = _get_app_components_any(current_app)
             from ..core.polls import parse_poll, poll_edit_lock_reason
 
             data = request.get_json() or {}
@@ -6252,8 +6347,9 @@ def create_api_blueprint() -> Blueprint:
                         final_attachments = json.loads(row['attachments'])
                     except Exception:
                         final_attachments = []
+                final_attachments = _normalize_channel_attachments(final_attachments, file_manager)
             else:
-                final_attachments = attachments if isinstance(attachments, list) else []
+                final_attachments = _normalize_channel_attachments(attachments, file_manager)
 
             success = channel_manager.update_message(
                 message_id=message_id,
@@ -6584,6 +6680,7 @@ def create_api_blueprint() -> Blueprint:
         _, _, _, _, _, file_manager, _, _, _, _, _ = _get_app_components_any(current_app)
 
         try:
+            generic_metadata_requested = False
             # --- Multipart upload ---
             if 'file' in request.files:
                 f = request.files['file']
@@ -6592,6 +6689,7 @@ def create_api_blueprint() -> Blueprint:
                 file_data = f.read()
                 original_name = f.filename
                 content_type = f.content_type or 'application/octet-stream'
+                generic_metadata_requested = _is_generic_upload_metadata(original_name, content_type)
             else:
                 # --- JSON / base64 upload ---
                 data = request.get_json(silent=True)
@@ -6607,6 +6705,18 @@ def create_api_blueprint() -> Blueprint:
                     return jsonify({'error': 'Invalid base64 in data field'}), 400
                 original_name = data.get('filename', 'upload')
                 content_type = data.get('content_type', 'application/octet-stream')
+                generic_metadata_requested = _is_generic_upload_metadata(original_name, content_type)
+
+            # Normalize generic upload metadata before validation so files
+            # with missing/weak metadata can still be classified safely.
+            try:
+                original_name, content_type = file_manager.normalize_upload_metadata(
+                    file_data=file_data,
+                    original_name=original_name,
+                    content_type=content_type,
+                )
+            except Exception:
+                pass
 
             # Validate file upload (MIME, magic bytes, extension, size, dangerous content)
             from ..security.file_validation import validate_file_upload, detect_zip_bomb
@@ -6634,13 +6744,21 @@ def create_api_blueprint() -> Blueprint:
             if not file_info:
                 return jsonify({'error': 'Failed to save file'}), 500
 
-            return jsonify({
+            response_payload = {
                 'success': True,
                 'file_id': file_info.id,
                 'filename': file_info.original_name,
                 'content_type': file_info.content_type,
                 'size': file_info.size,
-            }), 201
+            }
+            if generic_metadata_requested:
+                response_payload['nudge'] = (
+                    'Upload metadata was generic and has been normalized. '
+                    'Include filename (with extension) and accurate content_type for best cross-platform rendering.'
+                )
+                response_payload['metadata_normalized'] = True
+
+            return jsonify(response_payload), 201
 
         except Exception as e:
             logger.error(f"File upload failed: {e}", exc_info=True)
@@ -6770,7 +6888,7 @@ def create_api_blueprint() -> Blueprint:
     @require_auth(Permission.WRITE_FEED)
     def send_channel_message():
         """Send a message to a channel and broadcast to P2P peers."""
-        db_manager, _, _, _, channel_manager, _, _, _, _, _, p2p_manager = _get_app_components_any(current_app)
+        db_manager, _, _, _, channel_manager, file_manager, _, _, _, _, p2p_manager = _get_app_components_any(current_app)
         
         try:
             data = request.get_json()
@@ -6779,7 +6897,7 @@ def create_api_blueprint() -> Blueprint:
             
             content = data.get('content', '').strip()
             channel_id = data.get('channel_id')
-            attachments = data.get('attachments', [])
+            attachments = _normalize_channel_attachments(data.get('attachments', []), file_manager)
             parent_message_id = data.get('parent_message_id')
             security = data.get('security')
             ttl_mode = data.get('ttl_mode')
@@ -7212,10 +7330,15 @@ def create_api_blueprint() -> Blueprint:
                         origin_peer = p2p_manager.get_peer_id() if p2p_manager else None
 
                         if local_targets:
+                            local_mentioned_user_ids = [
+                                cast(str, t.get('user_id'))
+                                for t in local_targets
+                                if t.get('user_id')
+                            ]
                             record_mention_activity(
                                 mention_manager,
                                 p2p_manager,
-                                target_ids=[cast(str, t.get('user_id')) for t in local_targets if t.get('user_id')],
+                                target_ids=local_mentioned_user_ids,
                                 source_type='channel_message',
                                 source_id=message.id,
                                 author_id=g.api_key_info.user_id,
@@ -7239,6 +7362,24 @@ def create_api_blueprint() -> Blueprint:
                             )
                 except Exception as mention_err:
                     logger.warning(f"Channel mention processing failed: {mention_err}")
+
+                # Reply notifications for thread subscribers/root author.
+                if parent_message_id:
+                    try:
+                        record_thread_reply_activity(
+                            channel_manager=channel_manager,
+                            inbox_manager=current_app.config.get('INBOX_MANAGER'),
+                            channel_id=channel_id,
+                            reply_message_id=message.id,
+                            parent_message_id=parent_message_id,
+                            author_id=g.api_key_info.user_id,
+                            origin_peer=p2p_manager.get_peer_id() if p2p_manager else None,
+                            source_content=content,
+                            preview=build_preview(content or ''),
+                            mentioned_user_ids=local_mentioned_user_ids,
+                        )
+                    except Exception as reply_err:
+                        logger.debug(f"Thread reply inbox trigger skipped: {reply_err}")
                 
                 return jsonify({
                     'success': True,
@@ -7249,6 +7390,150 @@ def create_api_blueprint() -> Blueprint:
                 
         except Exception as e:
             logger.error(f"Failed to send channel message: {e}")
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @api.route('/channels/threads/subscription', methods=['GET'])
+    @require_auth(Permission.READ_FEED)
+    def get_channel_thread_subscription_api():
+        """Get per-thread inbox subscription state for the authenticated user."""
+        db_manager, _, _, _, channel_manager, _, _, _, _, _, _ = _get_app_components_any(current_app)
+        try:
+            channel_id = str(request.args.get('channel_id') or '').strip()
+            message_id = str(request.args.get('message_id') or '').strip()
+            if not channel_id or not message_id:
+                return jsonify({'error': 'channel_id and message_id are required'}), 400
+
+            access = channel_manager.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=g.api_key_info.user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                if str(access.get('reason') or '').startswith('governance_'):
+                    return jsonify({
+                        'error': 'Channel access blocked by admin governance policy',
+                        'reason': access.get('reason'),
+                    }), 403
+                return _channel_not_found_response()
+
+            state = channel_manager.get_thread_subscription_state(
+                g.api_key_info.user_id,
+                channel_id,
+                message_id,
+            )
+            root_id = state.get('thread_root_message_id')
+            if not root_id:
+                return jsonify({'error': 'Thread not found'}), 404
+
+            inbox_manager = current_app.config.get('INBOX_MANAGER')
+            auto_subscribe = True
+            if inbox_manager:
+                try:
+                    cfg = inbox_manager.get_config(g.api_key_info.user_id)
+                    auto_subscribe = bool(cfg.get('auto_subscribe_own_threads', True))
+                except Exception:
+                    auto_subscribe = True
+
+            explicit = state.get('explicit_subscribed')
+            effective = bool(explicit) if explicit is not None else bool(state.get('is_root_author') and auto_subscribe)
+            return jsonify({
+                'success': True,
+                'channel_id': channel_id,
+                'message_id': message_id,
+                'thread_root_message_id': root_id,
+                'root_author_id': state.get('root_author_id'),
+                'is_root_author': bool(state.get('is_root_author')),
+                'explicit_subscribed': explicit,
+                'auto_subscribe_own_threads': auto_subscribe,
+                'subscribed': effective,
+            })
+        except Exception as e:
+            logger.error(f"Get channel thread subscription failed: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @api.route('/channels/threads/subscription', methods=['POST'])
+    @require_auth(Permission.WRITE_FEED)
+    def set_channel_thread_subscription_api():
+        """Update per-thread inbox subscription state for the authenticated user."""
+        db_manager, _, _, _, channel_manager, _, _, _, _, _, _ = _get_app_components_any(current_app)
+        try:
+            data = request.get_json(silent=True) or {}
+            channel_id = str(data.get('channel_id') or '').strip()
+            message_id = str(data.get('message_id') or '').strip()
+            if not channel_id or not message_id:
+                return jsonify({'error': 'channel_id and message_id are required'}), 400
+
+            access = channel_manager.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=g.api_key_info.user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                if str(access.get('reason') or '').startswith('governance_'):
+                    return jsonify({
+                        'error': 'Channel access blocked by admin governance policy',
+                        'reason': access.get('reason'),
+                    }), 403
+                return _channel_not_found_response()
+
+            inbox_manager = current_app.config.get('INBOX_MANAGER')
+            state = channel_manager.get_thread_subscription_state(
+                g.api_key_info.user_id,
+                channel_id,
+                message_id,
+            )
+            root_id = state.get('thread_root_message_id')
+            if not root_id:
+                return jsonify({'error': 'Thread not found'}), 404
+
+            explicit = state.get('explicit_subscribed')
+            auto_subscribe = True
+            if inbox_manager:
+                try:
+                    cfg = inbox_manager.get_config(g.api_key_info.user_id)
+                    auto_subscribe = bool(cfg.get('auto_subscribe_own_threads', True))
+                except Exception:
+                    auto_subscribe = True
+            current_effective = bool(explicit) if explicit is not None else bool(state.get('is_root_author') and auto_subscribe)
+
+            subscribed_raw = data.get('subscribed')
+            if subscribed_raw is None:
+                subscribed = not current_effective
+            elif isinstance(subscribed_raw, bool):
+                subscribed = subscribed_raw
+            else:
+                subscribed = str(subscribed_raw).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+            update = channel_manager.set_thread_subscription(
+                user_id=g.api_key_info.user_id,
+                channel_id=channel_id,
+                message_id=message_id,
+                subscribed=subscribed,
+                source='manual',
+            )
+            if not update.get('success'):
+                return jsonify({'error': 'Failed to update thread subscription'}), 500
+
+            new_state = channel_manager.get_thread_subscription_state(
+                g.api_key_info.user_id,
+                channel_id,
+                message_id,
+            )
+            explicit_after = new_state.get('explicit_subscribed')
+            effective_after = bool(explicit_after) if explicit_after is not None else bool(new_state.get('is_root_author') and auto_subscribe)
+            return jsonify({
+                'success': True,
+                'channel_id': channel_id,
+                'message_id': message_id,
+                'thread_root_message_id': new_state.get('thread_root_message_id'),
+                'root_author_id': new_state.get('root_author_id'),
+                'is_root_author': bool(new_state.get('is_root_author')),
+                'explicit_subscribed': explicit_after,
+                'auto_subscribe_own_threads': auto_subscribe,
+                'subscribed': effective_after,
+            })
+        except Exception as e:
+            logger.error(f"Set channel thread subscription failed: {e}", exc_info=True)
             return jsonify({'error': 'Internal server error'}), 500
 
     @api.route('/channels/<channel_id>/search', methods=['GET'])

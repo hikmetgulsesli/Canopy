@@ -746,7 +746,8 @@
     /* Search bar */
     #channel-search-bar {
         transition: width 0.3s ease;
-        width: 220px;
+        width: 100%;
+        min-width: 0;
     }
     .search-results-badge {
         font-size: 0.75rem;
@@ -756,53 +757,154 @@
     .channel-header {
         background: var(--canopy-bg-card);
         border-color: var(--canopy-border) !important;
+        padding: 0.55rem 0.85rem !important;
     }
     .channel-header-row {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        gap: 1rem;
+        gap: 0.6rem;
+        flex-wrap: nowrap;
+        min-width: 0;
     }
     .channel-header-left {
         display: flex;
         align-items: center;
         gap: 0.5rem;
         min-width: 0;
+        flex: 0 1 auto;
     }
     .channel-header-title {
         min-width: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.08rem;
     }
     .channel-header-title h4 {
-        font-size: 1.05rem;
+        font-size: 1.02rem;
+        line-height: 1.05;
+        margin: 0;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        min-width: 0;
+        max-width: clamp(120px, 22vw, 250px);
     }
     .channel-header-title small {
         display: block;
+        margin: 0;
+        line-height: 1.1;
+        font-size: 0.78rem;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        max-width: 40vw;
+        max-width: clamp(120px, 28vw, 320px);
+        flex-shrink: 1;
     }
     .channel-header-right {
         display: flex;
         align-items: center;
-        gap: 0.5rem;
-        flex-wrap: wrap;
+        gap: 0.35rem;
+        flex-wrap: nowrap;
         justify-content: flex-end;
         min-width: 0;
+        flex: 1 1 auto;
     }
     .channel-header-actions,
     .channel-header-controls {
         display: flex;
         align-items: center;
-        gap: 0.5rem;
-        flex-wrap: wrap;
+        gap: 0.35rem;
+        flex-wrap: nowrap;
+        flex: 0 0 auto;
     }
     .channel-header-search {
         display: flex;
         align-items: center;
+        flex: 1 1 190px;
+        min-width: 140px;
+        max-width: 260px;
+    }
+    .channel-header .btn.btn-sm {
+        padding: 0.25rem 0.5rem;
+    }
+    .channel-header .channel-toggle-btn {
+        flex: 0 0 auto;
+    }
+    .channel-members-label {
+        white-space: nowrap;
+    }
+    .channel-members-count {
+        white-space: nowrap;
+    }
+
+    @media (max-width: 1199.98px) {
+        .channel-header-title small {
+            display: none;
+        }
+        .channel-header-title h4 {
+            max-width: clamp(100px, 20vw, 210px);
+        }
+        .channel-privacy-btn .privacy-label {
+            display: none;
+        }
+        .channel-privacy-btn {
+            min-width: 0;
+            padding-left: 0.42rem;
+            padding-right: 0.42rem;
+        }
+        .channel-members-label {
+            display: none;
+        }
+        .channel-header-search {
+            flex-basis: 140px;
+            min-width: 100px;
+            max-width: 180px;
+        }
+    }
+
+    @media (max-width: 1099.98px) {
+        .channel-header-title h4 {
+            max-width: min(20vw, 165px);
+        }
+        .channel-members-count {
+            display: none;
+        }
+        .channel-header-search {
+            flex-basis: 120px;
+            min-width: 84px;
+            max-width: 150px;
+        }
+    }
+
+    @media (max-width: 991.98px) {
+        .channel-header-title small {
+            display: none;
+        }
+        .channel-privacy-btn {
+            min-width: 0;
+            padding-left: 0.42rem;
+            padding-right: 0.42rem;
+        }
+        .channel-header-search {
+            flex-basis: 130px;
+            min-width: 105px;
+        }
+    }
+
+    @media (max-width: 899.98px) {
+        #channel-refresh-btn {
+            display: none;
+        }
+        .channel-header-title h4 {
+            max-width: min(18vw, 130px);
+        }
+        .channel-header-search {
+            flex-basis: 92px;
+            min-width: 72px;
+            max-width: 110px;
+        }
     }
 
     /* Emoji picker */
@@ -1012,75 +1114,61 @@
             padding: 0.45rem 0.55rem !important;
         }
         .channel-header-row {
-            flex-direction: row;
-            align-items: flex-start;
-            gap: 0.4rem;
+            align-items: center;
+            gap: 0.3rem;
         }
         .channel-header-left {
-            flex: 1;
+            flex: 0 1 auto;
             min-width: 0;
+            gap: 0.35rem;
         }
         .channel-header-title h4 {
             font-size: 0.97rem;
+            max-width: min(42vw, 180px);
         }
         .channel-header-title small {
-            font-size: 0.72rem;
-            max-width: 100%;
+            display: none;
         }
         .channel-header-right {
             flex: 1;
             min-width: 0;
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            grid-template-areas:
-                "actions controls"
-                "search search";
-            gap: 0.35rem;
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 0.22rem;
             align-items: center;
         }
         .channel-header-actions,
         .channel-header-controls {
-            width: auto;
-            gap: 0.3rem;
-        }
-        .channel-header-actions {
-            grid-area: actions;
-            justify-content: flex-start;
-            min-width: 0;
-        }
-        .channel-header-controls {
-            grid-area: controls;
-            justify-content: flex-end;
+            gap: 0.2rem;
+            flex: 0 0 auto;
         }
         .channel-header-search {
-            grid-area: search;
-            width: 100%;
+            flex: 1 1 auto;
+            min-width: 90px;
+            max-width: none;
         }
         #channel-search-bar {
             width: 100% !important;
         }
         #channel-search-bar .form-control {
-            min-height: 30px;
-            font-size: 0.82rem;
+            min-height: 28px;
+            font-size: 0.78rem;
             padding-top: 0.2rem;
             padding-bottom: 0.2rem;
+            padding-left: 0.45rem;
+            padding-right: 0.45rem;
         }
         #channel-search-bar .btn {
-            padding: 0.2rem 0.45rem;
+            padding: 0.18rem 0.36rem;
         }
         .channel-privacy-btn {
             min-width: 0;
-            max-width: 170px;
-            padding-left: 0.4rem;
-            padding-right: 0.4rem;
+            max-width: none;
+            padding-left: 0.35rem;
+            padding-right: 0.35rem;
         }
         .channel-privacy-btn .privacy-label {
-            font-size: 0.7rem;
-            display: inline-block;
-            max-width: 95px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            display: none;
         }
         .channel-members-label {
             display: none;
@@ -1314,7 +1402,7 @@
                             </div>
                         </div>
                         <div class="channel-header-controls">
-                            <button class="btn btn-outline-secondary btn-sm" onclick="refreshMessages()">
+                            <button class="btn btn-outline-secondary btn-sm" id="channel-refresh-btn" onclick="refreshMessages()">
                                 <i class="bi bi-arrow-clockwise"></i>
                             </button>
                             <button class="btn btn-outline-secondary btn-sm" id="channel-members-btn" onclick="openChannelMembersModal()">
@@ -1568,12 +1656,16 @@
     border-radius: 0.5rem;
 }
 
-.message-item:has(.dropdown.show) {
-    z-index: 10;
+/* Keep an open message row above neighboring rows so dropdowns that open
+   downward are not painted behind later siblings in the feed stack. */
+.message-item:has(.dropdown-menu.show),
+.message-item:has(.btn-group.show),
+.message-item.dropdown-open {
+    z-index: 30;
 }
 
 .message-item .dropdown-menu {
-    z-index: 1055;
+    z-index: 2000;
 }
 
 .message-item:hover {
@@ -3811,6 +3903,11 @@ function renderMessage(message, userInfo, isReply) {
                                 onclick="setReplyTo('${message.id}', '${user.display_name.replace(/'/g, "\\'")}', \`${escapeHtml(message.content || '').slice(0, 80).replace(/`/g, "'")}\`)">
                             <i class="bi bi-reply"></i> Reply
                         </button>
+                        <button class="btn btn-sm btn-outline-secondary"
+                                onclick="toggleThreadInboxSubscription('${message.id}')"
+                                title="Mute or unmute inbox notifications for this thread">
+                            <i class="bi bi-bell-slash"></i> Thread inbox
+                        </button>
                         ${(message.content || '').trim() ? `
                         <div class="btn-group">
                             <button class="btn btn-sm btn-outline-secondary dropdown-toggle"
@@ -5648,6 +5745,42 @@ function cancelReply() {
     replyToMessageId = null;
     replyToAuthor = '';
     document.getElementById('reply-context').style.display = 'none';
+}
+
+function toggleThreadInboxSubscription(messageId) {
+    if (!currentChannelId || !messageId) return;
+    const channelId = String(currentChannelId);
+    const lookupUrl = `/ajax/channel_threads/subscription?channel_id=${encodeURIComponent(channelId)}&message_id=${encodeURIComponent(messageId)}`;
+    apiCall(lookupUrl)
+        .then(state => {
+            const currentlySubscribed = Boolean(state && state.subscribed);
+            return apiCall('/ajax/channel_threads/subscription', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    channel_id: channelId,
+                    message_id: messageId,
+                    subscribed: !currentlySubscribed,
+                }),
+            });
+        })
+        .then(result => {
+            const subscribed = Boolean(result && result.subscribed);
+            if (typeof showAlert === 'function') {
+                showAlert(
+                    subscribed
+                        ? 'Thread inbox enabled. Replies in this thread will notify you.'
+                        : 'Thread inbox muted. Replies here will stay out of your inbox unless you are mentioned.',
+                    'success'
+                );
+            }
+        })
+        .catch(err => {
+            const msg = (err && err.message) ? err.message : 'Failed to update thread inbox setting';
+            if (typeof showAlert === 'function') {
+                showAlert(msg, 'warning');
+            }
+        });
 }
 
 // Text-based file extensions that support inline preview
@@ -8037,6 +8170,20 @@ document.addEventListener('DOMContentLoaded', function() {
         if (typeof ensureChannelIndex === 'function') {
             ensureChannelIndex();
         }
+
+        // Dropdown stacking fallback: ensure the message row that owns an
+        // open dropdown sits above adjacent rows, even when :has() support
+        // is partial/inconsistent.
+        document.addEventListener('shown.bs.dropdown', (event) => {
+            const trigger = event.target instanceof Element ? event.target : null;
+            const msgRow = trigger ? trigger.closest('.message-item') : null;
+            if (msgRow) msgRow.classList.add('dropdown-open');
+        });
+        document.addEventListener('hidden.bs.dropdown', (event) => {
+            const trigger = event.target instanceof Element ? event.target : null;
+            const msgRow = trigger ? trigger.closest('.message-item') : null;
+            if (msgRow) msgRow.classList.remove('dropdown-open');
+        });
         
         // Test that functions are defined
         console.log('Functions check:');

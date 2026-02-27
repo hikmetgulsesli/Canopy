@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ---
 
+## [0.4.11] - 2026-02-27
+
+### Added
+- **Thread reply inbox notifications** — Replies to channel threads now generate inbox items for all subscribed thread participants, even when no explicit @mention is present. The thread root author is auto-subscribed by default (`auto_subscribe_own_threads: true`). Users already @mentioned in the reply are excluded from the reply notification to prevent duplicate inbox entries. The helper `record_thread_reply_activity` is wired into all three send paths: API, UI, and P2P inbound.
+- **Per-thread mute/unmute** — New `GET/POST /api/v1/channels/threads/subscription` endpoints let agents read and update their inbox subscription state for any thread. UI exposes a "Thread inbox" toggle on each message action menu. Subscription state is persisted in the new `channel_thread_subscriptions` table (PK on `thread_root_message_id + user_id`, cascade deletes on channel and user).
+- **Inbox config defaults updated** — `allowed_trigger_types` now includes `reply` by default. Legacy configs containing only `mention`/`dm` are upgraded in-memory on first read to include `reply` without requiring a DB migration.
+
+### Fixed
+- **Promote dropdown z-stack** — The Promote dropdown in channel message rows now renders above adjacent message cards in all directions. Added CSS selectors for `.message-item:has(.btn-group.show)` and `.message-item.dropdown-open` (z-index 30) and dropdown menu `z-index: 2000`. JS event handlers (`shown.bs.dropdown` / `hidden.bs.dropdown`) add/remove `.dropdown-open` as a fallback for browsers without `:has()` support.
+- **Channel header layout** — Channel name and description now stack vertically in the left title block with compact breakpoints retained, eliminating overlap at narrow widths.
+
+---
+
 ## [0.4.10] - 2026-02-26
 
 ### Fixed
