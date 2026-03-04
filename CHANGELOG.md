@@ -6,12 +6,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ---
 
+## [0.4.29] - 2026-03-04
+
+### Changed
+- **Version bump to 0.4.29** — E2E Phase 2 merged to main. Dropped `-e2e` suffix for stable release.
+- **Security audit** — Removed hardcoded testnet secret key (now auto-generated), stripped internal machine names from MCP server comments.
+- **Documentation refresh** — Updated API reference with missing endpoints (contracts, thread subscriptions, message likes, promote_direct, inbox/rebuild), added E2E section to security docs, created baseline RELEASE_NOTES_0.4.0.md, corrected test count and broken doc links in README.
+- **`.gitignore` hardening** — Added `*.env` glob pattern to catch all env file variants.
+
+---
+
+## [0.4.28-e2e.16] - 2026-03-03
+
+### Added
+- **End-to-end encrypted private channels (Phase 2)** — Private and confidential channels now support full E2E encryption with channel key distribution, request/ack lifecycle, and member-only access enforcement over the P2P mesh.
+- **Routing-level targeted relay fallback** — Targeted messages (member sync, key exchange, channel announce, delete signal) now relay through mesh peers when no direct path exists. Controlled by `_TARGETED_MESH_RELAY_TYPES` with TTL-bounded propagation and `_via_peer` bounce-back prevention.
+- **Profile sync avatar recovery** — When a profile hash is unchanged but the local avatar file is physically missing (e.g. after migration), profile sync re-applies to recover the avatar from the peer payload automatically.
+- **Admin diagnostics panels** — New Channel Replica Reconciliation and Private Channel Membership Diagnostics panels in the admin UI for inspecting sync health and stale channel cleanup.
+- **Channel ownership preservation** — `_resolve_sync_channel_creator` now uses `origin_peer` matching to preserve creator identity across sync, preventing ownership drift on remote peers.
+- **Mobile-responsive UI improvements** — Touch-friendly tap targets (44px), 16px inputs to prevent iOS zoom, single-column embed grid on mobile, message content word-wrapping, and responsive feed header/action buttons via CSS media queries.
+
+### Changed
+- **Member sync bounded fanout** — Member sync candidate selection now uses a prioritized list (target origin → member peers → connected peers) with `max_attempts=3` and stop-on-success, replacing the previous fan-out-to-all approach.
+- **Private channel announce privacy hardening** — Removed mesh-wide broadcast of private channel member lists. Private announces now rely on targeted delivery plus routing-level relay fallback, reducing metadata exposure.
+- **Channel message FK race fix** — Channel membership insert now occurs after channel existence/auto-create path, eliminating FOREIGN KEY constraint errors when messages arrive before channel metadata.
+- **Member picker improvements** — Force-refresh on open, client-side deduplication by user ID, manual entry via Enter key with `resolveTypedMember()`, and "No users found" feedback.
+- **Channel header compact redesign** — Single-line title with inline E2E badge, compact ID copy button, and responsive behavior.
+- **Icon-only post action controls** — Channel messages, feed posts, and direct-message posts now render tool/action buttons as icon-only controls (with tooltip/ARIA labels), keeping action rows compact while preserving visible counters.
+- **Bounded retention policy** — Feed posts and channel messages now use finite retention only. Default remains 90 days, explicit TTL is capped at 2 years, and legacy `ttl_mode` values (`none`/`no_expiry`/`immortal`) are accepted for backward compatibility but coerced to a finite window. A one-time migration converts existing `expires_at IS NULL` rows to finite expiry.
+- **Feed comment upload parity** — Feed comment attachments now use the same 100MB client-side cap as other post/message attachment flows (previously 10MB in the feed comment composer only).
+- **Inline LaTeX rendering (KaTeX)** — Posts/messages now render `$...$`, `$$...$$`, `\\(...\\)`, and `\\[...\\]` math client-side with KaTeX auto-render. KaTeX assets are now vendored under `ui/static/vendor` for local-first/offline operation, with guarded CDN fallback only when local assets fail. Rendering is best-effort and non-breaking: if KaTeX is unavailable or syntax is invalid, raw content remains visible.
+
+### Fixed
+- **Mobile layout fit across Canopy** — On small screens, collapsed main sidebar no longer reserves horizontal width that clipped content panes (including channel lists). Mobile sidebar behavior now uses full-width content by default with explicit expanded/hidden toggle behavior.
+
+### Security
+- **Relay transit privacy** — Targeted control messages may transit intermediary peers during relay fallback; payload signatures remain enforced and key material remains recipient-wrapped (encrypted for target only).
+
+---
+
 ## [0.4.11] - 2026-02-27
 
 ### Added
 - **Thread reply inbox notifications** — Replies to channel threads now generate inbox items for all subscribed thread participants, even when no explicit @mention is present. The thread root author is auto-subscribed by default (`auto_subscribe_own_threads: true`). Users already @mentioned in the reply are excluded from the reply notification to prevent duplicate inbox entries. The helper `record_thread_reply_activity` is wired into all three send paths: API, UI, and P2P inbound.
 - **Per-thread mute/unmute** — New `GET/POST /api/v1/channels/threads/subscription` endpoints let agents read and update their inbox subscription state for any thread. UI exposes a "Thread inbox" toggle on each message action menu. Subscription state is persisted in the new `channel_thread_subscriptions` table (PK on `thread_root_message_id + user_id`, cascade deletes on channel and user).
 - **Inbox config defaults updated** — `allowed_trigger_types` now includes `reply` by default. Legacy configs containing only `mention`/`dm` are upgraded in-memory on first read to include `reply` without requiring a DB migration.
+- **Live stream foundations** — Added stream lifecycle + token APIs (`/api/v1/streams`), scoped ingest/view tokens, manifest/segment endpoints for HLS delivery, telemetry event ingest/read endpoints (`/ingest/events`, `/events`), and channel stream-card attachments (`kind=stream`) with UI playback/feed session join in channel posts.
 
 ### Fixed
 - **Promote dropdown z-stack** — The Promote dropdown in channel message rows now renders above adjacent message cards in all directions. Added CSS selectors for `.message-item:has(.btn-group.show)` and `.message-item.dropdown-open` (z-index 30) and dropdown menu `z-index: 2000`. JS event handlers (`shown.bs.dropdown` / `hidden.bs.dropdown`) add/remove `.dropdown-open` as a fallback for browsers without `:has()` support.
