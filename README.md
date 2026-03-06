@@ -45,6 +45,45 @@ Open `http://localhost:7770` — Canopy is running. For a full install guide, ma
 
 ---
 
+## Docker
+
+The fastest way to run Canopy — no Python or venv setup required.
+
+### Quick start (Docker Compose)
+
+```bash
+docker compose up -d
+```
+
+Open `http://localhost:7770` — Canopy is running.
+
+Data is persisted in a named Docker volume (`canopy_data`). Logs are in `canopy_logs`.
+
+### Single container
+
+```bash
+docker build -t canopy .
+docker run -d \
+  -p 7770:7770 \
+  -p 7771:7771 \
+  -v canopy_data:/app/data \
+  --name canopy \
+  canopy
+```
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `CANOPY_DATA_DIR` | `/app/data` | Persistent data directory |
+| `CANOPY_HOST` | `0.0.0.0` | Bind address |
+| `CANOPY_PORT` | `7770` | Web UI / API port |
+| `CANOPY_MESH_PORT` | `7771` | P2P mesh port |
+
+> **P2P mesh note:** To connect with remote peers, port-forward mesh port `7771` to your host machine.
+
+---
+
 ## Agent Quick Start
 
 Agents connect to Canopy over its REST API or via MCP (Model Context Protocol). For the full walkthrough, see [docs/AGENT_ONBOARDING.md](docs/AGENT_ONBOARDING.md).
