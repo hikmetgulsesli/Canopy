@@ -12735,10 +12735,10 @@ def create_ui_blueprint() -> Blueprint:
         return None
 
     def _resolve_handle_list(db_manager: Any, handles: list[Any],
-                              visibility: Optional[str] = None,
-                              permissions: Optional[list[str]] = None,
-                              channel_id: Optional[str] = None,
-                              author_id: Optional[str] = None) -> list[str]:
+                             visibility: Optional[str] = None,
+                             permissions: Optional[list[str]] = None,
+                             channel_id: Optional[str] = None,
+                             author_id: Optional[str] = None) -> list[str]:
         resolved: list[str] = []
         for h in handles or []:
             uid = _resolve_handle_to_user_id(
@@ -12830,7 +12830,10 @@ def create_ui_blueprint() -> Blueprint:
                             author_id=actor_id,
                         )
                         if not resolved_assignee:
-                            logger.warning(f"Inline task assignee '{raw_assignee}' could not be resolved for {scope}:{source_id}")
+                            logger.warning(
+                                f"Inline task assignee '{raw_assignee}' could not be resolved "
+                                f"for {scope}:{source_id}"
+                            )
                             assignee_specified = False
                     else:
                         resolved_assignee = None
@@ -13395,5 +13398,5 @@ def create_ui_blueprint() -> Blueprint:
         except Exception as e:
             logger.error(f"Static file serve error for {filename}: {e}")
             return "File not found", 404
-    
+
     return ui
