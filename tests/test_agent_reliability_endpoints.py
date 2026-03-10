@@ -199,12 +199,12 @@ class TestAgentReliabilityEndpoints(unittest.TestCase):
                     '2026-02-23T10:01:00+00:00'
                 ),
                 (
-                    'forge-agent', 'Forge_McClaw.74ugCK', 'Forge McClaw', 'pk-f', 'pw-f',
+                    'forge-agent', 'agent_operator.74ugCK', 'Agent Operator', 'pk-f', 'pw-f',
                     'agent', 'active', None, 'Build and systems',
                     '2026-02-23T10:02:00+00:00'
                 ),
                 (
-                    'human-owner', 'maddog', 'Maddog', 'pk-h', 'pw-h',
+                    'human-owner', 'project_owner', 'Project Owner', 'pk-h', 'pw-h',
                     'human', 'active', None, 'Owner account',
                     '2026-02-23T10:03:00+00:00'
                 ),
@@ -483,8 +483,8 @@ class TestAgentReliabilityEndpoints(unittest.TestCase):
 
         forge = next((a for a in agents if a.get('user_id') == 'forge-agent'), None)
         self.assertIsNotNone(forge)
-        self.assertEqual(forge.get('stable_handle'), 'Forge_McClaw')
-        self.assertIn('Forge_McClaw.74ugCK', forge.get('mention_handles') or [])
+        self.assertEqual(forge.get('stable_handle'), 'agent_operator')
+        self.assertIn('agent_operator.74ugCK', forge.get('mention_handles') or [])
         self.assertEqual(forge.get('unacked_mentions'), 1)
         self.assertEqual(forge.get('pending_inbox'), 1)
         self.assertIn(forge.get('presence_state'), {'online', 'recent', 'idle', 'offline', 'no_checkin', 'remote_unknown'})

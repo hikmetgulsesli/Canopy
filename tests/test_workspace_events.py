@@ -154,7 +154,7 @@ class TestWorkspaceEvents(unittest.TestCase):
             VALUES (?, ?, ?, ?)
             """,
             [
-                ('owner-user', 'maddog', 'Maddog', None),
+                ('owner-user', 'project_owner', 'Project Owner', None),
                 ('agent-a', 'Agent_A', 'Agent A', None),
                 ('agent-b', 'Agent_B', 'Agent B', None),
                 ('observer', 'Observer', 'Observer', None),
