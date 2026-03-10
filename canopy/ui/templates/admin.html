@@ -109,6 +109,95 @@
     margin-top: 0.25rem;
 }
 
+.workspace-event-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.workspace-event-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.58rem;
+    border-radius: 999px;
+    border: 1px solid rgba(122, 151, 215, 0.24);
+    background: rgba(15, 29, 49, 0.74);
+    color: #d9e7ff;
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+}
+
+.workspace-event-chip strong {
+    color: #8ef0d6;
+    font-weight: 700;
+}
+
+.workspace-event-list {
+    max-height: 340px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.workspace-event-item {
+    border: 1px solid rgba(122, 151, 215, 0.22);
+    border-radius: 14px;
+    background: linear-gradient(145deg, rgba(18, 33, 56, 0.84), rgba(12, 24, 43, 0.78));
+    padding: 0.75rem 0.8rem;
+    margin-bottom: 0.6rem;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.workspace-event-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.45rem;
+    margin-bottom: 0.35rem;
+}
+
+.workspace-event-type {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #7dd3fc;
+    font-weight: 700;
+}
+
+.workspace-event-seq {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.72rem;
+    color: #9cb2cf;
+}
+
+.workspace-event-preview {
+    color: #dde9ff;
+    font-size: 0.88rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.workspace-event-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+}
+
+.workspace-event-meta .badge {
+    border: 1px solid rgba(122, 151, 215, 0.22);
+    background: rgba(8, 17, 30, 0.5);
+    color: #b8c8e6;
+    font-weight: 500;
+}
+
 .queue-list {
     max-height: 320px;
     overflow-y: auto;
@@ -302,18 +391,264 @@
     font-size: 0.72rem;
     color: #9fb2cf;
 }
+
+.id-port-qr-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    align-items: center;
+    justify-content: center;
+    min-height: 196px;
+    border: 1px dashed rgba(122, 151, 215, 0.34);
+    border-radius: 12px;
+    background: rgba(8, 20, 37, 0.46);
+    padding: 0.7rem;
+}
+
+.id-port-qr-code {
+    min-width: 170px;
+    min-height: 170px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.id-port-token-hint {
+    font-size: 0.75rem;
+    color: #9cb2cf;
+}
+
+.id-port-scan-shell {
+    border: 1px solid rgba(122, 151, 215, 0.24);
+    border-radius: 10px;
+    background: rgba(8, 19, 35, 0.58);
+    padding: 0.45rem;
+}
+
+.id-port-scan-video {
+    width: 100%;
+    max-height: 160px;
+    object-fit: cover;
+    border-radius: 8px;
+    background: rgba(5, 13, 24, 0.86);
+}
+
+.id-port-panel .form-label {
+    margin-bottom: 0.2rem;
+}
+
+.id-port-panel .input-group-sm .btn {
+    white-space: nowrap;
+}
+
+.admin-page-header {
+    gap: 0.7rem;
+    flex-wrap: wrap;
+}
+
+.admin-summary-row {
+    --bs-gutter-y: 0.75rem;
+}
+
+.admin-transfer-select {
+    max-width: 220px;
+}
+
+.admin-users-search-wrap {
+    max-width: 360px;
+}
+
+.admin-users-actions {
+    min-width: 180px;
+}
+
+.keys-new-key-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.keys-new-key-row .form-control {
+    min-width: 0;
+}
+
+@media (max-width: 1400px) {
+    .id-port-panel .row.g-2 {
+        --bs-gutter-x: 0.45rem;
+        --bs-gutter-y: 0.45rem;
+    }
+
+    .id-port-panel .form-control-sm,
+    .id-port-panel .form-select-sm {
+        font-size: 0.8rem;
+        padding: 0.24rem 0.44rem;
+    }
+
+    .id-port-panel .btn.btn-sm {
+        --bs-btn-padding-y: 0.24rem;
+        --bs-btn-padding-x: 0.48rem;
+        --bs-btn-font-size: 0.78rem;
+    }
+
+    .id-port-panel .id-port-token-hint {
+        font-size: 0.71rem;
+    }
+}
+
+@media (max-width: 1200px) {
+    .id-port-panel .input-group-sm {
+        flex-wrap: wrap;
+        gap: 0.3rem;
+    }
+
+    .id-port-panel .input-group-sm > .form-control {
+        flex: 1 0 100%;
+        border-radius: 0.375rem !important;
+    }
+
+    .id-port-panel .input-group-sm > .btn {
+        border-radius: 0.375rem !important;
+    }
+
+    .id-port-qr-shell {
+        min-height: 158px;
+        padding: 0.52rem;
+    }
+
+    .id-port-qr-code {
+        min-width: 145px;
+        min-height: 145px;
+    }
+}
+
+@media (max-width: 992px) {
+    .id-port-panel .ops-grid {
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    }
+
+    .id-port-panel pre {
+        max-height: 170px !important;
+    }
+
+    .workspace-shell .card-header .d-flex.align-items-center.gap-2 {
+        width: 100%;
+    }
+
+    .workspace-shell #workspace-search {
+        max-width: none !important;
+    }
+}
+
+@media (max-width: 768px) {
+    .admin-page-header h1 {
+        font-size: 1.35rem;
+    }
+
+    .admin-summary-row .card-body {
+        padding: 0.75rem;
+    }
+
+    .ops-grid {
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    }
+
+    .admin-users-search-wrap {
+        max-width: none;
+        width: 100%;
+    }
+
+    .admin-users-actions {
+        width: 100%;
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .admin-users-actions .btn {
+        width: 100%;
+    }
+
+    #admin-users-table td {
+        vertical-align: top;
+    }
+
+    #keys-panel .form-check-inline {
+        display: flex;
+        width: 100%;
+        margin-right: 0;
+        margin-bottom: 0.4rem;
+    }
+
+    #keys-panel .form-check-inline .form-check-input {
+        margin-top: 0.2rem;
+    }
+
+    .workspace-shell .card-header .d-flex.align-items-center.gap-2 {
+        justify-content: space-between;
+    }
+
+    .workspace-shell .workspace-avatar-wrap {
+        width: 60px;
+        height: 60px;
+        border-radius: 12px;
+    }
+
+    .workspace-shell .workspace-panel {
+        padding: 0.75rem;
+    }
+}
+
+@media (max-width: 576px) {
+    .admin-page-header {
+        margin-bottom: 0.75rem !important;
+    }
+
+    .admin-summary-row .h4 {
+        font-size: 1.1rem;
+    }
+
+    .admin-transfer-controls {
+        align-items: stretch;
+    }
+
+    .admin-transfer-controls .form-label {
+        width: 100%;
+    }
+
+    .admin-transfer-select,
+    #transfer-admin-btn {
+        max-width: none;
+        width: 100%;
+    }
+
+    .admin-users-actions {
+        grid-template-columns: 1fr;
+    }
+
+    .ops-value {
+        font-size: 1.06rem;
+    }
+
+    #keys-panel {
+        padding: 0.75rem !important;
+    }
+
+    .keys-new-key-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
+<div class="d-flex justify-content-between align-items-center mb-4 admin-page-header">
     <h1 class="h3 mb-0">
         <i class="bi bi-shield-lock"></i> Admin
     </h1>
 </div>
 
-<div class="row mb-4">
-    <div class="col-md-4">
+<div class="row mb-4 admin-summary-row">
+    <div class="col-md-4 admin-summary-col">
         <div class="card">
             <div class="card-body d-flex align-items-center">
                 <div class="me-3"><i class="bi bi-people fs-2 text-primary"></i></div>
@@ -324,7 +659,7 @@
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-4 admin-summary-col">
         <div class="card">
             <div class="card-body d-flex align-items-center">
                 <div class="me-3"><i class="bi bi-hourglass-split fs-2 text-warning"></i></div>
@@ -335,7 +670,7 @@
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-4 admin-summary-col">
         <div class="card">
             <div class="card-body d-flex align-items-center">
                 <div class="me-3"><i class="bi bi-robot fs-2 text-info"></i></div>
@@ -448,6 +783,289 @@
     </div>
 </div>
 
+<div class="card subsystem-shell mb-4">
+    <div class="card-header">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <div>
+                <h5 class="mb-0"><i class="bi bi-diagram-2 me-1"></i> Mesh Sync Diagnostics</h5>
+                <div class="small text-muted">Live digest-assisted catch-up telemetry and mesh health counters.</div>
+            </div>
+            <button type="button" class="btn btn-outline-info btn-sm" id="mesh-diag-refresh-btn">
+                <i class="bi bi-arrow-clockwise me-1"></i>Refresh Mesh
+            </button>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="ops-grid mb-3">
+            <div class="ops-tile">
+                <div class="ops-label">Connected Peers</div>
+                <div class="ops-value" id="mesh-diag-connected">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Known Peers</div>
+                <div class="ops-value" id="mesh-diag-known">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Sync Queue Depth</div>
+                <div class="ops-value" id="mesh-diag-queue">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Digest Enabled</div>
+                <div class="ops-value" id="mesh-diag-enabled">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Capability Gate</div>
+                <div class="ops-value" id="mesh-diag-capability">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Max Channels/Req</div>
+                <div class="ops-value" id="mesh-diag-max-channels">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Digest Requests</div>
+                <div class="ops-value" id="mesh-diag-requests">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Channels Checked</div>
+                <div class="ops-value" id="mesh-diag-checked">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Channels Matched</div>
+                <div class="ops-value" id="mesh-diag-matched">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Channels Mismatched</div>
+                <div class="ops-value" id="mesh-diag-mismatched">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Digest Fallbacks</div>
+                <div class="ops-value" id="mesh-diag-fallbacks">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Digest Match Rate</div>
+                <div class="ops-value" id="mesh-diag-match-rate">—</div>
+                <div class="ops-meta">Last used: <span id="mesh-diag-last-used">—</span></div>
+            </div>
+        </div>
+        <h6 class="mb-2">Recent failures / security blocks</h6>
+        <div id="mesh-diag-failures" class="small text-muted">
+            No recent failures.
+        </div>
+    </div>
+</div>
+
+<div class="card subsystem-shell mb-4">
+    <div class="card-header">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <div>
+                <h5 class="mb-0"><i class="bi bi-broadcast-pin me-1"></i> Workspace Event Journal</h5>
+                <div class="small text-muted">Operator view of the local Patch 1 event spine before UI consumers migrate onto it.</div>
+            </div>
+            <button type="button" class="btn btn-outline-info btn-sm" id="workspace-event-refresh-btn">
+                <i class="bi bi-arrow-clockwise me-1"></i>Refresh Events
+            </button>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="ops-grid mb-3">
+            <div class="ops-tile">
+                <div class="ops-label">Journal Rows</div>
+                <div class="ops-value" id="workspace-event-count">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Latest Seq</div>
+                <div class="ops-value" id="workspace-event-latest-seq">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Oldest Row Age</div>
+                <div class="ops-value" id="workspace-event-oldest-age">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Newest Row Age</div>
+                <div class="ops-value" id="workspace-event-latest-age">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Admin Cursor</div>
+                <div class="ops-value" id="workspace-event-admin-cursor">—</div>
+                <div class="ops-meta">Legacy cursor: <span id="workspace-event-legacy-cursor">—</span></div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Needs Action</div>
+                <div class="ops-value" id="workspace-event-needs-action">—</div>
+                <div class="ops-meta">Inbox <span id="workspace-event-pending-inbox">—</span> · Mentions <span id="workspace-event-unacked-mentions">—</span></div>
+            </div>
+        </div>
+
+        <div class="mb-3">
+            <div class="small text-muted mb-2">Type distribution</div>
+            <div class="workspace-event-counts" id="workspace-event-type-counts">
+                <span class="text-muted small">Loading...</span>
+            </div>
+        </div>
+
+        <div>
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                <div class="small text-muted">Most recent journal rows</div>
+                <div class="small text-muted">Owner-only diagnostics view</div>
+            </div>
+            <div class="workspace-event-list" id="workspace-event-items">
+                <div class="small text-muted">Loading workspace events...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card subsystem-shell mb-4">
+    <div class="card-header">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <div>
+                <h5 class="mb-0"><i class="bi bi-person-vcard me-1"></i> Identity Portability (Phase 1)</h5>
+                <div class="small text-muted">Feature-gated principal metadata + bootstrap grants. No cross-peer login/admin transfer.</div>
+            </div>
+            <button type="button" class="btn btn-outline-info btn-sm" id="identity-port-refresh-btn">
+                <i class="bi bi-arrow-clockwise me-1"></i>Refresh Identity
+            </button>
+        </div>
+    </div>
+    <div class="card-body id-port-panel">
+        <div class="ops-grid mb-3">
+            <div class="ops-tile">
+                <div class="ops-label">Enabled</div>
+                <div class="ops-value" id="id-port-enabled">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Local Peer</div>
+                <div class="ops-value" id="id-port-peer" style="font-size: 0.95rem;">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Principals</div>
+                <div class="ops-value" id="id-port-principals">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Links</div>
+                <div class="ops-value" id="id-port-links">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Grants</div>
+                <div class="ops-value" id="id-port-grants">—</div>
+            </div>
+            <div class="ops-tile">
+                <div class="ops-label">Capable Peers</div>
+                <div class="ops-value" id="id-port-capable">—</div>
+            </div>
+        </div>
+
+        <div class="row g-2 mb-2">
+            <div class="col-xl-3 col-lg-4">
+                <label class="form-label small mb-1" for="id-port-user-id">Local user</label>
+                <select class="form-select form-select-sm" id="id-port-user-id">
+                    <option value="">Choose local user...</option>
+                    {% for u in users %}
+                    {% if u.get('is_registered') and not u.get('origin_peer') and (u.get('status') or 'active') == 'active' %}
+                    <option value="{{ u.id }}">{{ u.display_name or u.username }} ({{ u.username }})</option>
+                    {% endif %}
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-xl-3 col-lg-4">
+                <label class="form-label small mb-1" for="id-port-target-peer">Deliver to peer</label>
+                <select class="form-select form-select-sm font-monospace" id="id-port-target-peer">
+                    <option value="">All capable connected peers</option>
+                </select>
+                <div class="small text-muted mt-1 id-port-token-hint" id="id-port-target-peer-hint">Loading capable peers...</div>
+            </div>
+            <div class="col-xl-2 col-lg-4">
+                <label class="form-label small mb-1" for="id-port-audience-peer">Audience lock (optional)</label>
+                <input type="text" class="form-control form-control-sm font-monospace" id="id-port-audience-peer" placeholder="peer_id">
+            </div>
+            <div class="col-xl-2 col-lg-3">
+                <label class="form-label small mb-1" for="id-port-expire-hours">Expire (hours)</label>
+                <input type="number" class="form-control form-control-sm" id="id-port-expire-hours" min="1" max="336" value="24">
+            </div>
+            <div class="col-xl-1 col-lg-2">
+                <label class="form-label small mb-1" for="id-port-max-uses">Max uses</label>
+                <input type="number" class="form-control form-control-sm" id="id-port-max-uses" min="1" max="50" value="1">
+            </div>
+            <div class="col-xl-1 col-lg-3 d-flex align-items-end">
+                <button type="button" class="btn btn-outline-success btn-sm w-100" id="id-port-create-grant-btn" title="Create grant">
+                    <i class="bi bi-plus-circle"></i>
+                </button>
+            </div>
+        </div>
+        <div class="small text-muted mb-2" id="id-port-status">No identity actions yet.</div>
+        <pre id="id-port-output" class="small p-2 rounded border bg-dark text-light" style="display: none; max-height: 220px; overflow:auto;"></pre>
+
+        <div class="row g-2 mb-2 mt-1 align-items-stretch">
+            <div class="col-lg-8">
+                <label class="form-label small mb-1" for="id-port-transfer-token">Grant transfer token (QR-friendly)</label>
+                <div class="input-group input-group-sm">
+                    <input type="text" class="form-control font-monospace" id="id-port-transfer-token" readonly placeholder="Create a grant to populate token">
+                    <button type="button" class="btn btn-outline-secondary" id="id-port-copy-token-btn">
+                        <i class="bi bi-clipboard me-1"></i>Token
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" id="id-port-copy-json-btn">
+                        <i class="bi bi-file-earmark-code me-1"></i>JSON
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" id="id-port-toggle-qr-btn">
+                        <i class="bi bi-qr-code me-1"></i>QR
+                    </button>
+                </div>
+                <div class="id-port-token-hint mt-1" id="id-port-transfer-note">
+                    Use token/QR for mobile transfer. Import accepts raw JSON or `canopy-grant://v1/...`.
+                </div>
+            </div>
+            <div class="col-lg-4">
+                <div id="id-port-qr-shell" class="id-port-qr-shell" style="display:none;">
+                    <div id="id-port-qr-code" class="id-port-qr-code"></div>
+                    <div class="small text-muted text-center">Scan on target admin page, then import.</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-2 mb-2 mt-1">
+            <div class="col-lg-6">
+                <label class="form-label small mb-1" for="id-port-import-artifact">Import grant artifact (JSON or token)</label>
+                <textarea class="form-control form-control-sm font-monospace" id="id-port-import-artifact" rows="4" placeholder='{"grant_id":"MGR...","principal_id":"PRN...","...":"...","signature":"..."} or canopy-grant://v1/...'></textarea>
+                <div class="small mt-1 text-muted" id="id-port-scan-status"></div>
+                <div id="id-port-scan-shell" class="id-port-scan-shell mt-1" style="display:none;">
+                    <video id="id-port-scan-video" class="id-port-scan-video" playsinline muted></video>
+                    <button type="button" class="btn btn-outline-secondary btn-sm w-100 mt-2" id="id-port-scan-stop-btn">
+                        <i class="bi bi-stop-circle me-1"></i>Stop Scan
+                    </button>
+                </div>
+            </div>
+            <div class="col-lg-3">
+                <label class="form-label small mb-1" for="id-port-apply-user-id">Apply to local user (optional)</label>
+                <select class="form-select form-select-sm" id="id-port-apply-user-id">
+                    <option value="">No apply</option>
+                    {% for u in users %}
+                    {% if u.get('is_registered') and not u.get('origin_peer') and (u.get('status') or 'active') == 'active' %}
+                    <option value="{{ u.id }}">{{ u.display_name or u.username }}</option>
+                    {% endif %}
+                    {% endfor %}
+                </select>
+                <button type="button" class="btn btn-outline-info btn-sm mt-2 w-100" id="id-port-import-grant-btn">
+                    <i class="bi bi-box-arrow-in-down me-1"></i>Import Grant
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-sm mt-2 w-100" id="id-port-scan-start-btn">
+                    <i class="bi bi-camera me-1"></i>Scan QR
+                </button>
+            </div>
+            <div class="col-lg-3">
+                <label class="form-label small mb-1" for="id-port-revoke-grant-id">Revoke grant ID</label>
+                <input type="text" class="form-control form-control-sm font-monospace" id="id-port-revoke-grant-id" placeholder="MGR...">
+                <input type="text" class="form-control form-control-sm mt-2" id="id-port-revoke-reason" placeholder="Reason" value="revoked_by_admin">
+                <button type="button" class="btn btn-outline-warning btn-sm mt-2 w-100" id="id-port-revoke-grant-btn">
+                    <i class="bi bi-x-circle me-1"></i>Revoke Grant
+                </button>
+            </div>
+        </div>
+
+        <h6 class="mb-2">Latest grants snapshot</h6>
+        <pre id="id-port-grants-view" class="small p-2 rounded border bg-dark text-light mb-0" style="max-height: 240px; overflow:auto;">Loading...</pre>
+    </div>
+</div>
+
 {% if pending_count > 0 %}
 <div class="card mb-4 border-warning">
     <div class="card-header bg-warning bg-opacity-25">
@@ -466,7 +1084,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {% for u in users if (u.get('status') or 'active') == 'pending_approval' %}
+                    {% for u in users if u.get('is_registered') and (u.get('status') or 'active') == 'pending_approval' %}
                     <tr>
                         <td><code>{{ u.username }}</code></td>
                         <td>{{ u.display_name or '-' }}</td>
@@ -490,12 +1108,12 @@
     </div>
     <div class="card-body">
         <p class="text-muted small mb-2">You can transfer instance admin to another registered user. They will be able to approve agents, manage users, and transfer admin again.</p>
-        <div class="d-flex flex-wrap align-items-center gap-2">
+        <div class="d-flex flex-wrap align-items-center gap-2 admin-transfer-controls">
             <label for="transfer-select" class="form-label mb-0 small">Transfer admin to:</label>
-            <select id="transfer-select" class="form-select form-select-sm" style="max-width: 220px;">
+            <select id="transfer-select" class="form-select form-select-sm admin-transfer-select">
                 <option value="">— Choose user —</option>
                 {% for u in users %}
-                {% if (u.get('status') or 'active') == 'active' %}
+                {% if u.get('is_registered') and not u.get('origin_peer') and (u.get('status') or 'active') == 'active' %}
                 <option value="{{ u.id }}">{{ u.display_name or u.username }} ({{ u.username }})</option>
                 {% endif %}
                 {% endfor %}
@@ -503,6 +1121,78 @@
             <button type="button" class="btn btn-outline-info btn-sm" id="transfer-admin-btn">Transfer</button>
         </div>
         <div id="transfer-message" class="small mt-2 text-danger" style="display: none;"></div>
+    </div>
+</div>
+
+<div class="card mb-4 border-warning">
+    <div class="card-header bg-warning bg-opacity-10">
+        <h5 class="mb-0"><i class="bi bi-trash3"></i> Channel Replica Reconciliation</h5>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-2">
+            Re-broadcast channel delete signals to clean up stale replicas on peers.
+            Use this when a channel was deleted on the origin peer but still appears elsewhere.
+        </p>
+        <div class="row g-2">
+            <div class="col-12">
+                <label for="admin-reconcile-channel-ids" class="form-label small mb-1">Channel IDs (comma/newline separated)</label>
+                <textarea class="form-control form-control-sm font-monospace" id="admin-reconcile-channel-ids" rows="3" placeholder="Cabc123..., Cdef456..."></textarea>
+            </div>
+            <div class="col-md-4">
+                <label for="admin-reconcile-target-peer" class="form-label small mb-1">Target peer</label>
+                <input type="text" class="form-control form-control-sm font-monospace" id="admin-reconcile-target-peer" placeholder="all">
+                <div class="small text-muted mt-1">Use <code>all</code> (default) or a specific peer ID.</div>
+            </div>
+            <div class="col-md-5">
+                <label for="admin-reconcile-reason" class="form-label small mb-1">Reason</label>
+                <input type="text" class="form-control form-control-sm" id="admin-reconcile-reason" value="admin_channel_reconcile_delete" maxlength="160">
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+                <button type="button" class="btn btn-outline-warning btn-sm w-100" id="admin-reconcile-run-btn">
+                    <i class="bi bi-send me-1"></i>Send Delete Signals
+                </button>
+            </div>
+        </div>
+        <div id="admin-reconcile-status" class="small mt-2 text-muted"></div>
+        <pre id="admin-reconcile-output" class="small mt-2 p-2 rounded border bg-dark text-light" style="display: none; max-height: 220px; overflow: auto;"></pre>
+    </div>
+</div>
+
+<div class="card mb-4 border-info">
+    <div class="card-header bg-info bg-opacity-10">
+        <h5 class="mb-0"><i class="bi bi-diagram-3"></i> Private Channel Membership Diagnostics</h5>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-2">
+            Inspect membership propagation for one channel, including member peer mapping, sync delivery states,
+            and warnings about stale or missing origin metadata.
+        </p>
+        <div class="row g-2">
+            <div class="col-md-5">
+                <label for="admin-member-sync-channel-id" class="form-label small mb-1">Channel ID</label>
+                <input type="text" class="form-control form-control-sm font-monospace" id="admin-member-sync-channel-id" placeholder="Cabc123...">
+            </div>
+            <div class="col-md-4">
+                <label for="admin-member-sync-target-user-id" class="form-label small mb-1">Target user (optional)</label>
+                <input type="text" class="form-control form-control-sm font-monospace" id="admin-member-sync-target-user-id" placeholder="user_...">
+            </div>
+            <div class="col-md-2">
+                <label for="admin-member-sync-limit" class="form-label small mb-1">Records</label>
+                <select class="form-select form-select-sm" id="admin-member-sync-limit">
+                    <option value="100">100</option>
+                    <option value="200" selected>200</option>
+                    <option value="300">300</option>
+                    <option value="500">500</option>
+                </select>
+            </div>
+            <div class="col-md-1 d-flex align-items-end">
+                <button type="button" class="btn btn-outline-info btn-sm w-100" id="admin-member-sync-run-btn" title="Load diagnostics">
+                    <i class="bi bi-search"></i>
+                </button>
+            </div>
+        </div>
+        <div id="admin-member-sync-status" class="small mt-2 text-muted"></div>
+        <pre id="admin-member-sync-output" class="small mt-2 p-2 rounded border bg-dark text-light" style="display: none; max-height: 320px; overflow: auto;"></pre>
     </div>
 </div>
 
@@ -779,8 +1469,16 @@
         <h5 class="mb-0"><i class="bi bi-list-ul"></i> All users</h5>
     </div>
     <div class="card-body">
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+            <div class="input-group input-group-sm admin-users-search-wrap">
+                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                <input type="text" class="form-control" id="admin-users-search" placeholder="Search username / display name / user ID">
+            </div>
+            <div class="small text-muted" id="admin-users-summary">Showing {{ users|length }} of {{ users|length }} users</div>
+        </div>
+        <div class="small text-muted mb-2" id="admin-users-status-line"></div>
         <div class="table-responsive">
-            <table class="table table-hover">
+            <table class="table table-hover table-sm align-middle" id="admin-users-table">
                 <thead>
                     <tr>
                         <th>Username</th>
@@ -794,22 +1492,66 @@
                 </thead>
                 <tbody>
                     {% for u in users %}
-                    <tr data-user-id="{{ u.id }}">
+                    {% set at = u.get('account_type') or 'human' %}
+                    {% set st = u.get('status') or 'active' %}
+                    {% set is_registered = u.get('is_registered') %}
+                    {% set is_remote = u.get('is_remote') %}
+                    {% set is_shadow = u.get('is_shadow') %}
+                    {% set is_local_registered = is_registered and not is_remote %}
+                    <tr data-user-id="{{ u.id }}"
+                        data-username="{{ u.username }}"
+                        data-display-name="{{ u.display_name or '' }}"
+                        data-account-type="{{ at }}"
+                        data-status="{{ st }}"
+                        data-user-record-id="{{ u.id }}"
+                        data-is-registered="{{ 1 if is_registered else 0 }}"
+                        data-is-remote="{{ 1 if is_remote else 0 }}"
+                        data-is-shadow="{{ 1 if is_shadow else 0 }}">
                         <td>
-                            <code>{{ u.username }}</code>
-                            {% if u.get('origin_peer') %}
-                            <span class="badge bg-dark ms-1" title="Synced from peer {{ u.origin_peer }}">remote</span>
-                            {% endif %}
+                            <div class="d-flex flex-column gap-1">
+                                <div class="d-flex flex-wrap align-items-center gap-1">
+                                    <code>{{ u.username }}</code>
+                                    {% if is_remote %}
+                                    <span class="badge bg-dark" title="Synced from peer {{ u.origin_peer }}">remote</span>
+                                    {% else %}
+                                    <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">local</span>
+                                    {% endif %}
+                                    {% if is_shadow %}
+                                    <span class="badge bg-warning text-dark" title="Imported shadow user row (no local password)">shadow</span>
+                                    {% elif is_registered %}
+                                    <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">registered</span>
+                                    {% endif %}
+                                </div>
+                                <div class="small text-muted font-monospace">{{ u.id }}</div>
+                            </div>
                         </td>
-                        <td>{{ u.display_name or '-' }}</td>
                         <td>
-                            {% set at = u.get('account_type') or 'human' %}
-                            <span class="badge bg-{{ 'info' if at == 'agent' else 'secondary' }}">{{ at }}</span>
+                            <input type="text"
+                                   class="form-control form-control-sm admin-display-name-input"
+                                   value="{{ u.display_name or '' }}"
+                                   placeholder="Display name"
+                                   maxlength="100"
+                                   data-user-id="{{ u.id }}">
                         </td>
                         <td>
-                            {% set st = u.get('status') or 'active' %}
-                            <span class="badge bg-{{ 'success' if st == 'active' else 'warning' if st == 'pending_approval' else 'danger' }}">{{ st }}</span>
-                            {% if (u.get('account_type') or 'human') == 'agent' %}
+                            <div class="d-flex flex-column gap-1">
+                                <select class="form-select form-select-sm admin-account-type-select" data-user-id="{{ u.id }}">
+                                    <option value="human" {% if at == 'human' %}selected{% endif %}>human</option>
+                                    <option value="agent" {% if at == 'agent' %}selected{% endif %}>agent</option>
+                                </select>
+                                <span class="badge user-account-type-badge {% if at == 'agent' %}bg-info{% else %}bg-secondary{% endif %}">{{ at }}</span>
+                            </div>
+                        </td>
+                        <td>
+                            <div class="d-flex flex-column gap-1">
+                                <select class="form-select form-select-sm admin-status-select" data-user-id="{{ u.id }}">
+                                    <option value="active" {% if st == 'active' %}selected{% endif %}>active</option>
+                                    <option value="pending_approval" {% if st == 'pending_approval' %}selected{% endif %}>pending_approval</option>
+                                    <option value="suspended" {% if st == 'suspended' %}selected{% endif %}>suspended</option>
+                                </select>
+                                <span class="badge user-status-badge {% if st == 'active' %}bg-success{% elif st == 'pending_approval' %}bg-warning{% else %}bg-danger{% endif %}">{{ st }}</span>
+                            </div>
+                            {% if at == 'agent' %}
                             {% set pstate = u.get('presence_state') or 'no_checkin' %}
                             {% set pcolor = 'success' if pstate == 'online' else 'info' if pstate == 'recent' else 'warning' if pstate == 'idle' else 'secondary' %}
                             <span class="badge bg-{{ pcolor }} ms-1" title="Last check-in: {{ u.get('last_check_in_at') or 'none' }}">{{ u.get('presence_label') or 'No check-in' }}{% if u.get('presence_age_text') %} {{ u.get('presence_age_text') }}{% endif %}</span>
@@ -824,26 +1566,46 @@
                         </td>
                         <td>{{ u.created_at[:10] if u.created_at else '-' }}</td>
                         <td>
-                            <button type="button" class="btn btn-outline-secondary btn-sm keys-btn" data-user-id="{{ u.id }}" data-username="{{ u.username }}">Keys</button>
-                            <button type="button"
-                                    class="btn btn-outline-primary btn-sm workspace-jump-btn"
-                                    data-user-id="{{ u.id }}"
-                                    data-display-name="{{ u.display_name or u.username }}">Workspace</button>
-                            {% if not u.get('origin_peer') %}
-                            <button type="button"
-                                    class="btn btn-outline-info btn-sm directive-jump-btn"
-                                    data-user-id="{{ u.id }}"
-                                    data-display-name="{{ u.display_name or u.username }}">Directives</button>
+                            <div class="d-flex flex-wrap gap-1 admin-users-actions">
+                                <button type="button"
+                                        class="btn btn-outline-success btn-sm admin-classification-save-btn"
+                                        data-user-id="{{ u.id }}"
+                                        data-username="{{ u.username }}">Save</button>
+                                <button type="button"
+                                        class="btn btn-outline-secondary btn-sm copy-user-id-btn"
+                                        data-user-id="{{ u.id }}">ID</button>
+                                {% if is_local_registered %}
+                                <button type="button" class="btn btn-outline-secondary btn-sm keys-btn" data-user-id="{{ u.id }}" data-username="{{ u.username }}">Keys</button>
+                                {% else %}
+                                <button type="button" class="btn btn-outline-secondary btn-sm" disabled title="Keys are local-registered users only">Keys</button>
+                                {% endif %}
+                                {% if is_registered %}
+                                <button type="button"
+                                        class="btn btn-outline-primary btn-sm workspace-jump-btn"
+                                        data-user-id="{{ u.id }}"
+                                        data-display-name="{{ u.display_name or u.username }}">Workspace</button>
+                                {% else %}
+                                <button type="button" class="btn btn-outline-primary btn-sm" disabled title="Workspace unavailable for shadow users">Workspace</button>
+                                {% endif %}
+                                {% if is_local_registered %}
+                                <button type="button"
+                                        class="btn btn-outline-info btn-sm directive-jump-btn"
+                                        data-user-id="{{ u.id }}"
+                                        data-display-name="{{ u.display_name or u.username }}">Directives</button>
+                                {% endif %}
+                                {% if is_registered and st == 'pending_approval' %}
+                                <button type="button" class="btn btn-success btn-sm approve-btn" data-user-id="{{ u.id }}">Approve</button>
+                                <button type="button" class="btn btn-outline-danger btn-sm suspend-btn" data-user-id="{{ u.id }}">Reject</button>
+                                {% elif is_registered and st == 'suspended' %}
+                                <button type="button" class="btn btn-outline-success btn-sm activate-btn" data-user-id="{{ u.id }}">Activate</button>
+                                {% elif is_registered and st == 'active' and at == 'agent' %}
+                                <button type="button" class="btn btn-outline-warning btn-sm suspend-btn" data-user-id="{{ u.id }}">Suspend</button>
+                                {% endif %}
+                                <button type="button" class="btn btn-outline-danger btn-sm delete-btn" data-user-id="{{ u.id }}" data-username="{{ u.username }}">Delete</button>
+                            </div>
+                            {% if is_shadow %}
+                            <div class="small text-warning mt-1">Shadow row: safe to reclassify or delete.</div>
                             {% endif %}
-                            {% if (u.get('status') or 'active') == 'pending_approval' %}
-                            <button type="button" class="btn btn-success btn-sm approve-btn" data-user-id="{{ u.id }}">Approve</button>
-                            <button type="button" class="btn btn-outline-danger btn-sm suspend-btn" data-user-id="{{ u.id }}">Reject</button>
-                            {% elif (u.get('status') or 'active') == 'suspended' %}
-                            <button type="button" class="btn btn-outline-success btn-sm activate-btn" data-user-id="{{ u.id }}">Activate</button>
-                            {% elif (u.get('status') or 'active') == 'active' and (u.get('account_type') or 'human') == 'agent' %}
-                            <button type="button" class="btn btn-outline-warning btn-sm suspend-btn" data-user-id="{{ u.id }}">Suspend</button>
-                            {% endif %}
-                            <button type="button" class="btn btn-outline-danger btn-sm delete-btn" data-user-id="{{ u.id }}" data-username="{{ u.username }}">Delete</button>
                         </td>
                     </tr>
                     {% endfor %}
@@ -852,7 +1614,7 @@
         </div>
         <!-- Inline API keys panel (no modal — stays in page flow to avoid z-index/obstruction) -->
         <div id="keys-panel" class="mt-3 p-3 rounded border border-secondary" style="display: none; background: var(--canopy-bg-tertiary, rgba(30,30,50,0.4));">
-            <div class="d-flex justify-content-between align-items-center mb-2">
+            <div class="d-flex justify-content-between align-items-center mb-2 keys-panel-header">
                 <h6 class="mb-0">API keys — <span id="keys-panel-username"></span></h6>
                 <button type="button" class="btn btn-sm btn-outline-secondary" id="keys-panel-close" aria-label="Close">Close</button>
             </div>
@@ -878,7 +1640,7 @@
             <button type="button" class="btn btn-primary btn-sm" id="keys-create-btn">Create key</button>
             <div id="keys-new-key-area" class="mt-3 p-2 rounded border bg-dark bg-opacity-25" style="display: none;">
                 <p class="small text-warning mb-1">Copy this key now; it will not be shown again.</p>
-                <div class="d-flex gap-2 align-items-center">
+                <div class="keys-new-key-row">
                     <input type="text" class="form-control form-control-sm font-monospace" id="keys-new-key-input" readonly>
                     <button type="button" class="btn btn-sm btn-outline-secondary" id="keys-copy-key-btn">Copy</button>
                 </div>
@@ -887,6 +1649,7 @@
     </div>
 </div>
 
+<script src="{{ url_for('static', filename='vendor/qrcode/1.0.0/qrcode.min.js') }}"></script>
 <script>
 (function() {
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
@@ -937,6 +1700,73 @@
         return document.querySelector(`tr[data-user-id="${userId}"]`);
     }
 
+    const adminUsersTable = document.getElementById('admin-users-table');
+    const adminUsersSearch = document.getElementById('admin-users-search');
+    const adminUsersSummary = document.getElementById('admin-users-summary');
+    const adminUsersStatusLine = document.getElementById('admin-users-status-line');
+
+    function setAdminUsersStatus(text, isError = false) {
+        if (!adminUsersStatusLine) return;
+        adminUsersStatusLine.textContent = text || '';
+        adminUsersStatusLine.classList.toggle('text-danger', !!isError);
+        adminUsersStatusLine.classList.toggle('text-success', !isError && !!text);
+        adminUsersStatusLine.classList.toggle('text-muted', !text);
+    }
+
+    function updateAdminUserRowBadges(row, accountType, status) {
+        if (!row) return;
+        const typeBadge = row.querySelector('.user-account-type-badge');
+        if (typeBadge) {
+            typeBadge.textContent = accountType;
+            typeBadge.classList.remove('bg-info', 'bg-secondary');
+            typeBadge.classList.add(accountType === 'agent' ? 'bg-info' : 'bg-secondary');
+        }
+        const statusBadge = row.querySelector('.user-status-badge');
+        if (statusBadge) {
+            statusBadge.textContent = status;
+            statusBadge.classList.remove('bg-success', 'bg-warning', 'bg-danger');
+            if (status === 'active') statusBadge.classList.add('bg-success');
+            else if (status === 'pending_approval') statusBadge.classList.add('bg-warning');
+            else statusBadge.classList.add('bg-danger');
+        }
+        row.dataset.accountType = accountType;
+        row.dataset.status = status;
+    }
+
+    function updateAdminUsersSummary() {
+        if (!adminUsersTable || !adminUsersSummary) return;
+        const rows = Array.from(adminUsersTable.querySelectorAll('tbody tr'));
+        const visibleRows = rows.filter(row => row.style.display !== 'none');
+        adminUsersSummary.textContent = `Showing ${visibleRows.length} of ${rows.length} users`;
+    }
+
+    function applyAdminUsersSearchFilter() {
+        if (!adminUsersTable || !adminUsersSearch) return;
+        const query = String(adminUsersSearch.value || '').trim().toLowerCase();
+        const rows = Array.from(adminUsersTable.querySelectorAll('tbody tr'));
+        rows.forEach(row => {
+            const username = String(row.dataset.username || '').toLowerCase();
+            const displayName = String(row.dataset.displayName || '').toLowerCase();
+            const recordId = String(row.dataset.userRecordId || '').toLowerCase();
+            const haystack = `${username} ${displayName} ${recordId}`;
+            row.style.display = (!query || haystack.includes(query)) ? '' : 'none';
+        });
+        updateAdminUsersSummary();
+    }
+
+    if (adminUsersSearch) {
+        adminUsersSearch.addEventListener('input', applyAdminUsersSearchFilter);
+    }
+
+    document.querySelectorAll('.admin-display-name-input').forEach(input => {
+        input.addEventListener('input', () => {
+            const userId = input.getAttribute('data-user-id');
+            const row = userId ? rowForUserId(userId) : null;
+            if (!row) return;
+            row.dataset.displayName = String(input.value || '');
+        });
+    });
+
     async function refreshHeartbeat() {
         const mentionsEl = document.getElementById('heartbeat-mentions');
         const inboxEl = document.getElementById('heartbeat-inbox');
@@ -954,11 +1784,746 @@
         hashEl.textContent = hb.directives_hash || 'none';
     }
 
+    function setMeshDiagValue(id, value) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = value;
+    }
+
+    function formatUnixTimestamp(ts) {
+        const n = Number(ts || 0);
+        if (!Number.isFinite(n) || n <= 0) return '—';
+        const date = new Date(n * 1000);
+        if (!Number.isFinite(date.getTime())) return '—';
+        return date.toLocaleString();
+    }
+
+    function renderMeshFailures(events) {
+        const container = document.getElementById('mesh-diag-failures');
+        if (!container) return;
+        const list = Array.isArray(events) ? events : [];
+        if (!list.length) {
+            container.className = 'small text-muted';
+            container.textContent = 'No recent failures.';
+            return;
+        }
+        container.className = '';
+        const ul = document.createElement('ul');
+        ul.className = 'list-group list-group-flush';
+        list.slice(-8).reverse().forEach(event => {
+            const li = document.createElement('li');
+            li.className = 'list-group-item py-2 px-1';
+            li.style.background = 'transparent';
+            li.style.color = 'var(--canopy-text-primary)';
+            li.style.borderColor = 'var(--canopy-border)';
+            const peer = event?.peer_id || 'unknown-peer';
+            const kind = event?.kind || 'event';
+            const detail = event?.detail || event?.status || 'unknown';
+            li.textContent = `${kind} • ${peer} • ${detail} • ${formatUnixTimestamp(event?.timestamp)}`;
+            ul.appendChild(li);
+        });
+        container.replaceChildren(ul);
+    }
+
+    async function refreshMeshDiagnostics() {
+        const { ok, data } = await api('GET', '/ajax/p2p/diagnostics');
+        if (!ok || !data.diagnostics) return;
+        const diag = data.diagnostics || {};
+        const sync = diag.sync || {};
+        const digest = sync.digest || {};
+        const stats = digest.stats || {};
+
+        const connected = Array.isArray(diag.connected_peers) ? diag.connected_peers.length : 0;
+        const known = Number(diag.known_peers_count || 0);
+        const queueDepth = Number(sync.queue_depth || 0);
+        const maxChannels = Number(digest.max_channels_per_request || 0);
+        const requests = Number(stats.requests_with_digest || 0);
+        const checked = Number(stats.channels_checked || 0);
+        const matched = Number(stats.channels_matched || 0);
+        const mismatched = Number(stats.channels_mismatched || 0);
+        const fallbacks = Number(stats.fallbacks || 0);
+        const matchRate = checked > 0 ? `${((matched / checked) * 100).toFixed(1)}%` : '—';
+
+        setMeshDiagValue('mesh-diag-connected', String(connected));
+        setMeshDiagValue('mesh-diag-known', String(known));
+        setMeshDiagValue('mesh-diag-queue', String(queueDepth));
+        setMeshDiagValue('mesh-diag-enabled', digest.enabled ? 'yes' : 'no');
+        setMeshDiagValue('mesh-diag-capability', digest.require_capability ? 'required' : 'optional');
+        setMeshDiagValue('mesh-diag-max-channels', String(maxChannels));
+        setMeshDiagValue('mesh-diag-requests', String(requests));
+        setMeshDiagValue('mesh-diag-checked', String(checked));
+        setMeshDiagValue('mesh-diag-matched', String(matched));
+        setMeshDiagValue('mesh-diag-mismatched', String(mismatched));
+        setMeshDiagValue('mesh-diag-fallbacks', String(fallbacks));
+        setMeshDiagValue('mesh-diag-match-rate', matchRate);
+        setMeshDiagValue('mesh-diag-last-used', formatUnixTimestamp(stats.last_used_at));
+        renderMeshFailures(diag.recent_failures || []);
+    }
+
     const heartbeatRefreshBtn = document.getElementById('heartbeat-refresh-btn');
     if (heartbeatRefreshBtn) {
         heartbeatRefreshBtn.addEventListener('click', () => refreshHeartbeat());
         setInterval(refreshHeartbeat, 20000);
     }
+
+    const meshDiagRefreshBtn = document.getElementById('mesh-diag-refresh-btn');
+    if (meshDiagRefreshBtn) {
+        meshDiagRefreshBtn.addEventListener('click', () => refreshMeshDiagnostics());
+    }
+    refreshMeshDiagnostics();
+    setInterval(refreshMeshDiagnostics, 20000);
+
+    function formatAgeCompact(seconds) {
+        const value = Number(seconds);
+        if (!Number.isFinite(value) || value < 0) return '—';
+        if (value < 60) return `${value}s`;
+        if (value < 3600) return `${Math.round(value / 60)}m`;
+        if (value < 86400) return `${Math.round(value / 3600)}h`;
+        return `${Math.round(value / 86400)}d`;
+    }
+
+    function renderWorkspaceEventTypeCounts(typeCounts, supportedTypes) {
+        const container = document.getElementById('workspace-event-type-counts');
+        if (!container) return;
+        const counts = typeCounts || {};
+        const supported = Array.isArray(supportedTypes) ? supportedTypes : [];
+        if (!supported.length) {
+            container.innerHTML = '<span class="text-muted small">No supported event types reported.</span>';
+            return;
+        }
+        container.innerHTML = supported.map(type => {
+            const count = Number(counts[type] || 0);
+            return `<span class="workspace-event-chip"><strong>${count}</strong><span>${escapeHtml(type)}</span></span>`;
+        }).join('');
+    }
+
+    function renderWorkspaceEventItems(items) {
+        const container = document.getElementById('workspace-event-items');
+        if (!container) return;
+        const rows = Array.isArray(items) ? items : [];
+        if (!rows.length) {
+            container.innerHTML = '<div class="small text-muted">No workspace events recorded yet.</div>';
+            return;
+        }
+        container.innerHTML = rows.map(item => {
+            const preview = item?.payload_preview ? escapeHtml(item.payload_preview) : '<span class="text-muted">No preview payload</span>';
+            const actor = item?.actor_user_id ? `<span class="badge">actor ${escapeHtml(item.actor_user_id)}</span>` : '';
+            const target = item?.target_user_id ? `<span class="badge">target ${escapeHtml(item.target_user_id)}</span>` : '';
+            const scope = item?.visibility_scope ? `<span class="badge">scope ${escapeHtml(item.visibility_scope)}</span>` : '';
+            const payloadKeys = Array.isArray(item?.payload_keys) && item.payload_keys.length
+                ? `<span class="badge">keys ${escapeHtml(item.payload_keys.join(', '))}</span>`
+                : '';
+            const createdAt = item?.created_at ? new Date(item.created_at).toLocaleString() : '—';
+            return `
+                <div class="workspace-event-item">
+                    <div class="workspace-event-head">
+                        <div class="workspace-event-type">
+                            <i class="bi bi-dot"></i>
+                            <span>${escapeHtml(item?.event_type || 'unknown')}</span>
+                        </div>
+                        <div class="workspace-event-seq">
+                            <span>#${escapeHtml(String(item?.seq ?? '—'))}</span>
+                            <span>•</span>
+                            <span>${escapeHtml(createdAt)}</span>
+                        </div>
+                    </div>
+                    <div class="workspace-event-preview">${preview}</div>
+                    <div class="workspace-event-meta">
+                        ${actor}
+                        ${target}
+                        ${scope}
+                        ${payloadKeys}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    async function refreshWorkspaceEventDiagnostics() {
+        const { ok, data } = await api('GET', '/ajax/admin/workspace-events/status?limit=24');
+        if (!ok || !data.success) return;
+        const diagnostics = data.diagnostics || {};
+        const heartbeat = data.heartbeat || {};
+
+        setMeshDiagValue('workspace-event-count', String(diagnostics.count || 0));
+        setMeshDiagValue('workspace-event-latest-seq', String(diagnostics.latest_seq || 0));
+        setMeshDiagValue('workspace-event-oldest-age', formatAgeCompact(diagnostics.oldest_age_seconds));
+        setMeshDiagValue('workspace-event-latest-age', formatAgeCompact(diagnostics.latest_age_seconds));
+        setMeshDiagValue('workspace-event-admin-cursor', String(heartbeat.workspace_event_seq || 0));
+        setMeshDiagValue('workspace-event-legacy-cursor', String(heartbeat.last_event_seq || 0));
+        setMeshDiagValue('workspace-event-needs-action', heartbeat.needs_action ? 'yes' : 'no');
+        setMeshDiagValue('workspace-event-pending-inbox', String(heartbeat.pending_inbox || 0));
+        setMeshDiagValue('workspace-event-unacked-mentions', String(heartbeat.unacked_mentions || 0));
+        renderWorkspaceEventTypeCounts(diagnostics.type_counts, diagnostics.supported_types);
+        renderWorkspaceEventItems(diagnostics.items);
+    }
+
+    const workspaceEventRefreshBtn = document.getElementById('workspace-event-refresh-btn');
+    if (workspaceEventRefreshBtn) {
+        workspaceEventRefreshBtn.addEventListener('click', () => refreshWorkspaceEventDiagnostics());
+    }
+    refreshWorkspaceEventDiagnostics();
+    setInterval(refreshWorkspaceEventDiagnostics, 20000);
+
+    function setIdPortValue(id, value) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = value;
+    }
+
+    let idPortCapablePeers = [];
+    let idPortLatestArtifact = null;
+    let idPortQrVisible = false;
+    let idPortScanStream = null;
+    let idPortScanTimer = null;
+    let idPortScanBusy = false;
+    let idPortBarcodeDetector = null;
+
+    function setIdPortStatus(text, isError = false) {
+        const statusEl = document.getElementById('id-port-status');
+        if (!statusEl) return;
+        statusEl.textContent = text || '';
+        statusEl.classList.toggle('text-danger', !!isError);
+        statusEl.classList.toggle('text-success', !isError && !!text);
+        statusEl.classList.toggle('text-muted', !text);
+    }
+
+    function showIdPortOutput(payload) {
+        const outputEl = document.getElementById('id-port-output');
+        if (!outputEl) return;
+        outputEl.textContent = JSON.stringify(payload || {}, null, 2);
+        outputEl.style.display = 'block';
+    }
+
+    function setIdPortScanStatus(text, isError = false) {
+        const el = document.getElementById('id-port-scan-status');
+        if (!el) return;
+        el.textContent = text || '';
+        el.classList.toggle('text-danger', !!isError);
+        el.classList.toggle('text-success', !isError && !!text);
+        el.classList.toggle('text-muted', !text);
+    }
+
+    function utf8ToBase64Url(text) {
+        const bytes = new TextEncoder().encode(String(text || ''));
+        let binary = '';
+        bytes.forEach(b => { binary += String.fromCharCode(b); });
+        return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    }
+
+    function base64UrlToUtf8(token) {
+        let normalized = String(token || '').trim().replace(/-/g, '+').replace(/_/g, '/');
+        while (normalized.length % 4 !== 0) normalized += '=';
+        const binary = atob(normalized);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+        return new TextDecoder().decode(bytes);
+    }
+
+    function buildGrantToken(artifact) {
+        if (!artifact || typeof artifact !== 'object') return '';
+        try {
+            const payload = JSON.stringify(artifact);
+            return `canopy-grant://v1/${utf8ToBase64Url(payload)}`;
+        } catch (_) {
+            return '';
+        }
+    }
+
+    function parseGrantArtifactInput(raw) {
+        const text = String(raw || '').trim();
+        if (!text) throw new Error('empty_input');
+        if (text.startsWith('{')) return JSON.parse(text);
+
+        const tokenPrefix = 'canopy-grant://v1/';
+        let encoded = '';
+        if (text.startsWith(tokenPrefix)) {
+            encoded = text.slice(tokenPrefix.length).trim();
+        } else if (/^[A-Za-z0-9\-_]+$/.test(text)) {
+            encoded = text;
+        } else {
+            throw new Error('unsupported_format');
+        }
+        const decoded = base64UrlToUtf8(encoded);
+        return JSON.parse(decoded);
+    }
+
+    function renderIdPortPeerOptions(peers, fallbackIds = []) {
+        const select = document.getElementById('id-port-target-peer');
+        const hint = document.getElementById('id-port-target-peer-hint');
+        if (!select) return;
+
+        const prior = (select.value || '').trim();
+        const normalized = [];
+        const seen = new Set();
+        (Array.isArray(peers) ? peers : []).forEach(peer => {
+            const peerId = String(peer?.peer_id || '').trim();
+            if (!peerId || seen.has(peerId)) return;
+            seen.add(peerId);
+            normalized.push({
+                peer_id: peerId,
+                display_name: String(peer?.display_name || '').trim(),
+                connected: peer?.connected !== false,
+                endpoints: Array.isArray(peer?.endpoints) ? peer.endpoints : [],
+            });
+        });
+        (Array.isArray(fallbackIds) ? fallbackIds : []).forEach(peerIdRaw => {
+            const peerId = String(peerIdRaw || '').trim();
+            if (!peerId || seen.has(peerId)) return;
+            seen.add(peerId);
+            normalized.push({
+                peer_id: peerId,
+                display_name: '',
+                connected: true,
+                endpoints: [],
+            });
+        });
+        idPortCapablePeers = normalized;
+
+        select.innerHTML = '';
+        const allOpt = document.createElement('option');
+        allOpt.value = '';
+        allOpt.textContent = 'All capable connected peers';
+        select.appendChild(allOpt);
+        normalized.forEach(peer => {
+            const option = document.createElement('option');
+            option.value = peer.peer_id;
+            const label = peer.display_name ? `${peer.display_name} (${peer.peer_id})` : peer.peer_id;
+            option.textContent = label;
+            select.appendChild(option);
+        });
+
+        if (prior && normalized.some(peer => peer.peer_id === prior)) {
+            select.value = prior;
+        }
+
+        if (hint) {
+            if (!normalized.length) {
+                hint.textContent = 'No connected peers with identity_portability_v1 capability.';
+            } else {
+                hint.textContent = `${normalized.length} capable peer(s) available for direct delivery.`;
+            }
+        }
+    }
+
+    function renderIdPortQr(token) {
+        const shell = document.getElementById('id-port-qr-shell');
+        const target = document.getElementById('id-port-qr-code');
+        if (!shell || !target) return;
+        if (!idPortQrVisible || !token) {
+            target.replaceChildren();
+            shell.style.display = 'none';
+            return;
+        }
+        target.replaceChildren();
+        if (typeof window.QRCode !== 'function') {
+            shell.style.display = 'none';
+            setIdPortStatus('QR library unavailable (check static asset load).', true);
+            return;
+        }
+        const options = {
+            text: token,
+            width: 170,
+            height: 170,
+        };
+        if (window.QRCode?.CorrectLevel?.M) {
+            options.correctLevel = window.QRCode.CorrectLevel.M;
+        }
+        new window.QRCode(target, options);
+        shell.style.display = 'flex';
+    }
+
+    function setIdPortLatestArtifact(artifact) {
+        const tokenInput = document.getElementById('id-port-transfer-token');
+        const noteEl = document.getElementById('id-port-transfer-note');
+        const importEl = document.getElementById('id-port-import-artifact');
+        if (!artifact || typeof artifact !== 'object') {
+            idPortLatestArtifact = null;
+            if (tokenInput) tokenInput.value = '';
+            if (noteEl) noteEl.textContent = 'Create a grant to generate a transferable token + QR.';
+            renderIdPortQr('');
+            return;
+        }
+        idPortLatestArtifact = artifact;
+        const grantId = String(artifact.grant_id || '').trim();
+        const token = buildGrantToken(artifact);
+        if (tokenInput) tokenInput.value = token;
+        if (noteEl) {
+            noteEl.textContent = grantId
+                ? `Grant ${grantId} ready. Token is safe to share only with trusted admins.`
+                : 'Grant token ready. Token is safe to share only with trusted admins.';
+        }
+        if (importEl && !String(importEl.value || '').trim()) {
+            importEl.value = JSON.stringify(artifact, null, 2);
+        }
+        renderIdPortQr(token);
+    }
+
+    async function copyTextToClipboard(text) {
+        const payload = String(text || '').trim();
+        if (!payload) return false;
+        try {
+            await navigator.clipboard.writeText(payload);
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    async function stopIdPortQrScan() {
+        if (idPortScanTimer) {
+            clearInterval(idPortScanTimer);
+            idPortScanTimer = null;
+        }
+        if (idPortScanStream) {
+            idPortScanStream.getTracks().forEach(track => track.stop());
+            idPortScanStream = null;
+        }
+        const shell = document.getElementById('id-port-scan-shell');
+        const video = document.getElementById('id-port-scan-video');
+        if (video) {
+            try { video.pause(); } catch (_) {}
+            video.srcObject = null;
+        }
+        if (shell) shell.style.display = 'none';
+        idPortScanBusy = false;
+    }
+
+    async function startIdPortQrScan() {
+        await stopIdPortQrScan();
+        if (!navigator?.mediaDevices?.getUserMedia) {
+            setIdPortScanStatus('Camera access is not available in this browser.', true);
+            return;
+        }
+        if (!('BarcodeDetector' in window)) {
+            setIdPortScanStatus('QR camera scan unavailable here. Use token paste/import instead.', true);
+            return;
+        }
+        try {
+            idPortBarcodeDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
+        } catch (_) {
+            setIdPortScanStatus('QR detector initialization failed.', true);
+            return;
+        }
+
+        const video = document.getElementById('id-port-scan-video');
+        const shell = document.getElementById('id-port-scan-shell');
+        const importEl = document.getElementById('id-port-import-artifact');
+        if (!video || !shell || !importEl) return;
+
+        try {
+            idPortScanStream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'environment' },
+                audio: false,
+            });
+            video.srcObject = idPortScanStream;
+            await video.play();
+            shell.style.display = 'block';
+            setIdPortScanStatus('Scanning QR... point camera at token.', false);
+        } catch (_) {
+            setIdPortScanStatus('Unable to access camera for QR scan.', true);
+            return;
+        }
+
+        idPortScanTimer = setInterval(async () => {
+            if (!idPortBarcodeDetector || idPortScanBusy) return;
+            idPortScanBusy = true;
+            try {
+                const codes = await idPortBarcodeDetector.detect(video);
+                const rawValue = String(codes?.[0]?.rawValue || '').trim();
+                if (rawValue) {
+                    importEl.value = rawValue;
+                    setIdPortScanStatus('QR captured. Ready to import grant.');
+                    await stopIdPortQrScan();
+                }
+            } catch (_) {
+                // Keep scanning until stop or successful parse.
+            } finally {
+                idPortScanBusy = false;
+            }
+        }, 350);
+    }
+
+    async function refreshIdentityPortability() {
+        const [statusResp, grantsResp, peersResp] = await Promise.all([
+            api('GET', '/ajax/admin/identity-portability/status'),
+            api('GET', '/ajax/admin/identity-portability/grants?limit=50'),
+            api('GET', '/ajax/admin/identity-portability/capable-peers'),
+        ]);
+        if (!statusResp.ok) {
+            setIdPortStatus(statusResp.data?.error || 'Failed to load identity status.', true);
+            return;
+        }
+        const status = statusResp.data?.status || {};
+        const counts = status.counts || {};
+        const grantsByStatus = counts.grants_by_status || {};
+
+        setIdPortValue('id-port-enabled', status.enabled ? 'yes' : 'no');
+        setIdPortValue('id-port-peer', status.local_peer_id || '—');
+        setIdPortValue('id-port-principals', String(counts.principals || 0));
+        setIdPortValue('id-port-links', String(counts.links || 0));
+        setIdPortValue('id-port-grants', String(counts.grants || 0));
+        const capable = Array.isArray(status.connected_capable_peers) ? status.connected_capable_peers.length : 0;
+        setIdPortValue('id-port-capable', String(capable));
+
+        const peerPayload = (peersResp.ok && Array.isArray(peersResp.data?.peers)) ? peersResp.data.peers : [];
+        const fallbackPeerIds = Array.isArray(status.connected_capable_peers) ? status.connected_capable_peers : [];
+        renderIdPortPeerOptions(peerPayload, fallbackPeerIds);
+
+        const grantsView = document.getElementById('id-port-grants-view');
+        if (grantsView) {
+            const viewPayload = {
+                grants_by_status: grantsByStatus,
+                recent_grants: (grantsResp.data?.grants || []).slice(0, 10),
+                recent_audit: (status.recent_audit || []).slice(0, 10),
+            };
+            grantsView.textContent = JSON.stringify(viewPayload, null, 2);
+        }
+        setIdPortStatus('Identity portability status refreshed.');
+    }
+
+    const idPortRefreshBtn = document.getElementById('identity-port-refresh-btn');
+    if (idPortRefreshBtn) {
+        idPortRefreshBtn.addEventListener('click', () => refreshIdentityPortability());
+    }
+
+    const idPortCreateBtn = document.getElementById('id-port-create-grant-btn');
+    if (idPortCreateBtn) {
+        idPortCreateBtn.addEventListener('click', async () => {
+            const userId = (document.getElementById('id-port-user-id')?.value || '').trim();
+            if (!userId) {
+                setIdPortStatus('Choose a local user first.', true);
+                return;
+            }
+            const selectedPeer = (document.getElementById('id-port-target-peer')?.value || '').trim();
+            let audiencePeer = (document.getElementById('id-port-audience-peer')?.value || '').trim();
+            if (!audiencePeer && selectedPeer) {
+                audiencePeer = selectedPeer;
+            }
+            const expiresHours = Number(document.getElementById('id-port-expire-hours')?.value || 24);
+            const maxUses = Number(document.getElementById('id-port-max-uses')?.value || 1);
+            setIdPortStatus('Creating bootstrap grant...');
+            const { ok, data } = await api('POST', '/ajax/admin/identity-portability/grants', {
+                local_user_id: userId,
+                audience_peer: audiencePeer || null,
+                expires_in_hours: Number.isFinite(expiresHours) ? expiresHours : 24,
+                max_uses: Number.isFinite(maxUses) ? maxUses : 1,
+                sync_to_mesh: true,
+                target_peer_id: selectedPeer || null,
+            });
+            if (!ok) {
+                setIdPortStatus(data.error || 'Failed to create bootstrap grant.', true);
+                showIdPortOutput(data);
+                return;
+            }
+            const grantId = String(data?.grant?.grant_id || '').trim();
+            const targetText = selectedPeer ? ` and delivered to ${selectedPeer}` : '';
+            setIdPortStatus(`Bootstrap grant ${grantId || ''} created${targetText}.`.trim());
+            showIdPortOutput(data);
+            if (data?.grant?.grant_id) {
+                const revokeEl = document.getElementById('id-port-revoke-grant-id');
+                if (revokeEl) revokeEl.value = String(data.grant.grant_id);
+            }
+            if (data?.artifact && typeof data.artifact === 'object') {
+                setIdPortLatestArtifact(data.artifact);
+                const importEl = document.getElementById('id-port-import-artifact');
+                if (importEl) {
+                    importEl.value = JSON.stringify(data.artifact, null, 2);
+                }
+            }
+            refreshIdentityPortability();
+        });
+    }
+
+    const idPortImportBtn = document.getElementById('id-port-import-grant-btn');
+    if (idPortImportBtn) {
+        idPortImportBtn.addEventListener('click', async () => {
+            const raw = (document.getElementById('id-port-import-artifact')?.value || '').trim();
+            if (!raw) {
+                setIdPortStatus('Paste a grant artifact JSON payload first.', true);
+                return;
+            }
+            let artifact = null;
+            try {
+                artifact = parseGrantArtifactInput(raw);
+            } catch (_) {
+                setIdPortStatus('Import expects grant JSON or canopy-grant://v1 token.', true);
+                return;
+            }
+            if (!artifact || typeof artifact !== 'object') {
+                setIdPortStatus('Grant artifact payload is empty.', true);
+                return;
+            }
+            const applyUserId = (document.getElementById('id-port-apply-user-id')?.value || '').trim();
+            setIdPortStatus('Importing bootstrap grant...');
+            const { ok, data } = await api('POST', '/ajax/admin/identity-portability/grants/import', {
+                artifact,
+                apply_local_user_id: applyUserId || null,
+                sync_to_mesh: false,
+            });
+            if (!ok) {
+                setIdPortStatus(data.error || 'Failed to import bootstrap grant.', true);
+                showIdPortOutput(data);
+                return;
+            }
+            setIdPortStatus('Bootstrap grant imported.');
+            showIdPortOutput(data);
+            setIdPortLatestArtifact(artifact);
+            const importedGrantId = String(data?.import?.grant_id || artifact?.grant_id || '').trim();
+            if (importedGrantId) {
+                const revokeEl = document.getElementById('id-port-revoke-grant-id');
+                if (revokeEl) revokeEl.value = importedGrantId;
+            }
+            refreshIdentityPortability();
+        });
+    }
+
+    const idPortRevokeBtn = document.getElementById('id-port-revoke-grant-btn');
+    if (idPortRevokeBtn) {
+        idPortRevokeBtn.addEventListener('click', async () => {
+            const grantId = (document.getElementById('id-port-revoke-grant-id')?.value || '').trim();
+            if (!grantId) {
+                setIdPortStatus('Enter a grant ID to revoke.', true);
+                return;
+            }
+            const reason = (document.getElementById('id-port-revoke-reason')?.value || '').trim() || 'revoked_by_admin';
+            setIdPortStatus(`Revoking ${grantId}...`);
+            const { ok, data } = await api('POST', `/ajax/admin/identity-portability/grants/${encodeURIComponent(grantId)}/revoke`, {
+                reason,
+                sync_to_mesh: true,
+            });
+            if (!ok) {
+                setIdPortStatus(data.error || 'Failed to revoke grant.', true);
+                showIdPortOutput(data);
+                return;
+            }
+            setIdPortStatus('Grant revoked.');
+            showIdPortOutput(data);
+            refreshIdentityPortability();
+        });
+    }
+
+    const idPortTargetPeer = document.getElementById('id-port-target-peer');
+    if (idPortTargetPeer) {
+        idPortTargetPeer.addEventListener('change', () => {
+            const selected = String(idPortTargetPeer.value || '').trim();
+            const audienceEl = document.getElementById('id-port-audience-peer');
+            if (!audienceEl || !selected || String(audienceEl.value || '').trim()) return;
+            audienceEl.value = selected;
+        });
+    }
+
+    const idPortCopyTokenBtn = document.getElementById('id-port-copy-token-btn');
+    if (idPortCopyTokenBtn) {
+        idPortCopyTokenBtn.addEventListener('click', async () => {
+            const token = (document.getElementById('id-port-transfer-token')?.value || '').trim();
+            if (!token) {
+                setIdPortStatus('No transfer token available yet.', true);
+                return;
+            }
+            const copied = await copyTextToClipboard(token);
+            setIdPortStatus(copied ? 'Transfer token copied.' : 'Clipboard write failed.', !copied);
+        });
+    }
+
+    const idPortCopyJsonBtn = document.getElementById('id-port-copy-json-btn');
+    if (idPortCopyJsonBtn) {
+        idPortCopyJsonBtn.addEventListener('click', async () => {
+            if (!idPortLatestArtifact) {
+                setIdPortStatus('No grant artifact available yet.', true);
+                return;
+            }
+            const payload = JSON.stringify(idPortLatestArtifact, null, 2);
+            const copied = await copyTextToClipboard(payload);
+            setIdPortStatus(copied ? 'Grant JSON copied.' : 'Clipboard write failed.', !copied);
+        });
+    }
+
+    const idPortToggleQrBtn = document.getElementById('id-port-toggle-qr-btn');
+    if (idPortToggleQrBtn) {
+        idPortToggleQrBtn.addEventListener('click', () => {
+            idPortQrVisible = !idPortQrVisible;
+            const icon = idPortQrVisible ? 'bi-eye-slash' : 'bi-qr-code';
+            const text = idPortQrVisible ? 'Hide QR' : 'QR';
+            idPortToggleQrBtn.innerHTML = `<i class="bi ${icon} me-1"></i>${text}`;
+            const token = (document.getElementById('id-port-transfer-token')?.value || '').trim();
+            renderIdPortQr(token);
+        });
+    }
+
+    const idPortScanStartBtn = document.getElementById('id-port-scan-start-btn');
+    if (idPortScanStartBtn) {
+        idPortScanStartBtn.addEventListener('click', async () => {
+            await startIdPortQrScan();
+        });
+    }
+
+    const idPortScanStopBtn = document.getElementById('id-port-scan-stop-btn');
+    if (idPortScanStopBtn) {
+        idPortScanStopBtn.addEventListener('click', async () => {
+            await stopIdPortQrScan();
+            setIdPortScanStatus('QR scan stopped.');
+        });
+    }
+
+    window.addEventListener('beforeunload', () => {
+        stopIdPortQrScan();
+    });
+
+    refreshIdentityPortability();
+    setInterval(refreshIdentityPortability, 30000);
+    applyAdminUsersSearchFilter();
+
+    document.querySelectorAll('.admin-classification-save-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const userId = btn.getAttribute('data-user-id');
+            const username = btn.getAttribute('data-username') || userId || 'user';
+            if (!userId) return;
+            const row = rowForUserId(userId);
+            if (!row) return;
+            const typeSelect = row.querySelector('.admin-account-type-select');
+            const statusSelect = row.querySelector('.admin-status-select');
+            const displayNameInput = row.querySelector('.admin-display-name-input');
+            const accountType = String(typeSelect?.value || '').trim().toLowerCase();
+            const status = String(statusSelect?.value || '').trim().toLowerCase();
+            const displayName = String(displayNameInput?.value || '').trim();
+
+            btn.disabled = true;
+            const oldLabel = btn.textContent;
+            btn.textContent = 'Saving...';
+            const { ok, data } = await api('POST', `/ajax/admin/users/${encodeURIComponent(userId)}/classification`, {
+                account_type: accountType,
+                status,
+                display_name: displayName,
+            });
+            btn.disabled = false;
+            btn.textContent = oldLabel || 'Save';
+
+            if (!ok) {
+                setAdminUsersStatus(data.error || `Failed to update ${username}.`, true);
+                return;
+            }
+            const user = data?.user || {};
+            const updatedType = String(user.account_type || accountType || 'human').toLowerCase();
+            const updatedStatus = String(user.status || status || 'active').toLowerCase();
+            const updatedDisplayName = String(user.display_name || displayName || '').trim();
+            if (typeSelect) typeSelect.value = updatedType;
+            if (statusSelect) statusSelect.value = updatedStatus;
+            if (displayNameInput) displayNameInput.value = updatedDisplayName;
+            row.dataset.displayName = updatedDisplayName;
+            updateAdminUserRowBadges(row, updatedType, updatedStatus);
+            setAdminUsersStatus(`Updated @${username}: type=${updatedType}, status=${updatedStatus}.`);
+        });
+    });
+
+    document.querySelectorAll('.copy-user-id-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const userId = btn.getAttribute('data-user-id') || '';
+            if (!userId) return;
+            const copied = await copyTextToClipboard(userId);
+            setAdminUsersStatus(copied ? `Copied user ID ${userId}.` : 'Clipboard write failed.', !copied);
+        });
+    });
 
     document.querySelectorAll('.approve-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -995,9 +2560,16 @@
             const { ok, data } = await api('DELETE', `/ajax/admin/users/${userId}`);
             if (ok) {
                 const tr = rowForUserId(userId);
-                if (tr) tr.remove();
-                else window.location.reload();
-            } else { alert(data.error || 'Failed'); }
+                if (tr) {
+                    tr.remove();
+                    updateAdminUsersSummary();
+                } else {
+                    window.location.reload();
+                }
+                setAdminUsersStatus(`Deleted user @${username}.`);
+            } else {
+                setAdminUsersStatus(data.error || `Failed to delete @${username}.`, true);
+            }
         });
     });
 
@@ -1016,6 +2588,116 @@
             } else {
                 transferMsg.textContent = data.error || 'Transfer failed';
                 transferMsg.style.display = 'block';
+            }
+        });
+    }
+
+    const reconcileChannelIds = document.getElementById('admin-reconcile-channel-ids');
+    const reconcileTargetPeer = document.getElementById('admin-reconcile-target-peer');
+    const reconcileReason = document.getElementById('admin-reconcile-reason');
+    const reconcileRunBtn = document.getElementById('admin-reconcile-run-btn');
+    const reconcileStatus = document.getElementById('admin-reconcile-status');
+    const reconcileOutput = document.getElementById('admin-reconcile-output');
+
+    function setReconcileStatus(text, isError = false) {
+        if (!reconcileStatus) return;
+        reconcileStatus.textContent = text || '';
+        reconcileStatus.classList.toggle('text-danger', !!isError);
+        reconcileStatus.classList.toggle('text-success', !isError && !!text);
+        reconcileStatus.classList.toggle('text-muted', !text);
+    }
+
+    if (reconcileRunBtn) {
+        reconcileRunBtn.addEventListener('click', async () => {
+            const idsText = (reconcileChannelIds?.value || '').trim();
+            const targetPeer = (reconcileTargetPeer?.value || '').trim() || 'all';
+            const reason = (reconcileReason?.value || '').trim() || 'admin_channel_reconcile_delete';
+
+            if (!idsText) {
+                setReconcileStatus('Enter at least one channel ID first.', true);
+                if (reconcileOutput) reconcileOutput.style.display = 'none';
+                return;
+            }
+
+            setReconcileStatus('Sending delete signals...');
+            if (reconcileOutput) reconcileOutput.style.display = 'none';
+            const { ok, data } = await api('POST', '/ajax/admin/channels/reconcile-delete', {
+                channel_ids_text: idsText,
+                target_peer_id: targetPeer,
+                reason,
+            });
+
+            if (!ok) {
+                setReconcileStatus(data.error || 'Failed to send delete signals.', true);
+                if (reconcileOutput) reconcileOutput.style.display = 'none';
+                return;
+            }
+
+            setReconcileStatus(data.message || 'Delete signals sent.');
+            if (reconcileOutput) {
+                reconcileOutput.textContent = JSON.stringify({
+                    requested: data.requested,
+                    sent: data.sent,
+                    skipped: data.skipped,
+                    failed: data.failed,
+                    target_peer: data.target_peer,
+                    details: data.details || [],
+                }, null, 2);
+                reconcileOutput.style.display = 'block';
+            }
+        });
+    }
+
+    const memberSyncChannelId = document.getElementById('admin-member-sync-channel-id');
+    const memberSyncTargetUserId = document.getElementById('admin-member-sync-target-user-id');
+    const memberSyncLimit = document.getElementById('admin-member-sync-limit');
+    const memberSyncRunBtn = document.getElementById('admin-member-sync-run-btn');
+    const memberSyncStatus = document.getElementById('admin-member-sync-status');
+    const memberSyncOutput = document.getElementById('admin-member-sync-output');
+
+    function setMemberSyncStatus(text, isError = false) {
+        if (!memberSyncStatus) return;
+        memberSyncStatus.textContent = text || '';
+        memberSyncStatus.classList.toggle('text-danger', !!isError);
+        memberSyncStatus.classList.toggle('text-success', !isError && !!text);
+        memberSyncStatus.classList.toggle('text-muted', !text);
+    }
+
+    if (memberSyncRunBtn) {
+        memberSyncRunBtn.addEventListener('click', async () => {
+            const channelId = (memberSyncChannelId?.value || '').trim();
+            const targetUserId = (memberSyncTargetUserId?.value || '').trim();
+            const limit = parseInt((memberSyncLimit?.value || '200'), 10) || 200;
+
+            if (!channelId) {
+                setMemberSyncStatus('Enter a channel ID first.', true);
+                if (memberSyncOutput) memberSyncOutput.style.display = 'none';
+                return;
+            }
+
+            const params = new URLSearchParams();
+            params.set('channel_id', channelId);
+            params.set('limit', String(limit));
+            if (targetUserId) params.set('target_user_id', targetUserId);
+
+            setMemberSyncStatus('Loading diagnostics...');
+            if (memberSyncOutput) memberSyncOutput.style.display = 'none';
+
+            const { ok, data } = await api('GET', `/ajax/admin/channels/member-sync-diagnostics?${params.toString()}`);
+            if (!ok) {
+                setMemberSyncStatus(data.error || 'Failed to load diagnostics.', true);
+                if (memberSyncOutput) memberSyncOutput.style.display = 'none';
+                return;
+            }
+
+            const diagnostics = data.diagnostics || {};
+            const sync = diagnostics.member_sync || {};
+            setMemberSyncStatus(
+                `Loaded diagnostics: records=${sync.total_records || 0}, pending=${sync.pending_count || 0}, failed=${sync.failed_count || 0}, warnings=${(diagnostics.warnings || []).length}`
+            );
+            if (memberSyncOutput) {
+                memberSyncOutput.textContent = JSON.stringify(diagnostics, null, 2);
+                memberSyncOutput.style.display = 'block';
             }
         });
     }

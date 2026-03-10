@@ -23,6 +23,7 @@ MANIFEST
 
 # Virtual environments
 .env
+*.env
 .venv
 env/
 venv/
@@ -41,9 +42,14 @@ venv.bak/
 
 # Canopy specific
 data/
+data-fresh/
 logs/
 *.db
 *.db-journal
+
+# Dropbox conflicted copies (never commit)
+*conflicted copy*
+*conflicted*
 
 # Configuration files with sensitive data
 config/production.ini
@@ -73,18 +79,9 @@ docs/TRACE_*.md
 
 # Internal milestone / one-off announce docs (local only — do not push)
 P2P_MILESTONE.md
-scripts/
+scripts/announce_*.txt
 docs/P2P_ARCHITECTURE.md
 docs/P2P_IMPLEMENTATION.md
-docs/FEED_ALGORITHM_PLAN.md
-docs/GITHUB_RELEASE_ANNOUNCEMENT_DRAFT.md
-docs/TEAM_ANNOUNCEMENT_*.md
-docs/RELEASE_PRETAG_AUDIT_*.md
-docs/RELEASE_RUNBOOK_*.md
-docs/hardening-review/
-flask-style-template/
-test_p2p.py
-canopy/mcp/test_client.py
 build_handover_zip.py
 
 # Research / personal notes (local only — do not push)

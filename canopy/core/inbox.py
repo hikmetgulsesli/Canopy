@@ -20,6 +20,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Sequence
 
 from .database import DatabaseManager
+from .events import EVENT_INBOX_ITEM_CREATED, EVENT_INBOX_ITEM_UPDATED
 from ..security.trust import TrustManager
 
 logger = logging.getLogger(__name__)
@@ -95,12 +96,43 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
         return str(dt)
 
 
+def _normalize_item_payload(row: Any, payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Backfill agent-facing payload fields from inbox columns when needed."""
+    normalized: Dict[str, Any] = dict(payload or {})
+
+    sender_user_id = str(row["sender_user_id"] or "").strip()
+    channel_id = str(row["channel_id"] or "").strip()
+    message_id = str(row["message_id"] or "").strip()
+    trigger_type = str(row["trigger_type"] or "").strip().lower()
+
+    if sender_user_id and not normalized.get("sender_user_id"):
+        normalized["sender_user_id"] = sender_user_id
+    if channel_id and not normalized.get("channel_id"):
+        normalized["channel_id"] = channel_id
+    if message_id and not normalized.get("message_id"):
+        normalized["message_id"] = message_id
+    if trigger_type and not normalized.get("trigger_type"):
+        normalized["trigger_type"] = trigger_type
+
+    if trigger_type == "dm":
+        dm_thread_id = str(normalized.get("dm_thread_id") or "").strip()
+        if not dm_thread_id:
+            group_id = str(normalized.get("group_id") or "").strip()
+            dm_thread_id = group_id or sender_user_id
+        if dm_thread_id:
+            normalized["dm_thread_id"] = dm_thread_id
+        normalized.setdefault("reply_endpoint", "/api/v1/messages/reply")
+
+    return normalized
+
+
 class InboxManager:
     """Stores per-agent trigger inbox items."""
 
     def __init__(self, db_manager: DatabaseManager, trust_manager: Optional[TrustManager] = None):
         self.db = db_manager
         self.trust_manager = trust_manager
+        self.workspace_events: Any = None
         self._ensure_tables()
 
     def _ensure_tables(self) -> None:
@@ -270,6 +302,10 @@ class InboxManager:
         return merged
 
     def _cooldown_ok(self, agent_user_id: str, sender_user_id: Optional[str], config: Dict[str, Any]) -> bool:
+        # Agent inboxes already use much higher rate-limit ceilings; cooldowns
+        # are too blunt and can hide legitimate rapid follow-up work.
+        if self._get_account_type(agent_user_id) == 'agent':
+            return True
         try:
             cooldown = int(config.get("cooldown_seconds") or 0)
             sender_cooldown = int(config.get("sender_cooldown_seconds") or 0)
@@ -698,9 +734,10 @@ class InboxManager:
             payload_data.setdefault('message_id', message_id)
 
         inbox_id = f"INB{secrets.token_hex(8)}"
+        created_at_iso = _now_utc().isoformat()
         try:
             with self.db.get_connection() as conn:
-                conn.execute(
+                cur = conn.execute(
                     """
                     INSERT OR IGNORE INTO agent_inbox
                     (id, agent_user_id, source_type, source_id, message_id, channel_id,
@@ -720,13 +757,35 @@ class InboxManager:
                         trigger_type,
                         json.dumps(payload_data) if payload_data else None,
                         priority or 'normal',
-                        _now_utc().isoformat(),
+                        created_at_iso,
                         _iso(expires_at),
                         triggered_by_inbox_id,
                         int(depth) if depth is not None else 0,
                     )
                 )
                 conn.commit()
+            if not (cur.rowcount or 0):
+                return None
+            if self.workspace_events:
+                self.workspace_events.emit_event(
+                    event_type=EVENT_INBOX_ITEM_CREATED,
+                    actor_user_id=sender_user_id,
+                    target_user_id=agent_user_id,
+                    channel_id=channel_id,
+                    message_id=message_id,
+                    visibility_scope='user',
+                    dedupe_key=f"{EVENT_INBOX_ITEM_CREATED}:{inbox_id}",
+                    created_at=created_at_iso,
+                    payload={
+                        'inbox_id': inbox_id,
+                        'source_type': source_type,
+                        'source_id': source_id,
+                        'trigger_type': trigger_type,
+                        'status': 'pending',
+                        'priority': priority or 'normal',
+                        'preview': preview or payload_data.get('preview') or '',
+                    },
+                )
             return inbox_id
         except Exception as e:
             logger.warning(f"Failed to insert inbox item: {e}")
@@ -1117,6 +1176,7 @@ class InboxManager:
                         payload = json.loads(row['payload_json'])
                 except Exception:
                     payload = None
+                payload = _normalize_item_payload(row, payload if isinstance(payload, dict) else None)
                 items.append({
                     'id': row['id'],
                     'agent_user_id': row['agent_user_id'],
@@ -1134,6 +1194,9 @@ class InboxManager:
                     'expires_at': row['expires_at'],
                     'triggered_by_inbox_id': row['triggered_by_inbox_id'],
                     'depth': row['depth'],
+                    'preview': payload.get('preview'),
+                    'dm_thread_id': payload.get('dm_thread_id'),
+                    'reply_endpoint': payload.get('reply_endpoint'),
                     'payload': payload,
                 })
             return items
@@ -1173,11 +1236,18 @@ class InboxManager:
         try:
             with self.db.get_connection() as conn:
                 placeholders = ",".join("?" for _ in ids_clean)
+                affected_rows = conn.execute(
+                    f"""
+                    SELECT id, source_type, source_id, message_id, channel_id, sender_user_id,
+                           priority, payload_json
+                    FROM agent_inbox
+                    WHERE agent_user_id = ? AND id IN ({placeholders})
+                    """,
+                    [user_id] + ids_clean,
+                ).fetchall()
+                handled_at = None if status == 'pending' else _now_utc().isoformat()
                 params: List[Any] = [status]
-                if status == 'pending':
-                    params.append(None)
-                else:
-                    params.append(_now_utc().isoformat())
+                params.append(handled_at)
                 params.append(user_id)
                 params.extend(ids_clean)
                 cur = conn.execute(
@@ -1189,7 +1259,37 @@ class InboxManager:
                     params,
                 )
                 conn.commit()
-                return cur.rowcount or 0
+                updated = cur.rowcount or 0
+            if updated and self.workspace_events:
+                for row in affected_rows or []:
+                    preview = ''
+                    try:
+                        loaded = json.loads(row['payload_json']) if row['payload_json'] else {}
+                        if isinstance(loaded, dict):
+                            preview = str(loaded.get('preview') or '').strip()
+                    except Exception:
+                        preview = ''
+                    handled_suffix = handled_at or 'pending'
+                    self.workspace_events.emit_event(
+                        event_type=EVENT_INBOX_ITEM_UPDATED,
+                        actor_user_id=user_id,
+                        target_user_id=user_id,
+                        channel_id=row['channel_id'],
+                        message_id=row['message_id'],
+                        visibility_scope='user',
+                        dedupe_key=f"{EVENT_INBOX_ITEM_UPDATED}:{row['id']}:{status}:{handled_suffix}",
+                        created_at=handled_at or _now_utc().isoformat(),
+                        payload={
+                            'inbox_id': row['id'],
+                            'source_type': row['source_type'],
+                            'source_id': row['source_id'],
+                            'status': status,
+                            'handled_at': handled_at,
+                            'priority': row['priority'] or 'normal',
+                            'preview': preview,
+                        },
+                    )
+            return updated
         except Exception as e:
             logger.error(f"Failed to update inbox items: {e}")
             return 0

@@ -21,7 +21,14 @@ cd "$SCRIPT_DIR"
 TESTNET_DIR="$SCRIPT_DIR/data/testnet"
 TESTNET_DB="$TESTNET_DIR/canopy.db"
 TESTNET_PORT=7780
-TESTNET_SECRET_KEY_FILE="$TESTNET_DIR/secret_key"
+# Stable secret key — sessions survive restarts during a test session.
+# Generate a persistent key the first time and reuse it across restarts.
+TESTNET_KEY_FILE="$TESTNET_DIR/.testnet_secret_key"
+mkdir -p "$TESTNET_DIR"
+if [[ ! -f "$TESTNET_KEY_FILE" ]]; then
+    (umask 077; python3 -c "import secrets; print(secrets.token_hex(32))" > "$TESTNET_KEY_FILE")
+fi
+IFS= read -r TESTNET_SECRET_KEY < "$TESTNET_KEY_FILE"
 
 # --reset flag: wipe the testnet database and start fresh
 if [[ "${1:-}" == "--reset" ]]; then
@@ -31,21 +38,6 @@ if [[ "${1:-}" == "--reset" ]]; then
 fi
 
 mkdir -p "$TESTNET_DIR"
-
-# Stable secret key — generated once and persisted so sessions survive restarts.
-if [[ ! -f "$TESTNET_SECRET_KEY_FILE" ]]; then
-    if ! python3 -c "import secrets; print(secrets.token_hex(32))" > "$TESTNET_SECRET_KEY_FILE"; then
-        echo "ERROR: Failed to generate secret key. Is python3 installed?" >&2
-        exit 1
-    fi
-    chmod 600 "$TESTNET_SECRET_KEY_FILE"
-fi
-TESTNET_SECRET_KEY="$(cat "$TESTNET_SECRET_KEY_FILE")"
-if [[ ! "$TESTNET_SECRET_KEY" =~ ^[0-9a-f]{64}$ ]]; then
-    echo "ERROR: Secret key file '$TESTNET_SECRET_KEY_FILE' is missing or corrupt." >&2
-    echo "       Delete the file and re-run to generate a new key." >&2
-    exit 1
-fi
 
 echo ""
 echo "🌿 Canopy TESTNET (standalone, mesh-off)"

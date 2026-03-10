@@ -321,9 +321,41 @@ class DatabaseManager:
                     last_source TEXT,
                     updated_at TIMESTAMP NOT NULL
                 );
-                CREATE INDEX IF NOT EXISTS idx_agent_presence_checkin
+                    CREATE INDEX IF NOT EXISTS idx_agent_presence_checkin
                     ON agent_presence(last_checkin_at);
+
+                -- Local workspace event journal (additive read/delivery model)
+                CREATE TABLE IF NOT EXISTS workspace_events (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT UNIQUE NOT NULL,
+                    event_type TEXT NOT NULL,
+                    actor_user_id TEXT,
+                    target_user_id TEXT,
+                    channel_id TEXT,
+                    post_id TEXT,
+                    message_id TEXT,
+                    visibility_scope TEXT NOT NULL,
+                    dedupe_key TEXT,
+                    payload_json TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_workspace_events_created_at
+                    ON workspace_events(created_at);
+                CREATE INDEX IF NOT EXISTS idx_workspace_events_event_type_created
+                    ON workspace_events(event_type, created_at);
+                CREATE INDEX IF NOT EXISTS idx_workspace_events_target_created
+                    ON workspace_events(target_user_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_workspace_events_message_created
+                    ON workspace_events(message_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_workspace_events_channel_created
+                    ON workspace_events(channel_id, created_at);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_events_dedupe
+                    ON workspace_events(dedupe_key)
+                    WHERE dedupe_key IS NOT NULL;
                     """)
+
+                    if self._identity_portability_enabled():
+                        self._ensure_identity_portability_schema(conn)
 
                     # Insert default system state
                     conn.execute("""
@@ -362,7 +394,132 @@ class DatabaseManager:
             except Exception as e:
                 logger.error("Failed to initialize database: %s", e, exc_info=True)
                 raise
-    
+
+    def _identity_portability_enabled(self) -> bool:
+        """Return True when distributed-auth Phase 1 features are enabled."""
+        try:
+            return bool(
+                getattr(getattr(self.config, 'security', None), 'identity_portability_enabled', False)
+            )
+        except Exception:
+            return False
+
+    def _ensure_identity_portability_schema(self, conn: sqlite3.Connection) -> None:
+        """Ensure additive schema needed for identity portability is present."""
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS mesh_principals (
+                principal_id TEXT PRIMARY KEY,
+                display_name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                origin_peer TEXT NOT NULL,
+                status TEXT DEFAULT 'active',
+                metadata_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_mesh_principals_origin
+                ON mesh_principals(origin_peer);
+            CREATE INDEX IF NOT EXISTS idx_mesh_principals_status
+                ON mesh_principals(status);
+
+            CREATE TABLE IF NOT EXISTS mesh_principal_keys (
+                id TEXT PRIMARY KEY,
+                principal_id TEXT NOT NULL,
+                key_type TEXT NOT NULL,
+                key_data TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                revoked_at TIMESTAMP,
+                metadata_json TEXT,
+                FOREIGN KEY (principal_id) REFERENCES mesh_principals(principal_id) ON DELETE CASCADE,
+                UNIQUE(principal_id, key_type, key_data)
+            );
+            CREATE INDEX IF NOT EXISTS idx_mesh_principal_keys_principal
+                ON mesh_principal_keys(principal_id);
+            CREATE INDEX IF NOT EXISTS idx_mesh_principal_keys_type
+                ON mesh_principal_keys(key_type);
+            CREATE INDEX IF NOT EXISTS idx_mesh_principal_keys_revoked
+                ON mesh_principal_keys(revoked_at);
+
+            CREATE TABLE IF NOT EXISTS mesh_principal_links (
+                principal_id TEXT NOT NULL,
+                local_user_id TEXT NOT NULL,
+                linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                linked_by TEXT,
+                source TEXT DEFAULT 'local',
+                PRIMARY KEY (principal_id, local_user_id),
+                FOREIGN KEY (principal_id) REFERENCES mesh_principals(principal_id) ON DELETE CASCADE,
+                FOREIGN KEY (local_user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_mesh_principal_links_user
+                ON mesh_principal_links(local_user_id);
+
+            CREATE TABLE IF NOT EXISTS mesh_bootstrap_grants (
+                grant_id TEXT PRIMARY KEY,
+                principal_id TEXT NOT NULL,
+                granted_role TEXT DEFAULT 'user',
+                audience_peer TEXT,
+                max_uses INTEGER DEFAULT 1,
+                uses_consumed INTEGER DEFAULT 0,
+                expires_at TIMESTAMP NOT NULL,
+                created_by TEXT NOT NULL,
+                issuer_peer_id TEXT NOT NULL,
+                issued_at TIMESTAMP NOT NULL,
+                signature TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT DEFAULT 'active',
+                revoked_at TIMESTAMP,
+                revoked_reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (principal_id) REFERENCES mesh_principals(principal_id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_mesh_bootstrap_grants_status
+                ON mesh_bootstrap_grants(status);
+            CREATE INDEX IF NOT EXISTS idx_mesh_bootstrap_grants_expires
+                ON mesh_bootstrap_grants(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_mesh_bootstrap_grants_principal
+                ON mesh_bootstrap_grants(principal_id);
+            CREATE INDEX IF NOT EXISTS idx_mesh_bootstrap_grants_issuer
+                ON mesh_bootstrap_grants(issuer_peer_id);
+
+            CREATE TABLE IF NOT EXISTS mesh_bootstrap_grant_applications (
+                grant_id TEXT NOT NULL,
+                local_user_id TEXT NOT NULL,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                applied_by TEXT,
+                source_peer TEXT,
+                PRIMARY KEY (grant_id, local_user_id),
+                FOREIGN KEY (grant_id) REFERENCES mesh_bootstrap_grants(grant_id) ON DELETE CASCADE,
+                FOREIGN KEY (local_user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_mesh_grant_applications_user
+                ON mesh_bootstrap_grant_applications(local_user_id);
+
+            CREATE TABLE IF NOT EXISTS mesh_bootstrap_grant_revocations (
+                grant_id TEXT PRIMARY KEY,
+                issuer_peer_id TEXT NOT NULL,
+                revoked_at TIMESTAMP NOT NULL,
+                reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_principal_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                principal_id TEXT,
+                grant_id TEXT,
+                action TEXT NOT NULL,
+                source_peer TEXT,
+                actor_user_id TEXT,
+                details_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_mesh_principal_audit_principal
+                ON mesh_principal_audit_log(principal_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_mesh_principal_audit_grant
+                ON mesh_principal_audit_log(grant_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_mesh_principal_audit_action
+                ON mesh_principal_audit_log(action, created_at DESC);
+        """)
+
     def _run_migrations(self, conn: sqlite3.Connection) -> None:
         """Run database migrations for schema updates on existing databases."""
         try:
@@ -481,6 +638,32 @@ class DatabaseManager:
             if cm_exists:
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_channel_messages_thread_id ON channel_messages(thread_id)")
 
+            # One-time retention hardening migration:
+            # Convert legacy evergreen content (expires_at IS NULL) into
+            # bounded retention so content growth remains finite.
+            retention_migration_key = 'retention_policy_bounded_v1'
+            retention_marker = conn.execute(
+                "SELECT value FROM system_state WHERE key = ?",
+                (retention_migration_key,),
+            ).fetchone()
+            if retention_marker is None:
+                logger.info("Migration: Converting legacy no-expiry content to bounded retention")
+                conn.execute("""
+                    UPDATE feed_posts
+                    SET expires_at = datetime(COALESCE(created_at, CURRENT_TIMESTAMP), '+365 days')
+                    WHERE expires_at IS NULL
+                """)
+                if cm_exists:
+                    conn.execute("""
+                        UPDATE channel_messages
+                        SET expires_at = datetime(COALESCE(created_at, CURRENT_TIMESTAMP), '+365 days')
+                        WHERE expires_at IS NULL
+                    """)
+                conn.execute(
+                    "INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                    (retention_migration_key, datetime.now(timezone.utc).isoformat()),
+                )
+
             # Migration: Add violated_at column to delete_signals
             cursor = conn.execute("PRAGMA table_info(delete_signals)")
             ds_columns = [row[1] for row in cursor.fetchall()]
@@ -551,6 +734,9 @@ class DatabaseManager:
                 CREATE INDEX IF NOT EXISTS idx_content_contexts_url
                     ON content_contexts(source_url);
             """)
+
+            if self._identity_portability_enabled():
+                self._ensure_identity_portability_schema(conn)
 
             conn.commit()
         except Exception as e:
@@ -830,15 +1016,30 @@ class DatabaseManager:
             return [dict(row) for row in cursor.fetchall()]
 
     def get_all_users_for_admin(self) -> List[Dict[str, Any]]:
-        """Get all users with account_type and status for admin UI (password_hash IS NOT NULL)."""
+        """Get all non-system users for admin UI, including shadow/remote rows."""
         with self.get_connection() as conn:
             cursor = conn.execute(
-                """SELECT id, username, display_name, account_type, status, agent_directives, origin_peer, created_at
-                   FROM users WHERE password_hash IS NOT NULL
-                   ORDER BY created_at"""
+                """
+                SELECT id, username, display_name, account_type, status, agent_directives,
+                       origin_peer, created_at, password_hash, public_key
+                FROM users
+                WHERE id NOT IN ('system', 'local_user')
+                ORDER BY created_at
+                """
             )
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
+            rows = []
+            for raw in cursor.fetchall():
+                row = dict(raw)
+                password_hash = str(row.pop('password_hash') or '').strip()
+                public_key = str(row.pop('public_key') or '').strip()
+                row['is_registered'] = bool(password_hash)
+                row['has_public_key'] = bool(public_key)
+                row['is_remote'] = bool(str(row.get('origin_peer') or '').strip())
+                row['is_shadow'] = bool(row['is_remote'] and not row['is_registered'])
+                row['account_type'] = (row.get('account_type') or 'human')
+                row['status'] = (row.get('status') or 'active')
+                rows.append(row)
+            return rows
 
     def set_user_agent_directives(self, user_id: str, directives: Optional[str]) -> bool:
         """Set custom agent directives for a user (or clear with None)."""
@@ -976,33 +1177,161 @@ class DatabaseManager:
             logger.error(f"Failed to set user status: {e}")
             return False
 
+    def update_user_admin_fields(
+        self,
+        user_id: str,
+        *,
+        account_type: Optional[str] = None,
+        status: Optional[str] = None,
+        display_name: Optional[str] = None,
+    ) -> bool:
+        """Admin-safe update for core user classification fields."""
+        set_parts: list[str] = []
+        params: list[Any] = []
+
+        if account_type is not None:
+            account_type_clean = str(account_type).strip().lower()
+            if account_type_clean not in ('human', 'agent'):
+                return False
+            set_parts.append("account_type = ?")
+            params.append(account_type_clean)
+
+        if status is not None:
+            status_clean = str(status).strip().lower()
+            if status_clean not in ('active', 'pending_approval', 'suspended'):
+                return False
+            set_parts.append("status = ?")
+            params.append(status_clean)
+
+        if display_name is not None:
+            display_name_clean = str(display_name).strip()
+            if len(display_name_clean) > 100:
+                return False
+            set_parts.append("display_name = ?")
+            params.append(display_name_clean or None)
+
+        if not set_parts:
+            return False
+
+        set_parts.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(user_id)
+        query = f"UPDATE users SET {', '.join(set_parts)} WHERE id = ?"
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute(query, tuple(params))
+                conn.commit()
+                return cast(int, cursor.rowcount) > 0
+        except Exception as e:
+            logger.error(f"Failed to update admin user fields: {e}")
+            return False
+
     def delete_user(self, user_id: str) -> bool:
         """Delete a user and all data that references them. System/local_user cannot be deleted.
 
         With PRAGMA foreign_keys = ON, the DB has FKs from api_keys, user_keys, messages,
-        feed_posts, post_permissions, agent_inbox, agent_inbox_config, user_feed_preferences.
-        We must remove or reassign all dependent rows before deleting the user row.
+        feed_posts, post_permissions, agent_inbox, agent_inbox_config, user_feed_preferences,
+        and channels(created_by). We remove dependent rows and reassign channel ownership
+        before deleting the user row.
         """
         if user_id in ('system', 'local_user'):
             return False
         try:
             with self.get_connection() as conn:
+                exists = conn.execute(
+                    "SELECT 1 FROM users WHERE id = ?",
+                    (user_id,),
+                ).fetchone()
+                if not exists:
+                    return False
+
+                # Ensure fallback system user exists for ownership reassignment.
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO users (id, username, public_key)
+                    VALUES ('system', 'System', 'system_public_key')
+                    """
+                )
+
+                replacement_owner = 'system'
+                owner_row = conn.execute(
+                    "SELECT value FROM system_state WHERE key = 'instance_owner_id'"
+                ).fetchone()
+                if owner_row:
+                    candidate = str(
+                        owner_row['value']
+                        if hasattr(owner_row, 'keys') and 'value' in owner_row.keys()
+                        else owner_row[0]
+                    ).strip()
+                    if candidate and candidate != user_id:
+                        owner_exists = conn.execute(
+                            "SELECT 1 FROM users WHERE id = ?",
+                            (candidate,),
+                        ).fetchone()
+                        if owner_exists:
+                            replacement_owner = candidate
+
+                # Channels.created_by has a user FK without ON DELETE CASCADE.
+                # Reassign ownership first so user deletion cannot fail on FK.
+                conn.execute(
+                    "UPDATE channels SET created_by = ? WHERE created_by = ?",
+                    (replacement_owner, user_id),
+                )
+
+                def _exec_optional(sql: str, params: tuple[Any, ...]) -> None:
+                    try:
+                        conn.execute(sql, params)
+                    except sqlite3.OperationalError as e:
+                        msg = str(e).lower()
+                        if "no such table" in msg or "no such column" in msg:
+                            logger.debug(f"delete_user optional cleanup skipped: {sql} ({e})")
+                            return
+                        raise
+
+                # Ownership reassignment for FK-protected creators
+                _exec_optional(
+                    "UPDATE streams SET created_by = ? WHERE created_by = ?",
+                    (replacement_owner, user_id),
+                )
+                _exec_optional(
+                    "UPDATE files SET uploaded_by = ? WHERE uploaded_by = ?",
+                    (replacement_owner, user_id),
+                )
+                _exec_optional(
+                    "UPDATE tasks SET created_by = ?, updated_by = ? WHERE created_by = ?",
+                    (replacement_owner, replacement_owner, user_id),
+                )
+                _exec_optional(
+                    "UPDATE objectives SET created_by = ? WHERE created_by = ?",
+                    (replacement_owner, user_id),
+                )
+
                 # API and channel membership
                 conn.execute("DELETE FROM api_keys WHERE user_id = ?", (user_id,))
                 conn.execute("DELETE FROM user_keys WHERE user_id = ?", (user_id,))
                 conn.execute("DELETE FROM channel_members WHERE user_id = ?", (user_id,))
+
                 # Feed and posts
                 conn.execute("DELETE FROM post_permissions WHERE user_id = ?", (user_id,))
                 conn.execute("DELETE FROM post_content_keys WHERE user_id = ?", (user_id,))
                 conn.execute("DELETE FROM agent_inbox WHERE agent_user_id = ? OR sender_user_id = ?", (user_id, user_id))
                 conn.execute("DELETE FROM agent_inbox_config WHERE user_id = ?", (user_id,))
+                _exec_optional("DELETE FROM agent_inbox_audit WHERE agent_user_id = ?", (user_id,))
                 conn.execute("DELETE FROM user_feed_preferences WHERE user_id = ?", (user_id,))
                 conn.execute("DELETE FROM messages WHERE sender_id = ?", (user_id,))
                 conn.execute("DELETE FROM feed_posts WHERE author_id = ?", (user_id,))
+
                 # Best-effort cleanup (no FK in schema but avoid orphan rows)
                 conn.execute("DELETE FROM content_contexts WHERE owner_user_id = ?", (user_id,))
-                # mention_events: created in mentions.py, same DB
                 conn.execute("DELETE FROM mention_events WHERE user_id = ? OR author_id = ?", (user_id, user_id))
+                _exec_optional("DELETE FROM mention_claims WHERE claimed_by_user_id = ?", (user_id,))
+                _exec_optional("DELETE FROM objective_members WHERE user_id = ? OR added_by = ?", (user_id, user_id))
+                _exec_optional("UPDATE tasks SET assigned_to = NULL WHERE assigned_to = ?", (user_id,))
+                _exec_optional("DELETE FROM stream_access_tokens WHERE user_id = ?", (user_id,))
+                _exec_optional("DELETE FROM file_access_log WHERE accessed_by = ?", (user_id,))
+                _exec_optional("DELETE FROM channel_member_sync_deliveries WHERE target_user_id = ?", (user_id,))
+                _exec_optional("DELETE FROM likes WHERE user_id = ?", (user_id,))
+                _exec_optional("DELETE FROM agent_presence WHERE user_id = ?", (user_id,))
+
                 # Channel messages (table in channels.py, same DB): likes then parent refs then messages
                 try:
                     msg_ids = [r[0] for r in conn.execute("SELECT id FROM channel_messages WHERE user_id = ?", (user_id,)).fetchall()]
@@ -1018,9 +1347,9 @@ class DatabaseManager:
                     if "no such table" not in str(e).lower():
                         raise
                 # Finally remove the user (must be last due to FKs)
-                conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+                deleted = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
                 conn.commit()
-                return True
+                return cast(int, deleted.rowcount) > 0
         except Exception as e:
             logger.error(f"Failed to delete user: {e}")
             return False

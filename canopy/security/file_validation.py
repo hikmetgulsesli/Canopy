@@ -10,6 +10,8 @@ Development: AI-assisted implementation (Claude, Codex, GitHub Copilot, Cursor I
 """
 
 import logging
+import zipfile
+import io
 from typing import Tuple, Optional
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,8 @@ _EXT_TO_MIME = {
     '.markdown': 'text/markdown',
     '.csv': 'text/csv',
     '.tsv': 'text/csv',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.xlsm': 'application/vnd.ms-excel.sheet.macroenabled.12',
     '.txt': 'text/plain',
     '.log': 'text/plain',
     '.cfg': 'text/plain',
@@ -177,6 +181,16 @@ ALLOWED_TYPES = {
     'text/csv': [
         # CSV files — no magic bytes
     ],
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': [
+        b'PK\x03\x04',
+        b'PK\x05\x06',
+        b'PK\x07\x08',
+    ],
+    'application/vnd.ms-excel.sheet.macroenabled.12': [
+        b'PK\x03\x04',
+        b'PK\x05\x06',
+        b'PK\x07\x08',
+    ],
     'text/html': [
         b'<!DOCTYPE',
         b'<html',
@@ -232,6 +246,8 @@ MAX_SIZES = {
     'text/x-tex': 2 * 1024 * 1024,       # 2MB for TeX/LaTeX
     'application/x-latex': 2 * 1024 * 1024,
     'text/csv': 5 * 1024 * 1024,          # 5MB for CSV
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 25 * 1024 * 1024,
+    'application/vnd.ms-excel.sheet.macroenabled.12': 25 * 1024 * 1024,
     'text/html': 2 * 1024 * 1024,
     'application/xml': 2 * 1024 * 1024,
     'text/xml': 2 * 1024 * 1024,
@@ -240,6 +256,20 @@ MAX_SIZES = {
     'application/x-tar': 100 * 1024 * 1024,
     'application/gzip': 100 * 1024 * 1024,
 }
+
+
+def _has_openxml_workbook_structure(file_data: bytes) -> bool:
+    """Return True when a ZIP container looks like an OOXML spreadsheet workbook."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(file_data)) as archive:
+            names = set(archive.namelist())
+            return (
+                '[Content_Types].xml' in names
+                and 'xl/workbook.xml' in names
+                and any(name.startswith('xl/worksheets/') for name in names)
+            )
+    except Exception:
+        return False
 
 
 def validate_file_upload(
@@ -277,7 +307,10 @@ def validate_file_upload(
         'audio/mp3':    'audio/mpeg',
         'audio/x-wav':  'audio/wav',
         'audio/x-ogg':  'audio/ogg',
+        'application/vnd.ms-excel.sheet.macroenabled.12': 'application/vnd.ms-excel.sheet.macroenabled.12',
+        'application/vnd.ms-excel.sheet.macroenabled.12; charset=binary': 'application/vnd.ms-excel.sheet.macroenabled.12',
     }
+    claimed_content_type = (claimed_content_type or '').strip().lower()
     if claimed_content_type in _GENERIC_TYPES:
         inferred = _infer_content_type(filename)
         if inferred and inferred in ALLOWED_TYPES:
@@ -348,6 +381,14 @@ def validate_file_upload(
         for pattern in dangerous_patterns:
             if pattern in file_str:
                 return False, "HTML file contains potentially dangerous content", None
+
+    # 4c. Validate that OOXML spreadsheet uploads are actually workbook containers.
+    if claimed_content_type in (
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-excel.sheet.macroenabled.12',
+    ):
+        if not _has_openxml_workbook_structure(file_data):
+            return False, "Spreadsheet file is invalid or malformed", None
     
     # 5. Validate filename extension matches content type
     extension_map = {
@@ -373,6 +414,8 @@ def validate_file_upload(
         'text/x-tex': ['.tex', '.sty', '.cls', '.bib', '.bst'],
         'application/x-latex': ['.tex', '.latex', '.ltx'],
         'text/csv': ['.csv', '.tsv'],
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+        'application/vnd.ms-excel.sheet.macroenabled.12': ['.xlsm'],
         'text/html': ['.html', '.htm'],
         'application/xml': ['.xml', '.xsl', '.xslt'],
         'text/xml': ['.xml'],
@@ -403,17 +446,23 @@ def detect_zip_bomb(file_data: bytes, content_type: str) -> Tuple[bool, Optional
     Returns:
         (is_safe, error_message)
     """
-    if content_type not in ['application/zip', 'application/gzip']:
+    if content_type not in [
+        'application/zip',
+        'application/gzip',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-excel.sheet.macroenabled.12',
+    ]:
         return True, None
     
     # Check compression ratio - if suspiciously high, might be a zip bomb
     # This is a simple heuristic; true zip bomb detection requires decompression
     
-    if content_type == 'application/zip':
+    if content_type in [
+        'application/zip',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-excel.sheet.macroenabled.12',
+    ]:
         try:
-            import zipfile
-            import io
-            
             zip_file = zipfile.ZipFile(io.BytesIO(file_data))
             total_uncompressed = sum(info.file_size for info in zip_file.filelist)
             
