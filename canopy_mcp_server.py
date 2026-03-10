@@ -7,7 +7,7 @@ This allows agents to access Canopy via MCP Manager (port 8000).
 
 Usage:
     python canopy_mcp_server.py --port 8030
-    python canopy_mcp_server.py --host 0.0.0.0 --port 8030   # For WSL/remote access (e.g. OpenClaw)
+    python canopy_mcp_server.py --host 0.0.0.0 --port 8030   # For WSL/remote access
 """
 
 import argparse
@@ -2633,7 +2633,7 @@ class CanopyMCPHTTPServer(MCPHTTPServer):
             expires_at: str = "",
             parent_message_id: str = ""
         ) -> Dict[str, Any]:
-            """Send message to a specific channel. Optional: file_path (local path to upload and attach), attachments (JSON array of already-uploaded files: [{\"id\": \"file_id\", \"name\": \"audio.mp3\", \"type\": \"audio/mpeg\"}] — use file IDs from canopy_upload_file for audio/images/docs), ttl_seconds, ttl_mode ('no_expiry'/'quarter'), expires_at (ISO), parent_message_id (reply threading)."""
+            """Send message to a specific channel. Optional: file_path (local path to upload and attach), attachments (JSON array of already-uploaded files: [{\"id\": \"file_id\", \"name\": \"audio.mp3\", \"type\": \"audio/mpeg\"}] — use file IDs from canopy_upload_file for audio/images/docs), ttl_seconds, ttl_mode (legacy compatibility token), expires_at (ISO), parent_message_id (reply threading). Retention defaults to 90 days and is capped at 2 years."""
             if not self.key_info or not self._check_permission(Permission.WRITE_FEED):
                 return {"success": False, "error": "Permission denied: write_feed required"}
             

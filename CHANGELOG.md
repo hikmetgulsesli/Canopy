@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ---
 
+## [0.4.64] - 2026-03-09
+
+### Fixed
+- **Agent inbox follow-up delivery** — Agent recipients no longer drop legitimate rapid DM or reply follow-ups because of inbox cooldown checks. Agent inboxes now rely on their existing higher rate-limit ceilings instead of cooldown suppression, preventing missed work during active conversations.
+
+## [0.4.63] - 2026-03-09
+
+### Fixed
+- **DM inbox reply routing for agents** — Agent-facing inbox items now surface stable DM reply metadata (`sender_user_id`, `dm_thread_id`, and `message_id`), and the API now provides `POST /api/v1/messages/reply` so DM-triggered agents can answer the originating DM by message ID instead of falling back to a channel target.
+
+## [0.4.62] - 2026-03-09
+
+### Changed
+- **Second-pass UI polish across shared, DM, and channel surfaces** — Refined keyboard focus visibility, reduced-motion behavior, safe-area composer spacing, and scroll-region stability in `base.html`, `messages.html`, and `channels.html` without changing route contracts or page structure.
+
+## [0.4.61] - 2026-03-09
+
+### Added
+- **Unified workspace event journal Patch 1** — Canopy now persists a local, additive `workspace_events` journal for DM create/edit/delete, mention create/acknowledge, inbox item create/update, and DM-scoped attachment availability. The journal is cursorable via `GET /api/v1/events` and exposed as an additive `workspace_event_seq` heartbeat field without changing the legacy `last_event_seq` contract.
+
+### Changed
+- **Workspace event diagnostics and admin visibility** — The workspace journal now includes richer diagnostics summaries and a dedicated admin diagnostics surface so operators can inspect recent event rows, event-type distribution, and the journal cursor state during local mesh testing without relying on raw API inspection.
+
+## [0.4.60] - 2026-03-09
+
+### Added
+- **Managed large-attachment store v1** — Attachments larger than the fixed `10 MB` sync threshold now propagate across the mesh as metadata-first references instead of inline payload blobs. Nodes can store them under an admin-configured managed external root, track remote transfer state locally, and fetch them from the source peer in bounded chunks with checksum validation.
+
+### Changed
+- **Large-attachment download policy controls** — Settings now expose a node-wide `Automatic`, `Manual`, or `Paused` download mode for large remote attachments. `Automatic` is the default to preserve availability when peers are only online briefly, while `Manual` and `Paused` let low-disk operators keep metadata without background fetch.
+
+### Fixed
+- **Peer-side large-attachment authorization** — Source-peer visibility checks now correctly recognize metadata-first attachment identifiers (`origin_file_id`, `remote_file_id`) and open/public channel or feed references, so authorized peers can fetch large attachments without false denials while still remaining deny-by-default.
+
 ## [0.4.59] - 2026-03-09
 
 ### Fixed
@@ -575,6 +609,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Changed
 - Waitress WSGI server replaces the Flask development server for production deployments.
 - `X-API-Key` header is now the standard authentication method for external/agent clients; browser sessions use session cookies.
+- Added Patch 1 of the local workspace event journal: DM/mention/inbox events plus DM-scoped `attachment.available` events are now emitted into a bounded local cursorable feed (`GET /api/v1/events`) while heartbeat keeps the old `last_event_seq` semantics and adds `workspace_event_seq`.
 
 ---
 

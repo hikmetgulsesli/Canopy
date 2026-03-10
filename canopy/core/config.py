@@ -45,6 +45,13 @@ class SecurityConfig:
     max_key_age: int = 86400 * 30  # 30 days
     trust_threshold: int = 50
     require_login: bool = True  # Require PIN/password to access web UI
+    allow_unverified_relay_messages: bool = False  # Mixed-version compatibility switch
+    e2e_private_channels: bool = False  # Phase 1 scaffold; disabled by default
+    e2e_private_channels_enforce: bool = False  # Enforce only when all peers support it
+    sync_digest_enabled: bool = False  # Optional Merkle-assisted catch-up optimization
+    sync_digest_require_capability: bool = True  # Only use when peer advertises support
+    sync_digest_max_channels_per_request: int = 200
+    identity_portability_enabled: bool = False  # Distributed-auth Phase 1 (metadata + grants)
 
 
 @dataclass
@@ -180,10 +187,49 @@ class Config:
     def from_env(cls) -> 'Config':
         """Create configuration from environment variables."""
         config = cls()
+
+        def _env_bool(name: str, default: bool) -> bool:
+            raw = os.getenv(name)
+            if raw is None:
+                return default
+            return raw.strip().lower() in {'1', 'true', 'yes', 'on'}
         
         # Override with environment variables if present
         config.debug = os.getenv('CANOPY_DEBUG', 'false').lower() == 'true'
         config.testing = os.getenv('CANOPY_TESTING', 'false').lower() == 'true'
+        config.security.allow_unverified_relay_messages = _env_bool(
+            'CANOPY_ALLOW_UNVERIFIED_RELAY_MESSAGES',
+            config.security.allow_unverified_relay_messages,
+        )
+        config.security.e2e_private_channels = _env_bool(
+            'CANOPY_E2E_PRIVATE_CHANNELS',
+            config.security.e2e_private_channels,
+        )
+        config.security.e2e_private_channels_enforce = _env_bool(
+            'CANOPY_E2E_PRIVATE_CHANNELS_ENFORCE',
+            config.security.e2e_private_channels_enforce,
+        )
+        config.security.sync_digest_enabled = _env_bool(
+            'CANOPY_SYNC_DIGEST_ENABLED',
+            config.security.sync_digest_enabled,
+        )
+        config.security.sync_digest_require_capability = _env_bool(
+            'CANOPY_SYNC_DIGEST_REQUIRE_CAPABILITY',
+            config.security.sync_digest_require_capability,
+        )
+        config.security.identity_portability_enabled = _env_bool(
+            'CANOPY_IDENTITY_PORTABILITY_ENABLED',
+            config.security.identity_portability_enabled,
+        )
+        if digest_max := os.getenv('CANOPY_SYNC_DIGEST_MAX_CHANNELS'):
+            try:
+                config.security.sync_digest_max_channels_per_request = max(1, int(digest_max))
+            except Exception:
+                logger.warning(
+                    "Invalid CANOPY_SYNC_DIGEST_MAX_CHANNELS value '%s'; using default %s",
+                    digest_max,
+                    config.security.sync_digest_max_channels_per_request,
+                )
             
         # Network configuration
         if host := os.getenv('CANOPY_HOST'):
@@ -246,6 +292,13 @@ class Config:
                 'encryption_algorithm': self.security.encryption_algorithm,
                 'session_timeout': self.security.session_timeout,
                 'trust_threshold': self.security.trust_threshold,
+                'allow_unverified_relay_messages': self.security.allow_unverified_relay_messages,
+                'e2e_private_channels': self.security.e2e_private_channels,
+                'e2e_private_channels_enforce': self.security.e2e_private_channels_enforce,
+                'sync_digest_enabled': self.security.sync_digest_enabled,
+                'sync_digest_require_capability': self.security.sync_digest_require_capability,
+                'sync_digest_max_channels_per_request': self.security.sync_digest_max_channels_per_request,
+                'identity_portability_enabled': self.security.identity_portability_enabled,
             },
             'storage': {
                 'database_path': self.storage.database_path,

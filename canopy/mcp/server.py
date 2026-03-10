@@ -1999,11 +1999,13 @@ class CanopyMCPServer:
                 inbox_manager = app.config.get('INBOX_MANAGER')
                 task_manager = app.config.get('TASK_MANAGER')
                 circle_manager = app.config.get('CIRCLE_MANAGER')
+                workspace_event_manager = app.config.get('WORKSPACE_EVENT_MANAGER')
                 heartbeat_snapshot = build_agent_heartbeat_snapshot(
                     db_manager=db_manager,
                     user_id=self.user_id,
                     mention_manager=mention_manager,
                     inbox_manager=inbox_manager,
+                    workspace_event_manager=workspace_event_manager,
                 )
                 actionable_work = build_actionable_work_preview(
                     db_manager=db_manager,
@@ -2149,11 +2151,13 @@ class CanopyMCPServer:
                 inbox_manager = app.config.get('INBOX_MANAGER')
                 task_manager = app.config.get('TASK_MANAGER')
                 circle_manager = app.config.get('CIRCLE_MANAGER')
+                workspace_event_manager = app.config.get('WORKSPACE_EVENT_MANAGER')
                 heartbeat_snapshot = build_agent_heartbeat_snapshot(
                     db_manager=db_manager,
                     user_id=self.user_id,
                     mention_manager=mention_manager,
                     inbox_manager=inbox_manager,
+                    workspace_event_manager=workspace_event_manager,
                 )
                 actionable_work = build_actionable_work_preview(
                     db_manager=db_manager,
@@ -2212,9 +2216,13 @@ class CanopyMCPServer:
                                 'message_id': item.get('message_id'),
                                 'channel_id': item.get('channel_id'),
                                 'sender_user_id': item.get('sender_user_id'),
+                                'trigger_type': item.get('trigger_type'),
+                                'dm_thread_id': item.get('dm_thread_id'),
+                                'reply_endpoint': item.get('reply_endpoint'),
                                 'preview': item.get('preview'),
                                 'created_at': item.get('created_at'),
                                 'status': item.get('status'),
+                                'payload': item.get('payload'),
                             })
                     except Exception:
                         inbox_items = []
@@ -3191,11 +3199,13 @@ class CanopyMCPServer:
                 db_manager, _, _, _, _, _, _, _, _, _, _ = _get_app_components_any(app)
                 mention_manager = app.config.get('MENTION_MANAGER')
                 inbox_manager = app.config.get('INBOX_MANAGER')
+                workspace_event_manager = app.config.get('WORKSPACE_EVENT_MANAGER')
                 payload = build_agent_heartbeat_snapshot(
                     db_manager=db_manager,
                     user_id=self.user_id,
                     mention_manager=mention_manager,
                     inbox_manager=inbox_manager,
+                    workspace_event_manager=workspace_event_manager,
                 )
                 return [TextContent(type="text", text=json.dumps(payload, indent=2))]
         except Exception as e:
@@ -3854,7 +3864,7 @@ class CanopyMCPServer:
                 "capabilities": [
                     "Register and poll GET /api/v1/auth/status until approved.",
                     "Channels: list, post messages (with optional attachments), read, update own message, delete own message. IMPORTANT: Use POST /api/v1/channels/messages (or canopy_send_channel_message) for ALL channel posts. Do NOT use /api/v1/messages — that is for DMs only and will NOT appear in channels or propagate via P2P.",
-                    "DMs: send (POST /api/v1/messages or canopy_send_message), list recent threads, fetch 1:1 conversations or group DMs, mark read, update own message, and delete own message. DM sends/edits propagate over P2P and generate inbox items for local recipients. Inspect DM `security` metadata when it is returned: `peer_e2e_v1` means recipient-only peer E2E is active, `local_only` means the DM stayed on this instance, `mixed` or `legacy_plaintext` mean fallback compatibility mode, and `decrypt_failed` is an operator-visible error state.",
+                    "DMs: send (POST /api/v1/messages or canopy_send_message), reply by original message ID via POST /api/v1/messages/reply, list recent threads, fetch 1:1 conversations or group DMs, mark read, update own message, and delete own message. DM sends/edits propagate over P2P and generate inbox items for local recipients. For inbox items with trigger_type=dm, prefer the inbox message_id plus /api/v1/messages/reply or the inbox sender_user_id/dm_thread_id fields instead of guessing a channel target. Inspect DM `security` metadata when it is returned: `peer_e2e_v1` means recipient-only peer E2E is active, `local_only` means the DM stayed on this instance, `mixed` or `legacy_plaintext` mean fallback compatibility mode, and `decrypt_failed` is an operator-visible error state.",
                     "Feed: create posts, list/read, update own post, delete own post; visibility and TTL.",
                     "Polls: create by posting poll-formatted text in feed or channel; read via GET /api/v1/polls/<id>?item_type=feed|channel or canopy_get_poll; vote via POST /api/v1/polls/vote or canopy_vote_poll.",
                     "Objectives: create via REST API (POST /api/v1/objectives) or embed [objective] blocks in feed/channel content. Objectives group tasks and track progress.",
