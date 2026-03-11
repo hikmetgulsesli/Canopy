@@ -104,6 +104,21 @@ def _is_private_ip(host: str) -> bool:
         return False
 
 
+def _normalize_origin_peer_value(origin_peer: Any, local_peer_id: Optional[str] = None) -> Optional[str]:
+    """Treat local-peer origin markers as local, not remote."""
+    origin = str(origin_peer or '').strip()
+    if not origin:
+        return None
+    local_peer = str(local_peer_id or '').strip()
+    if local_peer and origin == local_peer:
+        return None
+    return origin
+
+
+def _is_remote_origin_peer(origin_peer: Any, local_peer_id: Optional[str] = None) -> bool:
+    return _normalize_origin_peer_value(origin_peer, local_peer_id) is not None
+
+
 def _resolve_p2p_stream(stream_id: str, db_manager: Any, p2p_manager: Any) -> Optional[dict[str, Any]]:
     """Find the origin peer for a stream not stored locally and return a remote playback URL.
 
@@ -361,6 +376,7 @@ def create_ui_blueprint() -> Blueprint:
         try:
             db_manager, _, trust_manager, message_manager, channel_manager, _, _, _, profile_manager, _, p2p_manager = _get_app_components_any(current_app)
             connected_peers = p2p_manager.get_connected_peers() if p2p_manager else []
+            local_peer_id = p2p_manager.get_peer_id() if p2p_manager else None
             peer_snapshot = _build_sidebar_peer_snapshot(
                 list(connected_peers or []),
                 trust_manager,
@@ -383,6 +399,7 @@ def create_ui_blueprint() -> Blueprint:
                 'sidebar_peer_rev': peer_snapshot['peer_rev'],
                 'sidebar_recent_dm_contacts': dm_snapshot['recent_dm_contacts'],
                 'sidebar_dm_rev': dm_snapshot['dm_rev'],
+                'sidebar_local_peer_id': local_peer_id,
             }
             # Admin link and badge (instance owner only)
             owner_id = db_manager.get_instance_owner_user_id()
@@ -1353,6 +1370,13 @@ def create_ui_blueprint() -> Blueprint:
         if not user_ids:
             return
         presence_records = get_agent_presence_records(db_manager=db_manager, user_ids=user_ids)
+        local_peer_id = None
+        try:
+            _, _, _, _, _, _, _, _, _, _, p2p_manager = _get_app_components_any(current_app)
+            local_peer_id = p2p_manager.get_peer_id() if p2p_manager else None
+        except Exception:
+            local_peer_id = None
+
         for user in users:
             uid = str(user.get('id') or user.get('user_id') or '').strip()
             presence_record = presence_records.get(uid) or {}
@@ -1363,7 +1387,8 @@ def create_ui_blueprint() -> Blueprint:
                 has_presence_checkin=bool(presence_record.get('last_check_in_at')),
             )
             user['account_type'] = account_type
-            origin_peer = str(user.get('origin_peer') or '').strip()
+            origin_peer = _normalize_origin_peer_value(user.get('origin_peer'), local_peer_id)
+            user['origin_peer'] = origin_peer
             presence = build_agent_presence_payload(
                 last_check_in_at=presence_record.get('last_check_in_at'),
                 is_remote=bool(origin_peer),
@@ -1722,9 +1747,11 @@ def create_ui_blueprint() -> Blueprint:
         audit_limit: int = 25,
     ) -> dict[str, Any]:
         user_id = user_row.get('id')
-        db_manager, _, _, _, channel_manager, _, _, _, profile_manager, _, _ = _get_app_components_any(current_app)
+        db_manager, _, _, _, channel_manager, _, _, _, profile_manager, _, p2p_manager = _get_app_components_any(current_app)
         mention_manager = current_app.config.get('MENTION_MANAGER')
         inbox_manager = current_app.config.get('INBOX_MANAGER')
+        local_peer_id = p2p_manager.get_peer_id() if p2p_manager else None
+        normalized_origin_peer = _normalize_origin_peer_value(user_row.get('origin_peer'), local_peer_id)
 
         profile = None
         try:
@@ -1761,9 +1788,9 @@ def create_ui_blueprint() -> Blueprint:
                 'account_type': user_row.get('account_type') or 'human',
                 'status': user_row.get('status') or 'active',
                 'theme_preference': theme_preference,
-                'origin_peer': user_row.get('origin_peer'),
+                'origin_peer': normalized_origin_peer,
                 'created_at': user_row.get('created_at'),
-                'is_local': not bool(user_row.get('origin_peer')),
+                'is_local': not bool(normalized_origin_peer),
             },
             'inbox': {
                 'available': bool(inbox_manager),
@@ -3647,6 +3674,44 @@ def create_ui_blueprint() -> Blueprint:
         except Exception:
             return redirect(url_for('ui.channels'))
 
+    def _enrich_channel_lifecycle_state(channels, channel_manager, p2p_manager):
+        """Attach derived lifecycle/owner state to channel view objects."""
+        if not channels or not channel_manager:
+            return channels or []
+        local_peer_id = None
+        connected_peer_ids = set()
+        known_peer_ids = set()
+        try:
+            if p2p_manager:
+                local_peer_id = p2p_manager.get_peer_id()
+                connected_peer_ids = set(p2p_manager.get_connected_peers() or [])
+                known_peer_ids = set(
+                    (getattr(getattr(p2p_manager, 'identity_manager', None), 'known_peers', {}) or {}).keys()
+                )
+        except Exception:
+            connected_peer_ids = set()
+            known_peer_ids = set()
+
+        for channel in channels:
+            try:
+                lifecycle = channel_manager.describe_channel_lifecycle(
+                    channel,
+                    local_peer_id=local_peer_id,
+                    connected_peer_ids=connected_peer_ids,
+                    known_peer_ids=known_peer_ids,
+                )
+                channel.lifecycle_status = lifecycle.get('status') or 'active'
+                channel.lifecycle_ttl_days = lifecycle.get('ttl_days')
+                channel.lifecycle_preserved = bool(lifecycle.get('preserved'))
+                channel.archived_at = lifecycle.get('archived_at')
+                channel.archive_reason = lifecycle.get('archive_reason')
+                channel.last_activity_at = lifecycle.get('last_activity_at') or channel.last_activity_at
+                channel.days_until_archive = lifecycle.get('days_until_archive')
+                channel.owner_peer_state = lifecycle.get('owner_peer_state')
+            except Exception:
+                continue
+        return channels
+
     # Channels interface (Slack-style)
     @ui.route('/channels')
     @require_login
@@ -3659,6 +3724,7 @@ def create_ui_blueprint() -> Blueprint:
             
             # Get user's channels
             channels = channel_manager.get_user_channels(user_id)
+            channels = _enrich_channel_lifecycle_state(channels, channel_manager, p2p_manager)
             logger.debug(f"Channels page: user_id={user_id}, channels_count={len(channels)}")
             for channel in channels:
                 logger.debug(f"Channel: id={channel.id}, name={channel.name}, type={channel.channel_type}")
@@ -6339,10 +6405,11 @@ def create_ui_blueprint() -> Blueprint:
         channels that were added after page load (e.g. via member_sync).
         """
         try:
-            _, _, _, _, channel_manager, _, _, _, _, _, _ = _get_app_components_any(current_app)
+            _, _, _, _, channel_manager, _, _, _, _, _, p2p_manager = _get_app_components_any(current_app)
             user_id = get_current_user()
             client_rev = str(request.args.get('rev') or '').strip()
             channels = channel_manager.get_user_channels(user_id)
+            channels = _enrich_channel_lifecycle_state(channels, channel_manager, p2p_manager)
             payload = []
             for ch in channels:
                 ctype = ch.channel_type
@@ -6360,6 +6427,16 @@ def create_ui_blueprint() -> Blueprint:
                     'unread_count': int(getattr(ch, 'unread_count', 0) or 0),
                     'notifications_enabled': bool(getattr(ch, 'notifications_enabled', True)),
                     'crypto_mode': getattr(ch, 'crypto_mode', '') or '',
+                    'lifecycle_status': getattr(ch, 'lifecycle_status', 'active') or 'active',
+                    'lifecycle_ttl_days': int(getattr(ch, 'lifecycle_ttl_days', channel_manager.DEFAULT_CHANNEL_LIFECYCLE_DAYS) or channel_manager.DEFAULT_CHANNEL_LIFECYCLE_DAYS),
+                    'lifecycle_preserved': bool(getattr(ch, 'lifecycle_preserved', False)),
+                    'archived_at': (
+                        getattr(ch, 'archived_at', None).isoformat()
+                        if getattr(ch, 'archived_at', None) else None
+                    ),
+                    'archive_reason': getattr(ch, 'archive_reason', None),
+                    'days_until_archive': getattr(ch, 'days_until_archive', None),
+                    'owner_peer_state': getattr(ch, 'owner_peer_state', None),
                 })
             rev = _stable_ui_revision(payload)
             if client_rev and client_rev == rev:
@@ -7535,6 +7612,12 @@ def create_ui_blueprint() -> Blueprint:
             
             if not content and not file_attachments:
                 return jsonify({'error': 'Post content or attachments required'}), 400
+            structured_validation = _validate_structured_semantics(content)
+            if structured_validation.get('blocking'):
+                return jsonify({
+                    'error': 'Fix the structured block issues before sharing this post.',
+                    'structured_validation': structured_validation,
+                }), 400
             
             # Process file attachments if any (same as channel messages)
             processed_attachments = []
@@ -7967,6 +8050,26 @@ def create_ui_blueprint() -> Blueprint:
                 except Exception as contract_err:
                     logger.warning(f"Inline contract creation failed: {contract_err}")
 
+                # Inline handoff creation from [handoff] blocks
+                try:
+                    handoff_manager = current_app.config.get('HANDOFF_MANAGER')
+                    if handoff_manager:
+                        handoff_visibility = 'network' if visibility_enum.value in ('public', 'network') else 'local'
+                        _sync_inline_handoffs_from_content(
+                            handoff_manager=handoff_manager,
+                            content=content,
+                            scope='feed',
+                            source_id=post.id,
+                            actor_id=user_id,
+                            source_type='feed_post',
+                            visibility=handoff_visibility,
+                            origin_peer=p2p_manager.get_peer_id() if p2p_manager else None,
+                            created_at=post.created_at.isoformat() if getattr(post, 'created_at', None) else None,
+                            channel_id=None,
+                        )
+                except Exception as handoff_err:
+                    logger.warning(f"Inline handoff creation failed: {handoff_err}")
+
                 # Inline skill registration from [skill] blocks
                 try:
                     skill_manager = current_app.config.get('SKILL_MANAGER')
@@ -8063,6 +8166,19 @@ def create_ui_blueprint() -> Blueprint:
                 except Exception as mention_err:
                     logger.warning(f"Feed mention processing failed: {mention_err}")
 
+                structured_objects = _collect_inline_structured_summaries(
+                    content=content,
+                    scope='feed',
+                    source_id=post.id,
+                    task_manager=current_app.config.get('TASK_MANAGER'),
+                    objective_manager=current_app.config.get('OBJECTIVE_MANAGER'),
+                    request_manager=current_app.config.get('REQUEST_MANAGER'),
+                    signal_manager=current_app.config.get('SIGNAL_MANAGER'),
+                    contract_manager=current_app.config.get('CONTRACT_MANAGER'),
+                    circle_manager=current_app.config.get('CIRCLE_MANAGER'),
+                    handoff_manager=current_app.config.get('HANDOFF_MANAGER'),
+                )
+
                 return jsonify({
                     'success': True,
                     'post': post.to_dict() if hasattr(post, 'to_dict') else {
@@ -8073,7 +8189,8 @@ def create_ui_blueprint() -> Blueprint:
                         'created_at': post.created_at.isoformat(),
                         'expires_at': post.expires_at.isoformat() if getattr(post, 'expires_at', None) else None,
                         'metadata': post.metadata
-                    }
+                    },
+                    'structured_objects': structured_objects,
                 })
             else:
                 return jsonify({'error': 'Failed to create post'}), 500
@@ -8391,6 +8508,34 @@ def create_ui_blueprint() -> Blueprint:
                         )
                 except Exception as contract_err:
                     logger.warning(f"Inline contract sync failed on post update: {contract_err}")
+
+                # Sync inline handoffs from edited feed content
+                try:
+                    handoff_manager = current_app.config.get('HANDOFF_MANAGER')
+                    if handoff_manager:
+                        effective_visibility = visibility_enum.value if visibility_enum else existing_post.visibility.value
+                        handoff_visibility = 'network' if effective_visibility in ('public', 'network') else 'local'
+                        origin_peer = getattr(existing_post, 'origin_peer', None)
+                        if not origin_peer and p2p_manager:
+                            try:
+                                origin_peer = p2p_manager.get_peer_id()
+                            except Exception:
+                                origin_peer = None
+                        _sync_inline_handoffs_from_content(
+                            handoff_manager=handoff_manager,
+                            content=content,
+                            scope='feed',
+                            source_id=post_id,
+                            actor_id=user_id,
+                            source_type='feed_post',
+                            visibility=handoff_visibility,
+                            origin_peer=origin_peer,
+                            created_at=existing_post.created_at.isoformat()
+                            if getattr(existing_post, 'created_at', None) else None,
+                            channel_id=None,
+                        )
+                except Exception as handoff_err:
+                    logger.warning(f"Inline handoff sync failed on post update: {handoff_err}")
 
                 # Broadcast edited post to P2P peers so they update locally
                 if p2p_manager and p2p_manager.is_running():
@@ -10730,6 +10875,12 @@ def create_ui_blueprint() -> Blueprint:
             
             if not content and not file_attachments:
                 return jsonify({'error': 'Message content or attachments required'}), 400
+            structured_validation = _validate_structured_semantics(content)
+            if structured_validation.get('blocking'):
+                return jsonify({
+                    'error': 'Fix the structured block issues before sending this message.',
+                    'structured_validation': structured_validation,
+                }), 400
             
             if not channel_id:
                 return jsonify({'error': 'Channel ID required'}), 400
@@ -11243,6 +11394,36 @@ def create_ui_blueprint() -> Blueprint:
                 except Exception as contract_err:
                     logger.warning(f"Inline contract creation failed: {contract_err}")
 
+                # Inline handoff creation from [handoff] blocks
+                try:
+                    handoff_manager = current_app.config.get('HANDOFF_MANAGER')
+                    if handoff_manager:
+                        handoff_visibility = 'network'
+                        try:
+                            with db_manager.get_connection() as conn:
+                                row = conn.execute(
+                                    "SELECT privacy_mode FROM channels WHERE id = ?",
+                                    (channel_id,)
+                                ).fetchone()
+                                if row and row['privacy_mode'] and row['privacy_mode'] != 'open':
+                                    handoff_visibility = 'local'
+                        except Exception:
+                            handoff_visibility = 'local'
+                        _sync_inline_handoffs_from_content(
+                            handoff_manager=handoff_manager,
+                            content=content,
+                            scope='channel',
+                            source_id=message.id,
+                            actor_id=user_id,
+                            source_type='channel_message',
+                            visibility=handoff_visibility,
+                            origin_peer=p2p_manager.get_peer_id() if p2p_manager else None,
+                            created_at=message.created_at.isoformat() if getattr(message, 'created_at', None) else None,
+                            channel_id=channel_id,
+                        )
+                except Exception as handoff_err:
+                    logger.warning(f"Inline handoff creation failed: {handoff_err}")
+
                 # Inline skill registration from [skill] blocks
                 try:
                     skill_manager = current_app.config.get('SKILL_MANAGER')
@@ -11384,9 +11565,23 @@ def create_ui_blueprint() -> Blueprint:
                     except Exception as reply_err:
                         logger.debug(f"Thread reply inbox trigger skipped: {reply_err}")
 
+                structured_objects = _collect_inline_structured_summaries(
+                    content=content,
+                    scope='channel',
+                    source_id=message.id,
+                    task_manager=current_app.config.get('TASK_MANAGER'),
+                    objective_manager=current_app.config.get('OBJECTIVE_MANAGER'),
+                    request_manager=current_app.config.get('REQUEST_MANAGER'),
+                    signal_manager=current_app.config.get('SIGNAL_MANAGER'),
+                    contract_manager=current_app.config.get('CONTRACT_MANAGER'),
+                    circle_manager=current_app.config.get('CIRCLE_MANAGER'),
+                    handoff_manager=current_app.config.get('HANDOFF_MANAGER'),
+                )
+
                 return jsonify({
                     'success': True,
-                    'message': message.to_dict()
+                    'message': message.to_dict(),
+                    'structured_objects': structured_objects,
                 })
             else:
                 logger.error(f"Failed to send message to channel {channel_id}")
@@ -11585,8 +11780,16 @@ def create_ui_blueprint() -> Blueprint:
                 try:
                     with db_manager.get_connection() as conn:
                         row = conn.execute(
-                            "SELECT name, channel_type, description, created_by FROM channels WHERE id = ?",
-                            (channel_id,)
+                            """
+                            SELECT name, channel_type, description, created_by,
+                                   COALESCE(last_activity_at, created_at) AS last_activity_at,
+                                   COALESCE(lifecycle_ttl_days, ?) AS lifecycle_ttl_days,
+                                   COALESCE(lifecycle_preserved, 0) AS lifecycle_preserved,
+                                   lifecycle_archived_at, lifecycle_archive_reason
+                            FROM channels
+                            WHERE id = ?
+                            """,
+                            (channel_manager.DEFAULT_CHANNEL_LIFECYCLE_DAYS, channel_id),
                         ).fetchone()
                     if row:
                         member_peer_ids: Optional[list[str]] = None
@@ -11613,6 +11816,11 @@ def create_ui_blueprint() -> Blueprint:
                             channel_type=row['channel_type'],
                             description=row['description'] or '',
                             privacy_mode=privacy_mode,
+                            last_activity_at=row['last_activity_at'],
+                            lifecycle_ttl_days=row['lifecycle_ttl_days'],
+                            lifecycle_preserved=bool(row['lifecycle_preserved']),
+                            lifecycle_archived_at=row['lifecycle_archived_at'],
+                            lifecycle_archive_reason=row['lifecycle_archive_reason'],
                             created_by_user_id=row['created_by'] if row and 'created_by' in row.keys() else None,
                             member_peer_ids=member_peer_ids,
                             initial_members_by_peer=members_by_peer,
@@ -11623,6 +11831,119 @@ def create_ui_blueprint() -> Blueprint:
             return jsonify({'success': True, 'privacy_mode': privacy_mode})
         except Exception as e:
             logger.error(f"Update channel privacy error: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @ui.route('/ajax/update_channel_lifecycle', methods=['POST'])
+    @require_login
+    def ajax_update_channel_lifecycle():
+        """Update channel lifecycle controls (preserve, archive, inactivity TTL)."""
+        try:
+            db_manager, _, _, _, channel_manager, _, _, _, _, _, p2p_manager = _get_app_components_any(current_app)
+            user_id = get_current_user()
+            data = request.get_json() or {}
+            channel_id = str(data.get('channel_id') or '').strip()
+            if not channel_id:
+                return jsonify({'error': 'Channel ID required'}), 400
+
+            ttl_days = data.get('ttl_days')
+            preserved = data.get('preserved')
+            archived = data.get('archived')
+
+            local_peer_id = None
+            try:
+                if p2p_manager:
+                    local_peer_id = p2p_manager.get_peer_id()
+            except Exception:
+                local_peer_id = None
+
+            result = channel_manager.update_channel_lifecycle_settings(
+                channel_id=channel_id,
+                user_id=user_id,
+                ttl_days=ttl_days,
+                preserved=preserved if preserved is None or isinstance(preserved, bool) else str(preserved).lower() in {'1', 'true', 'yes', 'on'},
+                archived=archived if archived is None or isinstance(archived, bool) else str(archived).lower() in {'1', 'true', 'yes', 'on'},
+                allow_admin=_is_admin(),
+                local_peer_id=local_peer_id,
+            )
+            if not result:
+                return jsonify({'error': 'Not authorized to update channel lifecycle'}), 403
+
+            response_lifecycle = dict(result)
+            try:
+                for ch in _enrich_channel_lifecycle_state(
+                    channel_manager.get_user_channels(user_id),
+                    channel_manager,
+                    p2p_manager,
+                ):
+                    if str(getattr(ch, 'id', '')) != channel_id:
+                        continue
+                    response_lifecycle = {
+                        'status': getattr(ch, 'lifecycle_status', result.get('status')),
+                        'ttl_days': getattr(ch, 'lifecycle_ttl_days', result.get('ttl_days')),
+                        'preserved': bool(getattr(ch, 'lifecycle_preserved', result.get('preserved'))),
+                        'archived_at': getattr(ch, 'archived_at', None).isoformat() if getattr(ch, 'archived_at', None) else None,
+                        'archive_reason': getattr(ch, 'archive_reason', result.get('archive_reason')),
+                        'days_until_archive': getattr(ch, 'days_until_archive', None),
+                        'owner_peer_state': getattr(ch, 'owner_peer_state', None),
+                        'last_activity_at': getattr(ch, 'last_activity_at', None).isoformat() if getattr(ch, 'last_activity_at', None) else None,
+                    }
+                    break
+            except Exception:
+                response_lifecycle = dict(result)
+
+            if p2p_manager and p2p_manager.is_running():
+                try:
+                    with db_manager.get_connection() as conn:
+                        row = conn.execute(
+                            """
+                            SELECT name, channel_type, description, created_by, privacy_mode,
+                                   COALESCE(last_activity_at, created_at) AS last_activity_at
+                            FROM channels
+                            WHERE id = ?
+                            """,
+                            (channel_id,),
+                        ).fetchone()
+                    if row:
+                        privacy_mode = str((row['privacy_mode'] if hasattr(row, 'keys') and 'privacy_mode' in row.keys() else 'open') or 'open').strip().lower()
+                        member_peer_ids: Optional[list[str]] = None
+                        members_by_peer: Optional[dict[str, list[str]]] = None
+                        if privacy_mode in {'private', 'confidential'}:
+                            local_peer = p2p_manager.get_peer_id() if p2p_manager else None
+                            member_peer_ids = channel_manager.get_member_peer_ids(channel_id, local_peer)
+                            members_by_peer = {}
+                            try:
+                                members = channel_manager.get_channel_members_list(channel_id)
+                                for member in members:
+                                    uid = member.get('user_id')
+                                    if not uid:
+                                        continue
+                                    user_row = db_manager.get_user(uid)
+                                    peer_key = (user_row.get('origin_peer') if user_row else '') or local_peer
+                                    if peer_key and peer_key in member_peer_ids:
+                                        members_by_peer.setdefault(peer_key, []).append(uid)
+                            except Exception:
+                                members_by_peer = None
+                        p2p_manager.broadcast_channel_announce(
+                            channel_id=channel_id,
+                            name=row['name'],
+                            channel_type=row['channel_type'],
+                            description=row['description'] or '',
+                            privacy_mode=privacy_mode,
+                            last_activity_at=row['last_activity_at'],
+                            lifecycle_ttl_days=response_lifecycle.get('ttl_days'),
+                            lifecycle_preserved=response_lifecycle.get('preserved'),
+                            lifecycle_archived_at=response_lifecycle.get('archived_at'),
+                            lifecycle_archive_reason=response_lifecycle.get('archive_reason'),
+                            created_by_user_id=row['created_by'] if row and 'created_by' in row.keys() else None,
+                            member_peer_ids=member_peer_ids,
+                            initial_members_by_peer=members_by_peer,
+                        )
+                except Exception as ann_err:
+                    logger.warning(f"Channel lifecycle announce failed: {ann_err}")
+
+            return jsonify({'success': True, 'lifecycle': response_lifecycle})
+        except Exception as e:
+            logger.error(f"Update channel lifecycle error: {e}", exc_info=True)
             return jsonify({'error': 'Internal server error'}), 500
 
     @ui.route('/ajax/update_channel_notifications', methods=['POST'])
@@ -11965,6 +12286,37 @@ def create_ui_blueprint() -> Blueprint:
                         )
                 except Exception as contract_err:
                     logger.warning(f"Inline contract sync failed on channel edit: {contract_err}")
+
+                # Sync inline handoffs from edited channel message
+                try:
+                    handoff_manager = current_app.config.get('HANDOFF_MANAGER')
+                    if handoff_manager:
+                        privacy_mode = None
+                        try:
+                            with db_manager.get_connection() as conn:
+                                prow = conn.execute(
+                                    "SELECT privacy_mode FROM channels WHERE id = ?",
+                                    (row['channel_id'],)
+                                ).fetchone()
+                            if prow:
+                                privacy_mode = prow['privacy_mode']
+                        except Exception:
+                            privacy_mode = None
+                        handoff_visibility = 'local' if privacy_mode and privacy_mode != 'open' else 'network'
+                        _sync_inline_handoffs_from_content(
+                            handoff_manager=handoff_manager,
+                            content=content,
+                            scope='channel',
+                            source_id=message_id,
+                            actor_id=user_id,
+                            source_type='channel_message',
+                            visibility=handoff_visibility,
+                            origin_peer=p2p_manager.get_peer_id() if p2p_manager else None,
+                            created_at=row['created_at'],
+                            channel_id=row['channel_id'],
+                        )
+                except Exception as handoff_err:
+                    logger.warning(f"Inline handoff sync failed on channel edit: {handoff_err}")
 
                 try:
                     sync_edited_mention_activity(
@@ -12405,6 +12757,15 @@ def create_ui_blueprint() -> Blueprint:
                             channel_type=channel.channel_type.value,
                             description=channel.description or '',
                             privacy_mode=channel.privacy_mode,
+                            last_activity_at=(
+                                channel.last_activity_at.isoformat() if getattr(channel, 'last_activity_at', None) else None
+                            ),
+                            lifecycle_ttl_days=channel.lifecycle_ttl_days,
+                            lifecycle_preserved=channel.lifecycle_preserved,
+                            lifecycle_archived_at=(
+                                channel.archived_at.isoformat() if getattr(channel, 'archived_at', None) else None
+                            ),
+                            lifecycle_archive_reason=channel.archive_reason,
                             created_by_user_id=channel.created_by,
                             member_peer_ids=m_peer_ids,
                             initial_members_by_peer=m_by_peer,
@@ -13743,7 +14104,8 @@ def create_ui_blueprint() -> Blueprint:
     def ajax_get_user_display_info():
         """AJAX endpoint to get user display information for avatars/names."""
         try:
-            db_manager, _, _, _, _, _, _, _, profile_manager, _, _ = _get_app_components_any(current_app)
+            db_manager, _, _, _, _, _, _, _, profile_manager, _, p2p_manager = _get_app_components_any(current_app)
+            local_peer_id = p2p_manager.get_peer_id() if p2p_manager else None
             
             user_ids = request.args.get('user_ids', '').split(',')
             user_ids = [uid.strip() for uid in user_ids if uid.strip()]
@@ -13815,7 +14177,7 @@ def create_ui_blueprint() -> Blueprint:
                     has_presence_checkin=bool((presence_records.get(user_id) or {}).get('last_check_in_at')),
                 )
                 status = str(status or 'active').strip().lower() or 'active'
-                origin_peer = str(origin_peer or '').strip() or None
+                origin_peer = _normalize_origin_peer_value(origin_peer, local_peer_id)
 
                 user_info[user_id] = {
                     'display_name': display_name,
@@ -14181,6 +14543,306 @@ def create_ui_blueprint() -> Blueprint:
         if editor_ids is not None:
             merged['editors'] = editor_ids
         return merged
+
+    def _mask_code_fences_preserve_length(text: str) -> str:
+        if not text:
+            return ''
+        return re.sub(r"```[\s\S]*?```", lambda m: '\0' * len(m.group(0)), text)
+
+    def _iter_canonical_structured_blocks(text: str, tag: str) -> list[dict[str, Any]]:
+        source = text or ''
+        masked = _mask_code_fences_preserve_length(source)
+        pattern = re.compile(rf"\[{re.escape(tag)}\]([\s\S]*?)\[/{re.escape(tag)}\]", re.IGNORECASE)
+        blocks: list[dict[str, Any]] = []
+        for match in pattern.finditer(masked):
+            start = match.start()
+            blocks.append({
+                'tag': tag,
+                'line': source.count('\n', 0, start) + 1,
+                'raw': source[match.start():match.end()],
+                'body': source[match.start(1):match.end(1)],
+            })
+        return blocks
+
+    def _body_has_prefixed_field(body: str, prefixes: tuple[str, ...]) -> bool:
+        if not body:
+            return False
+        pattern = re.compile(
+            rf"^\s*(?:{'|'.join(re.escape(prefix) for prefix in prefixes)})\s*:",
+            re.IGNORECASE,
+        )
+        return any(pattern.match(line or '') for line in body.splitlines())
+
+    def _validate_structured_semantics(text: str) -> dict[str, Any]:
+        issues: list[dict[str, Any]] = []
+        source = text or ''
+        if not source.strip():
+            return {'issues': issues, 'blocking': False}
+
+        signal_title_prefixes = (
+            'title', 'name', 'decision', 'outcome', 'finding', 'result',
+            'conclusion', 'topic', 'subject',
+        )
+        request_title_prefixes = ('title', 'subject', 'name')
+        request_content_prefixes = (
+            'request', 'ask', 'description', 'details', 'body',
+            'required_output', 'deliverable', 'deliverables', 'output', 'success',
+        )
+
+        for block in _iter_canonical_structured_blocks(source, 'signal'):
+            body = str(block.get('body') or '')
+            if _body_has_prefixed_field(body, signal_title_prefixes):
+                continue
+            issues.append({
+                'kind': 'semantic_incomplete',
+                'tag': 'signal',
+                'line': block.get('line'),
+                'message': 'This [signal] block has valid syntax but will not materialize without `title:` or a derivable field such as `outcome:`, `decision:`, `finding:`, `result:`, `conclusion:`, `topic:`, or `subject:`.',
+            })
+
+        for block in _iter_canonical_structured_blocks(source, 'request'):
+            body = str(block.get('body') or '')
+            has_title = _body_has_prefixed_field(body, request_title_prefixes)
+            has_content = _body_has_prefixed_field(body, request_content_prefixes)
+            if has_title or has_content:
+                continue
+            issues.append({
+                'kind': 'semantic_incomplete',
+                'tag': 'request',
+                'line': block.get('line'),
+                'message': 'This [request] block has valid syntax but will not materialize without `title:` or canonical request content such as `request:` or `required_output:`.',
+            })
+
+        return {
+            'issues': issues,
+            'blocking': bool(issues),
+        }
+
+    def _append_structured_object_summary(
+        items: list[dict[str, Any]],
+        *,
+        object_type: str,
+        object_id: Optional[str],
+        title: Optional[str],
+        status: Optional[str] = None,
+    ) -> None:
+        if not object_id:
+            return
+        payload: dict[str, Any] = {
+            'type': object_type,
+            'id': object_id,
+        }
+        if title:
+            payload['title'] = str(title).strip()
+        if status:
+            payload['status'] = str(status).strip()
+        items.append(payload)
+
+    def _sync_inline_handoffs_from_content(
+        *,
+        handoff_manager: Any,
+        content: str,
+        scope: str,
+        source_id: str,
+        actor_id: str,
+        source_type: str,
+        visibility: str,
+        origin_peer: Optional[str] = None,
+        created_at: Optional[str] = None,
+        channel_id: Optional[str] = None,
+    ) -> None:
+        from ..core.handoffs import parse_handoff_blocks, derive_handoff_id
+
+        if not handoff_manager:
+            return
+        specs = parse_handoff_blocks(content or '')
+        if not specs:
+            return
+
+        for idx, spec in enumerate(cast(Any, specs)):
+            spec = cast(Any, spec)
+            if not getattr(spec, 'confirmed', True):
+                continue
+            handoff_id = derive_handoff_id(scope, source_id, idx, len(specs), override=spec.handoff_id)
+            handoff_manager.upsert_handoff(
+                handoff_id=handoff_id,
+                source_type=source_type,
+                source_id=source_id,
+                channel_id=channel_id,
+                author_id=actor_id,
+                title=spec.title,
+                summary=spec.summary,
+                next_steps=spec.next_steps,
+                owner=spec.owner,
+                tags=spec.tags,
+                raw=spec.raw,
+                visibility=visibility,
+                origin_peer=origin_peer,
+                created_at=created_at,
+                updated_at=datetime.now(timezone.utc).isoformat(),
+                required_capabilities=spec.required_capabilities,
+                escalation_level=spec.escalation_level,
+                return_to=spec.return_to,
+                context_payload=spec.context_payload,
+            )
+
+    def _collect_inline_structured_summaries(
+        *,
+        content: str,
+        scope: str,
+        source_id: str,
+        task_manager: Any = None,
+        objective_manager: Any = None,
+        request_manager: Any = None,
+        signal_manager: Any = None,
+        contract_manager: Any = None,
+        circle_manager: Any = None,
+        handoff_manager: Any = None,
+    ) -> list[dict[str, Any]]:
+        summaries: list[dict[str, Any]] = []
+        body = content or ''
+        if not body.strip():
+            return summaries
+
+        try:
+            from ..core.tasks import parse_task_blocks, derive_task_id
+
+            task_specs = parse_task_blocks(body)
+            for idx, spec in enumerate(cast(Any, task_specs)):
+                spec = cast(Any, spec)
+                if not getattr(spec, 'confirmed', True):
+                    continue
+                task_id = derive_task_id(scope, source_id, idx, len(task_specs), override=spec.task_id)
+                task = task_manager.get_task(task_id) if task_manager else None
+                if task:
+                    _append_structured_object_summary(
+                        summaries,
+                        object_type='task',
+                        object_id=getattr(task, 'id', task_id),
+                        title=getattr(task, 'title', spec.title),
+                        status=getattr(task, 'status', None),
+                    )
+        except Exception as task_summary_err:
+            logger.debug(f"Structured task summary skipped: {task_summary_err}")
+
+        try:
+            from ..core.objectives import parse_objective_blocks, derive_objective_id
+
+            objective_specs = parse_objective_blocks(body)
+            for idx, spec in enumerate(cast(Any, objective_specs)):
+                spec = cast(Any, spec)
+                objective_id = derive_objective_id(scope, source_id, idx, len(objective_specs), override=spec.objective_id)
+                objective = objective_manager.get_objective(objective_id) if objective_manager else None
+                if objective:
+                    _append_structured_object_summary(
+                        summaries,
+                        object_type='objective',
+                        object_id=objective.get('id') if isinstance(objective, dict) else getattr(objective, 'id', objective_id),
+                        title=objective.get('title') if isinstance(objective, dict) else getattr(objective, 'title', spec.title),
+                        status=objective.get('status') if isinstance(objective, dict) else getattr(objective, 'status', None),
+                    )
+        except Exception as objective_summary_err:
+            logger.debug(f"Structured objective summary skipped: {objective_summary_err}")
+
+        try:
+            from ..core.requests import parse_request_blocks, derive_request_id
+
+            request_specs = parse_request_blocks(body)
+            for idx, spec in enumerate(cast(Any, request_specs)):
+                spec = cast(Any, spec)
+                if not getattr(spec, 'confirmed', True):
+                    continue
+                request_id = derive_request_id(scope, source_id, idx, len(request_specs), override=spec.request_id)
+                request_obj = request_manager.get_request(request_id) if request_manager else None
+                if request_obj:
+                    _append_structured_object_summary(
+                        summaries,
+                        object_type='request',
+                        object_id=request_obj.get('id') if isinstance(request_obj, dict) else request_id,
+                        title=request_obj.get('title') if isinstance(request_obj, dict) else getattr(request_obj, 'title', spec.title),
+                        status=request_obj.get('status') if isinstance(request_obj, dict) else getattr(request_obj, 'status', None),
+                    )
+        except Exception as request_summary_err:
+            logger.debug(f"Structured request summary skipped: {request_summary_err}")
+
+        try:
+            from ..core.signals import parse_signal_blocks, derive_signal_id
+
+            signal_specs = parse_signal_blocks(body)
+            for idx, spec in enumerate(cast(Any, signal_specs)):
+                spec = cast(Any, spec)
+                signal_id = derive_signal_id(scope, source_id, idx, len(signal_specs), override=spec.signal_id)
+                signal_obj = signal_manager.get_signal(signal_id) if signal_manager else None
+                if signal_obj:
+                    _append_structured_object_summary(
+                        summaries,
+                        object_type='signal',
+                        object_id=signal_obj.get('id') if isinstance(signal_obj, dict) else signal_id,
+                        title=signal_obj.get('title') if isinstance(signal_obj, dict) else getattr(signal_obj, 'title', spec.title),
+                        status=signal_obj.get('status') if isinstance(signal_obj, dict) else getattr(signal_obj, 'status', None),
+                    )
+        except Exception as signal_summary_err:
+            logger.debug(f"Structured signal summary skipped: {signal_summary_err}")
+
+        try:
+            from ..core.contracts import parse_contract_blocks, derive_contract_id
+
+            contract_specs = parse_contract_blocks(body)
+            for idx, spec in enumerate(contract_specs):
+                if not spec.confirmed:
+                    continue
+                contract_id = derive_contract_id(scope, source_id, idx, len(contract_specs), override=spec.contract_id)
+                contract_obj = contract_manager.get_contract(contract_id) if contract_manager else None
+                if contract_obj:
+                    _append_structured_object_summary(
+                        summaries,
+                        object_type='contract',
+                        object_id=contract_obj.get('id') if isinstance(contract_obj, dict) else contract_id,
+                        title=contract_obj.get('title') if isinstance(contract_obj, dict) else getattr(contract_obj, 'title', spec.title),
+                        status=contract_obj.get('status') if isinstance(contract_obj, dict) else getattr(contract_obj, 'status', None),
+                    )
+        except Exception as contract_summary_err:
+            logger.debug(f"Structured contract summary skipped: {contract_summary_err}")
+
+        try:
+            from ..core.circles import parse_circle_blocks, derive_circle_id
+
+            circle_specs = parse_circle_blocks(body)
+            for idx, spec in enumerate(cast(Any, circle_specs)):
+                spec = cast(Any, spec)
+                circle_id = derive_circle_id(scope, source_id, idx, len(circle_specs), override=spec.circle_id)
+                circle_obj = circle_manager.get_circle(circle_id) if circle_manager else None
+                if circle_obj:
+                    _append_structured_object_summary(
+                        summaries,
+                        object_type='circle',
+                        object_id=getattr(circle_obj, 'id', circle_id),
+                        title=getattr(circle_obj, 'topic', spec.topic),
+                    )
+        except Exception as circle_summary_err:
+            logger.debug(f"Structured circle summary skipped: {circle_summary_err}")
+
+        try:
+            from ..core.handoffs import parse_handoff_blocks, derive_handoff_id
+
+            handoff_specs = parse_handoff_blocks(body)
+            for idx, spec in enumerate(cast(Any, handoff_specs)):
+                spec = cast(Any, spec)
+                if not getattr(spec, 'confirmed', True):
+                    continue
+                handoff_id = derive_handoff_id(scope, source_id, idx, len(handoff_specs), override=spec.handoff_id)
+                handoff_obj = handoff_manager.get_handoff(handoff_id) if handoff_manager else None
+                if handoff_obj:
+                    _append_structured_object_summary(
+                        summaries,
+                        object_type='handoff',
+                        object_id=getattr(handoff_obj, 'id', handoff_id),
+                        title=getattr(handoff_obj, 'title', spec.title),
+                    )
+        except Exception as handoff_summary_err:
+            logger.debug(f"Structured handoff summary skipped: {handoff_summary_err}")
+
+        return summaries
 
     def _sync_inline_tasks_from_content(
         *,
@@ -14573,7 +15235,8 @@ def create_ui_blueprint() -> Blueprint:
     def ajax_mention_suggestions():
         """Return mentionable users (optionally scoped to a channel)."""
         try:
-            db_manager, _, _, _, channel_manager, _, _, _, profile_manager, _, _ = _get_app_components_any(current_app)
+            db_manager, _, _, _, channel_manager, _, _, _, profile_manager, _, p2p_manager = _get_app_components_any(current_app)
+            local_peer_id = p2p_manager.get_peer_id() if p2p_manager else None
             user_id = get_current_user()
             channel_id = request.args.get('channel_id')
             query = str(request.args.get('q') or '').strip().lower()
@@ -14815,11 +15478,10 @@ def create_ui_blueprint() -> Blueprint:
                         has_presence_checkin=bool(presence_record.get('last_check_in_at')),
                     )
                     user['account_type'] = account_type_norm
-                    origin_peer = origin_peer_map.get(uid) or ''
+                    origin_peer = _normalize_origin_peer_value(origin_peer_map.get(uid), local_peer_id)
                     is_remote = bool(origin_peer)
                     user['is_remote'] = is_remote
-                    if origin_peer:
-                        user['origin_peer'] = origin_peer
+                    user['origin_peer'] = origin_peer
 
                     presence = build_agent_presence_payload(
                         last_check_in_at=presence_record.get('last_check_in_at'),

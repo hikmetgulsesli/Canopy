@@ -65,6 +65,7 @@ class TestProfilePageRegressions(unittest.TestCase):
 
         p2p_manager = MagicMock()
         p2p_manager.is_running.return_value = False
+        p2p_manager.get_peer_id.return_value = 'peer-local'
 
         # Order must match get_app_components in canopy.core.utils.
         components = (
@@ -344,6 +345,34 @@ class TestProfilePageRegressions(unittest.TestCase):
         user = (payload.get('users') or {}).get('agent-directive') or {}
         self.assertEqual(user.get('account_type'), 'agent')
         self.assertEqual(user.get('status'), 'active')
+
+    def test_get_user_display_info_treats_local_peer_origin_as_local(self) -> None:
+        self._set_authenticated_session()
+        self.fake_users['local-admin'] = {
+            'id': 'local-admin',
+            'username': 'maddog',
+            'display_name': 'Maddog',
+            'account_type': 'human',
+            'status': 'active',
+            'origin_peer': 'peer-local',
+        }
+        self.profile_manager.get_profile.return_value = types.SimpleNamespace(
+            display_name='Maddog',
+            username='maddog',
+            avatar_url=None,
+            avatar_file_id=None,
+            origin_peer='peer-local',
+            account_type='human',
+        )
+
+        response = self.client.get('/ajax/get_user_display_info?user_ids=local-admin')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json() or {}
+        self.assertTrue(payload.get('success'))
+        user = (payload.get('users') or {}).get('local-admin') or {}
+        self.assertEqual(user.get('origin_peer'), None)
+        self.assertFalse(user.get('is_remote'))
 
 
 if __name__ == '__main__':
