@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **Structured block non-materialization now surfaces correction feedback** - Feed and channel composer send paths now reject semantically incomplete canonical `signal` and `request` blocks before saving, and the structured validation panel shows those server-side correction messages instead of allowing a silent successful post with no durable object.
+
+## [0.4.68] - 2026-03-10
+
+### Added
+- **Structured composer review pass and expanded structured feedback** - The shared structured-composer helper now recognizes additional canonical block families (`circle`, `contract`, and `skill`) while feed and channel post-send feedback can now report durable `contract` and `circle` materialization alongside the original coordination objects.
+
+## [0.4.67] - 2026-03-10
+
+### Added
+- **Structured composer validation and materialization feedback** - Feed and channel composers now provide canonical structured block templates, pre-send validation for malformed or aliased blocks, inline normalization/fix actions, and post-send feedback showing which structured objects actually materialized.
+
+## [0.4.66] - 2026-03-10
+
+### Fixed
+- **UI and identity follow-up hardening** — Remote profile sync now carries and applies `account_type`, local profile-card sync no longer depends on password-only account shapes, channel reply buttons no longer rely on fragile inline JavaScript interpolation, YouTube mini-player updates avoid eager startup reparenting, and identity/admin UI now treats `origin_peer == local_peer_id` as local instead of remote.
+
+## [0.4.65] - 2026-03-10
+
+### Added
+- **Channel lifecycle controls (soft archive only)** — Channels now carry additive lifecycle metadata (`last_activity_at`, inactivity TTL, preserve flag, archive timestamp/reason) plus a new lifecycle update surface in the UI and REST API. Inactivity currently results in soft archive state only; this release does not introduce automatic hard deletion.
+
+### Changed
+- **Lifecycle-aware channel sync and sidebar state** — Channel announce/sync metadata now includes lifecycle policy and archive state, channel activity automatically revives archived channels, and the Channels UI now surfaces preserved/cooling/archived state in both the sidebar rows and header controls.
+
 ## [0.4.64] - 2026-03-09
 
 ### Fixed
@@ -147,7 +175,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ## [0.4.47] - 2026-03-07
 
 ### Changed
-- **Release visibility bump for current collaboration work** — Advanced the visible app/docs version after the spreadsheet collaboration, edited mention refresh, and DM agent-contract hardening work so the updated Canopy-Dev build is clearly distinguishable from the previous release.
+- **Release visibility bump for current collaboration work** — Advanced the visible app/docs version after the spreadsheet collaboration, edited mention refresh, and DM agent-contract hardening work so the updated build is clearly distinguishable from the previous release.
 - **DM workspace redesign** — Rebuilt the Messages page into a conversation-first workspace with separate direct/group rails, grouped chat bubbles, day dividers, reply previews, integrated search results, and a single bottom composer that targets the active thread instead of a flat all-messages dump.
 
 ### Fixed

@@ -167,6 +167,45 @@ class TestChannelPrivacyConsistency(unittest.TestCase):
         self.assertEqual(row['privacy_mode'], 'private')
         self.assertEqual(row['origin_peer'], 'peer-remote')
 
+    def test_origin_sync_updates_last_activity_timestamp(self) -> None:
+        channel = self.channel_manager.create_channel(
+            name='activity-sync-test',
+            channel_type=ChannelType.PUBLIC,
+            created_by='owner-user',
+            description='activity sync test',
+            privacy_mode='open',
+            origin_peer='peer-local',
+        )
+        self.assertIsNotNone(channel)
+
+        older_activity = '2026-03-01T00:00:00+00:00'
+        newer_activity = '2026-03-09T15:30:00+00:00'
+        self.db.conn.execute(
+            "UPDATE channels SET last_activity_at = ? WHERE id = ?",
+            (older_activity, channel.id),
+        )
+        self.db.conn.commit()
+
+        self.channel_manager.merge_or_adopt_channel(
+            remote_id=channel.id,
+            remote_name='activity-sync-test',
+            remote_type='public',
+            remote_desc='updated desc',
+            local_user_id='owner-user',
+            from_peer='peer-local',
+            privacy_mode='open',
+            last_activity_at=newer_activity,
+        )
+
+        row = self.db.conn.execute(
+            "SELECT last_activity_at FROM channels WHERE id = ?",
+            (channel.id,),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        stored = self.channel_manager._parse_datetime(row['last_activity_at'])
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored.isoformat(), newer_activity)
+
 
 if __name__ == '__main__':
     unittest.main()
