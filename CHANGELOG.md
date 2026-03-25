@@ -356,7 +356,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - **Canopy Module bundle validation** — Filenames ending in `.canopy-module.html` / `.canopy-module.htm` use `_validate_canopy_module_bundle()`: UTF-8 HTML document, **300 KiB** max, inline script allowed; blocks external scripts, inline event handlers, CSP override meta, embedded browsing tags, and non–self-contained resource URLs (`data:` / `blob:` / `#` only).
 - **Module-aware MIME inference** — Generic uploads (`application/octet-stream`, etc.) still normalize to `text/html` when the filename extension implies HTML, so agents can upload modules without spoofing types.
 - **Module preview semantics** — `build_file_preview()` returns `previewable: false`, `kind: "module"` for module bundles; `is_text_previewable()` excludes them.
-- **Sample module** — `canopy/ui/static/modules/piano-lab-v1.canopy-module.html` for regression tests and manual deck checks.
+- **Module bundle coverage** — Generic `Canopy Module` fixtures are covered in validation and manual deck-check workflows without shipping a local showcase bundle in the public repo.
 - **Documentation** — `docs/CANOPY_MODULE_RUNTIME_V1.md` and cross-links in README / API / agent docs.
 
 ### Changed
