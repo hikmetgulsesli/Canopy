@@ -4,10 +4,8 @@ Web UI routes for Canopy.
 Provides web interface for managing keys, messages, trust scores,
 and all other Canopy functionality through a clean web UI.
 
-Author: Konrad Walus (architecture, design, and direction)
 Project: Canopy - Local Mesh Communication
 License: Apache 2.0
-Development: AI-assisted implementation (Claude, Codex, GitHub Copilot, Cursor IDE, Ollama)
 """
 
 import logging
@@ -813,6 +811,450 @@ def create_ui_blueprint() -> Blueprint:
         db_manager, _, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
         owner_id = db_manager.get_instance_owner_user_id()
         return owner_id is not None and session.get('user_id') == owner_id
+
+    def _get_bookmark_manager() -> Any:
+        return current_app.config.get('BOOKMARK_MANAGER')
+
+    def _bookmark_compact_text(value: Any, limit: int = 220) -> str:
+        text = re.sub(r'\s+', ' ', str(value or '')).strip()
+        if len(text) <= limit:
+            return text
+        return text[: max(0, limit - 1)].rstrip() + '…'
+
+    def _bookmark_attachment_summary(attachments: Any) -> str:
+        if not isinstance(attachments, list):
+            return ''
+        count = 0
+        module_count = 0
+        for entry in attachments:
+            if not isinstance(entry, dict):
+                continue
+            count += 1
+            name = str(
+                entry.get('name')
+                or entry.get('filename')
+                or entry.get('original_name')
+                or ''
+            ).strip().lower()
+            if name.endswith('.canopy-module.html') or name.endswith('.canopy-module.htm'):
+                module_count += 1
+        if module_count and count == module_count:
+            return f'{module_count} module' + ('s' if module_count != 1 else '')
+        if module_count:
+            return f'{count} attachments ({module_count} module' + ('s)' if module_count != 1 else ')')
+        if count:
+            return f'{count} attachment' + ('s' if count != 1 else '')
+        return ''
+
+    def _bookmark_extract_layout_refs(source_layout: Any) -> tuple[Optional[str], Optional[str]]:
+        if not isinstance(source_layout, dict):
+            return (None, None)
+        hero = source_layout.get('hero') if isinstance(source_layout.get('hero'), dict) else {}
+        deck = source_layout.get('deck') if isinstance(source_layout.get('deck'), dict) else {}
+        hero_ref = str(hero.get('ref') or '').strip() or None
+        deck_default_ref = str(deck.get('default_ref') or '').strip() or None
+        return (hero_ref, deck_default_ref)
+
+    def _bookmark_author_label(
+        user_id: Optional[str],
+        db_manager: Any,
+        profile_manager: Any,
+    ) -> str:
+        clean_user_id = str(user_id or '').strip()
+        if not clean_user_id:
+            return ''
+        try:
+            if profile_manager:
+                profile = profile_manager.get_profile(clean_user_id)
+                if profile:
+                    return str(
+                        getattr(profile, 'display_name', None)
+                        or getattr(profile, 'username', None)
+                        or clean_user_id
+                    ).strip()
+        except Exception:
+            pass
+        try:
+            if db_manager:
+                row = db_manager.get_user(clean_user_id)
+                if row:
+                    return str(row.get('display_name') or row.get('username') or clean_user_id).strip()
+        except Exception:
+            pass
+        return clean_user_id
+
+    def _bookmark_title_and_preview(
+        *,
+        content: Any,
+        fallback_title: str,
+        source_layout: Any = None,
+        attachments: Any = None,
+        secondary_hint: str = '',
+    ) -> tuple[str, str]:
+        hero_label = ''
+        if isinstance(source_layout, dict):
+            hero = source_layout.get('hero') if isinstance(source_layout.get('hero'), dict) else {}
+            hero_label = str(hero.get('label') or '').strip()
+        compact = _bookmark_compact_text(content, limit=280)
+        attachment_hint = _bookmark_attachment_summary(attachments)
+        title = hero_label or _bookmark_compact_text(compact, limit=96) or fallback_title
+        preview = compact
+        if not preview:
+            preview = secondary_hint or attachment_hint or fallback_title
+        elif attachment_hint:
+            preview = f'{preview} • {attachment_hint}'
+        return (title, preview)
+
+    def _build_channel_message_bookmark_payload(
+        user_id: str,
+        source_id: str,
+        db_manager: Any,
+        channel_manager: Any,
+        profile_manager: Any,
+    ) -> Optional[dict[str, Any]]:
+        if not db_manager or not channel_manager:
+            return None
+        with db_manager.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT cm.id, cm.channel_id, cm.user_id, cm.content, cm.message_type,
+                       cm.created_at, cm.attachments, cm.source_layout, c.name AS channel_name
+                FROM channel_messages cm
+                JOIN channels c ON c.id = cm.channel_id
+                WHERE cm.id = ?
+                """,
+                (source_id,),
+            ).fetchone()
+        if not row:
+            return None
+        access = channel_manager.get_channel_access_decision(
+            row['channel_id'],
+            user_id,
+            require_membership=True,
+        )
+        if not access.get('allowed'):
+            return None
+        attachments = []
+        source_layout = None
+        try:
+            attachments = json.loads(row['attachments']) if row['attachments'] else []
+        except Exception:
+            attachments = []
+        try:
+            from ..core.source_layout import normalize_source_layout as _normalize_bookmark_source_layout
+
+            source_layout = _normalize_bookmark_source_layout(
+                json.loads(row['source_layout']) if row['source_layout'] else None
+            )
+        except Exception:
+            source_layout = None
+        channel_name = str(row['channel_name'] or '').strip() or 'channel'
+        author_label = _bookmark_author_label(row['user_id'], db_manager, profile_manager)
+        title, preview = _bookmark_title_and_preview(
+            content=row['content'],
+            fallback_title=f'Message in #{channel_name}',
+            source_layout=source_layout,
+            attachments=attachments,
+            secondary_hint=f'Channel message in #{channel_name}',
+        )
+        hero_ref, deck_default_ref = _bookmark_extract_layout_refs(source_layout)
+        href = f"{url_for('ui.channels_locate')}?message_id={quote_plus(source_id)}"
+        snapshot = {
+            'source_label': 'Channel message',
+            'context_label': f'#{channel_name}',
+            'author_display_name': author_label,
+            'author_id': row['user_id'],
+            'created_at': row['created_at'],
+            'message_type': row['message_type'],
+            'attachment_count': len(attachments),
+            'has_source_layout': bool(source_layout),
+            'has_deck_default': bool(deck_default_ref),
+        }
+        return {
+            'source_type': 'channel_message',
+            'source_id': source_id,
+            'container_type': 'channel',
+            'container_id': row['channel_id'],
+            'source_author_id': row['user_id'],
+            'source_href': href,
+            'title': title,
+            'preview': preview,
+            'source_layout': source_layout,
+            'hero_ref': hero_ref,
+            'deck_default_ref': deck_default_ref,
+            'snapshot': snapshot,
+        }
+
+    def _build_feed_post_bookmark_payload(
+        user_id: str,
+        source_id: str,
+        db_manager: Any,
+        feed_manager: Any,
+        profile_manager: Any,
+    ) -> Optional[dict[str, Any]]:
+        if not feed_manager:
+            return None
+        post = feed_manager.get_post(source_id)
+        if not post or not post.can_view(user_id, 50):
+            return None
+        metadata = post.metadata if isinstance(post.metadata, dict) else {}
+        attachments = metadata.get('attachments') if isinstance(metadata.get('attachments'), list) else []
+        try:
+            from ..core.source_layout import normalize_source_layout as _normalize_bookmark_source_layout
+
+            source_layout = _normalize_bookmark_source_layout(metadata.get('source_layout'))
+        except Exception:
+            source_layout = None
+        author_label = _bookmark_author_label(post.author_id, db_manager, profile_manager)
+        metadata_title = str(metadata.get('title') or '').strip()
+        title, preview = _bookmark_title_and_preview(
+            content=post.content,
+            fallback_title=metadata_title or 'Feed post',
+            source_layout=source_layout,
+            attachments=attachments,
+            secondary_hint=str(metadata.get('url') or metadata_title or 'Feed post'),
+        )
+        hero_ref, deck_default_ref = _bookmark_extract_layout_refs(source_layout)
+        href = f"{url_for('ui.feed')}?focus_post={quote_plus(source_id)}"
+        snapshot = {
+            'source_label': 'Feed post',
+            'context_label': str(post.post_type.value or 'post').replace('_', ' ').title(),
+            'author_display_name': author_label,
+            'author_id': post.author_id,
+            'created_at': post.created_at.isoformat() if getattr(post, 'created_at', None) else None,
+            'visibility': post.visibility.value if getattr(post, 'visibility', None) else None,
+            'post_type': post.post_type.value if getattr(post, 'post_type', None) else 'text',
+            'attachment_count': len(attachments),
+            'has_source_layout': bool(source_layout),
+            'has_deck_default': bool(deck_default_ref),
+        }
+        return {
+            'source_type': 'feed_post',
+            'source_id': source_id,
+            'container_type': 'feed',
+            'container_id': None,
+            'source_author_id': post.author_id,
+            'source_href': href,
+            'title': title,
+            'preview': preview,
+            'source_layout': source_layout,
+            'hero_ref': hero_ref,
+            'deck_default_ref': deck_default_ref,
+            'snapshot': snapshot,
+        }
+
+    def _decorate_feed_repost_reference_ui(
+        repost_reference: Any,
+        db_manager: Any,
+        profile_manager: Any,
+    ) -> Optional[dict[str, Any]]:
+        if not isinstance(repost_reference, dict):
+            return None
+        payload = dict(repost_reference)
+        source_id = str(payload.get('source_id') or '').strip()
+        if source_id:
+            payload['href'] = f"{url_for('ui.feed')}?focus_post={quote_plus(source_id)}"
+        author_id = str(payload.get('author_id') or '').strip()
+        if payload.get('available') and author_id:
+            payload['author_display'] = _bookmark_author_label(author_id, db_manager, profile_manager)
+        reason = str(payload.get('unavailable_reason') or '').strip().lower()
+        if reason == 'expired':
+            payload['unavailable_label'] = 'Original source expired'
+        elif reason == 'policy_denied':
+            payload['unavailable_label'] = 'Original source repost disabled'
+        elif reason == 'access_changed':
+            payload['unavailable_label'] = 'Original source access changed'
+        else:
+            payload['unavailable_label'] = 'Original source unavailable'
+        return payload
+
+    def _variant_relationship_label(value: Any) -> str:
+        normalized = str(value or '').strip().lower()
+        if normalized == 'module_variant':
+            return 'Module variant'
+        if normalized == 'parameterized_variant':
+            return 'Parameterized variant'
+        return 'Curated recomposition'
+
+    def _decorate_feed_variant_reference_ui(
+        variant_reference: Any,
+        db_manager: Any,
+        profile_manager: Any,
+    ) -> Optional[dict[str, Any]]:
+        if not isinstance(variant_reference, dict):
+            return None
+        payload = dict(variant_reference)
+        source_id = str(payload.get('source_id') or '').strip()
+        if source_id:
+            payload['href'] = f"{url_for('ui.feed')}?focus_post={quote_plus(source_id)}"
+        payload['relationship_label'] = _variant_relationship_label(payload.get('relationship_kind'))
+        author_id = str(payload.get('author_id') or '').strip()
+        if payload.get('available') and author_id:
+            payload['author_display'] = _bookmark_author_label(author_id, db_manager, profile_manager)
+        reason = str(payload.get('unavailable_reason') or '').strip().lower()
+        if reason == 'expired':
+            payload['unavailable_label'] = 'Antecedent source expired'
+        elif reason == 'policy_denied':
+            payload['unavailable_label'] = 'Antecedent source variants disabled'
+        elif reason == 'access_changed':
+            payload['unavailable_label'] = 'Antecedent source access changed'
+        else:
+            payload['unavailable_label'] = 'Antecedent source unavailable'
+        return payload
+
+    def _decorate_channel_repost_reference_ui(
+        repost_reference: Any,
+        db_manager: Any,
+        profile_manager: Any,
+    ) -> Optional[dict[str, Any]]:
+        if not isinstance(repost_reference, dict):
+            return None
+        payload = dict(repost_reference)
+        source_id = str(payload.get('source_id') or '').strip()
+        if source_id:
+            try:
+                payload['href'] = f"{url_for('ui.channels_locate')}?message_id={quote_plus(source_id)}"
+            except Exception:
+                payload['href'] = f"/channels/locate?message_id={quote_plus(source_id)}"
+        author_id = str(payload.get('author_id') or '').strip()
+        if payload.get('available') and author_id:
+            payload['author_display'] = _bookmark_author_label(author_id, db_manager, profile_manager)
+        reason = str(payload.get('unavailable_reason') or '').strip().lower()
+        if reason == 'expired':
+            payload['unavailable_label'] = 'Original source expired'
+        elif reason == 'policy_denied':
+            payload['unavailable_label'] = 'Original source repost disabled'
+        elif reason == 'access_changed':
+            payload['unavailable_label'] = 'Original source access changed'
+        else:
+            payload['unavailable_label'] = 'Original source unavailable'
+        return payload
+
+    def _decorate_channel_variant_reference_ui(
+        variant_reference: Any,
+        db_manager: Any,
+        profile_manager: Any,
+    ) -> Optional[dict[str, Any]]:
+        if not isinstance(variant_reference, dict):
+            return None
+        payload = dict(variant_reference)
+        source_id = str(payload.get('source_id') or '').strip()
+        if source_id:
+            try:
+                payload['href'] = f"{url_for('ui.channels_locate')}?message_id={quote_plus(source_id)}"
+            except Exception:
+                payload['href'] = f"/channels/locate?message_id={quote_plus(source_id)}"
+        payload['relationship_label'] = _variant_relationship_label(payload.get('relationship_kind'))
+        author_id = str(payload.get('author_id') or '').strip()
+        if payload.get('available') and author_id:
+            payload['author_display'] = _bookmark_author_label(author_id, db_manager, profile_manager)
+        reason = str(payload.get('unavailable_reason') or '').strip().lower()
+        if reason == 'expired':
+            payload['unavailable_label'] = 'Antecedent source expired'
+        elif reason == 'policy_denied':
+            payload['unavailable_label'] = 'Antecedent source variants disabled'
+        elif reason == 'access_changed':
+            payload['unavailable_label'] = 'Antecedent source access changed'
+        else:
+            payload['unavailable_label'] = 'Antecedent source unavailable'
+        return payload
+
+    def _build_dm_message_bookmark_payload(
+        user_id: str,
+        source_id: str,
+        db_manager: Any,
+        profile_manager: Any,
+    ) -> Optional[dict[str, Any]]:
+        if not db_manager:
+            return None
+        with db_manager.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, sender_id, recipient_id, content, message_type, created_at, metadata
+                FROM messages
+                WHERE id = ?
+                """,
+                (source_id,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            metadata = json.loads(row['metadata']) if row['metadata'] else {}
+        except Exception:
+            metadata = {}
+        attachments = metadata.get('attachments') if isinstance(metadata.get('attachments'), list) else []
+        group_members = []
+        if isinstance(metadata.get('group_members'), list):
+            group_members = [str(member or '').strip() for member in metadata.get('group_members') if str(member or '').strip()]
+        sender_id = str(row['sender_id'] or '').strip()
+        recipient_id = str(row['recipient_id'] or '').strip()
+        raw_group_id = str(metadata.get('group_id') or '').strip()
+        is_group = bool(raw_group_id or recipient_id.startswith('group:'))
+        if is_group:
+            if user_id != sender_id and user_id not in group_members:
+                return None
+            conversation_group = compute_group_id(group_members) if group_members else (raw_group_id or recipient_id)
+            other_names = [
+                _bookmark_author_label(member_id, db_manager, profile_manager)
+                for member_id in group_members
+                if member_id and member_id != user_id
+            ]
+            context_label = ', '.join(other_names[:3]) if other_names else 'Group conversation'
+            href = f"{url_for('ui.messages', group=conversation_group)}#message-{quote_plus(source_id)}"
+        else:
+            if user_id not in {sender_id, recipient_id}:
+                return None
+            other_user_id = sender_id if sender_id and sender_id != user_id else recipient_id
+            context_label = _bookmark_author_label(other_user_id, db_manager, profile_manager) or 'Conversation'
+            href = f"{url_for('ui.messages', **{'with': other_user_id})}#message-{quote_plus(source_id)}"
+        source_layout = metadata.get('source_layout') if isinstance(metadata.get('source_layout'), dict) else None
+        title, preview = _bookmark_title_and_preview(
+            content=row['content'],
+            fallback_title=f'Message with {context_label}',
+            source_layout=source_layout,
+            attachments=attachments,
+            secondary_hint='Direct message',
+        )
+        hero_ref, deck_default_ref = _bookmark_extract_layout_refs(source_layout)
+        snapshot = {
+            'source_label': 'Direct message',
+            'context_label': context_label,
+            'author_display_name': _bookmark_author_label(sender_id, db_manager, profile_manager),
+            'author_id': sender_id,
+            'created_at': row['created_at'],
+            'message_type': row['message_type'],
+            'attachment_count': len(attachments),
+            'has_source_layout': bool(source_layout),
+            'has_deck_default': bool(deck_default_ref),
+        }
+        return {
+            'source_type': 'dm_message',
+            'source_id': source_id,
+            'container_type': 'dm',
+            'container_id': raw_group_id or recipient_id,
+            'source_author_id': sender_id,
+            'source_href': href,
+            'title': title,
+            'preview': preview,
+            'source_layout': source_layout,
+            'hero_ref': hero_ref,
+            'deck_default_ref': deck_default_ref,
+            'snapshot': snapshot,
+        }
+
+    def _resolve_bookmark_source_payload(user_id: str, source_type: str, source_id: str) -> Optional[dict[str, Any]]:
+        db_manager, _, _, _, channel_manager, _, feed_manager, _, profile_manager, _, _ = _get_app_components_any(current_app)
+        source_type = str(source_type or '').strip().lower()
+        source_id = str(source_id or '').strip()
+        if not source_type or not source_id:
+            return None
+        if source_type == 'channel_message':
+            return _build_channel_message_bookmark_payload(user_id, source_id, db_manager, channel_manager, profile_manager)
+        if source_type == 'feed_post':
+            return _build_feed_post_bookmark_payload(user_id, source_id, db_manager, feed_manager, profile_manager)
+        if source_type == 'dm_message':
+            return _build_dm_message_bookmark_payload(user_id, source_id, db_manager, profile_manager)
+        return None
 
     def require_admin(f):
         """Decorator to require instance-owner admin for a route."""
@@ -1635,6 +2077,19 @@ def create_ui_blueprint() -> Blueprint:
         except Exception:
             return 0
 
+    def _sidebar_archived_at_iso(value: Any) -> Optional[str]:
+        """JSON-safe archived_at for sidebar payloads (datetime or legacy string)."""
+        if value is None:
+            return None
+        iso_fn = getattr(value, 'isoformat', None)
+        if callable(iso_fn):
+            try:
+                return str(iso_fn())
+            except Exception:
+                pass
+        text = str(value).strip()
+        return text or None
+
     def _build_channel_sidebar_snapshot(
         channel_manager: Any,
         p2p_manager: Any,
@@ -1668,10 +2123,7 @@ def create_ui_blueprint() -> Blueprint:
                 'lifecycle_status': getattr(ch, 'lifecycle_status', 'active') or 'active',
                 'lifecycle_ttl_days': int(getattr(ch, 'lifecycle_ttl_days', default_ttl) or default_ttl),
                 'lifecycle_preserved': bool(getattr(ch, 'lifecycle_preserved', False)),
-                'archived_at': (
-                    getattr(ch, 'archived_at', None).isoformat()
-                    if getattr(ch, 'archived_at', None) else None
-                ),
+                'archived_at': _sidebar_archived_at_iso(getattr(ch, 'archived_at', None)),
                 'archive_reason': getattr(ch, 'archive_reason', None),
                 'days_until_archive': getattr(ch, 'days_until_archive', None),
                 'owner_peer_state': getattr(ch, 'owner_peer_state', None),
@@ -2957,11 +3409,6 @@ def create_ui_blueprint() -> Blueprint:
         if landing in ('feed', 'channels', 'messages'):
             return redirect(url_for(f'ui.{landing}'))
 
-        user_id = get_current_user()
-        onboarding = _build_workspace_onboarding(user_id, page='channels')
-        if onboarding.get('show'):
-            return redirect(url_for('ui.channels', channel='general'))
-
         # Smart default: mobile → feed, desktop → channels
         ua = (request.headers.get('User-Agent') or '').lower()
         is_mobile = any(kw in ua for kw in ('iphone', 'android', 'mobile', 'ipod'))
@@ -3399,6 +3846,15 @@ def create_ui_blueprint() -> Blueprint:
 
         message_rows: list[dict[str, Any]] = []
         active_messages_sorted = sorted(active_messages, key=lambda message: message.created_at)
+        bookmark_manager = _get_bookmark_manager()
+        dm_bookmarks = (
+            bookmark_manager.get_bookmark_map(
+                user_id,
+                [('dm_message', message.id) for message in active_messages_sorted],
+            )
+            if bookmark_manager and active_messages_sorted
+            else {}
+        )
         for index, message in enumerate(active_messages_sorted):
             prev_message = active_messages_sorted[index - 1] if index > 0 else None
             next_message = active_messages_sorted[index + 1] if index + 1 < len(active_messages_sorted) else None
@@ -3432,6 +3888,8 @@ def create_ui_blueprint() -> Blueprint:
                 'outbound': message.sender_id == user_id,
                 'content': getattr(message, 'content', '') or '',
                 'attachments': attachments,
+                'source_layout': meta.get('source_layout') if isinstance(meta.get('source_layout'), dict) else None,
+                'is_bookmarked': ('dm_message', message.id) in dm_bookmarks,
                 'message_type': getattr(getattr(message, 'message_type', None), 'value', None) or str(getattr(message, 'message_type', '') or ''),
                 'created_at': message.created_at.isoformat(),
                 'edited_at': message.edited_at.isoformat() if getattr(message, 'edited_at', None) else None,
@@ -3849,6 +4307,15 @@ def create_ui_blueprint() -> Blueprint:
             # Batch-check which posts the current user has liked
             post_ids = [p.id for p in posts_obj]
             user_liked_ids = interaction_manager.get_user_liked_ids(post_ids, user_id)
+            bookmark_manager = _get_bookmark_manager()
+            bookmarked_posts = (
+                bookmark_manager.get_bookmark_map(
+                    user_id,
+                    [('feed_post', post_id) for post_id in post_ids],
+                )
+                if bookmark_manager and post_ids
+                else {}
+            )
 
             # Convert Post objects to dicts for template
             posts = []
@@ -3867,11 +4334,36 @@ def create_ui_blueprint() -> Blueprint:
                     'likes': interactions['total_likes'],
                     'comments': interactions['comment_count'],
                     'user_has_liked': post.id in user_liked_ids,
+                    'is_bookmarked': ('feed_post', post.id) in bookmarked_posts,
                     'source_type': post.source_type or 'human',
                     'source_agent_id': post.source_agent_id,
                     'source_url': post.source_url,
                     'tags': post.tags_list,
                 }
+                repost_reference = None
+                variant_reference = None
+                try:
+                    repost_reference = feed_manager.resolve_repost_reference(post, user_id) if feed_manager else None
+                except Exception:
+                    repost_reference = None
+                try:
+                    variant_reference = feed_manager.resolve_variant_reference(post, user_id) if feed_manager else None
+                except Exception:
+                    variant_reference = None
+                post_dict['is_repost'] = bool(repost_reference)
+                if repost_reference:
+                    post_dict['repost_reference'] = _decorate_feed_repost_reference_ui(
+                        repost_reference,
+                        db_manager,
+                        profile_manager,
+                    )
+                post_dict['is_variant'] = bool(variant_reference)
+                if variant_reference:
+                    post_dict['variant_reference'] = _decorate_feed_variant_reference_ui(
+                        variant_reference,
+                        db_manager,
+                        profile_manager,
+                    )
 
                 # Inline circle blocks (for [circle]...[/circle] posts)
                 display_content = post.content
@@ -4478,6 +4970,87 @@ def create_ui_blueprint() -> Blueprint:
         display_name = session.get('display_name') or session.get('username') or user_id
         return render_template('tasks.html', current_user_id=user_id, current_user_name=display_name)
 
+    @ui.route('/bookmarks')
+    @require_login
+    def bookmarks_page():
+        """Personal saved sources for this local user only."""
+        user_id = get_current_user()
+        bookmark_manager = _get_bookmark_manager()
+        bookmarks: list[dict[str, Any]] = []
+        if bookmark_manager:
+            for entry in bookmark_manager.list_bookmarks(user_id, limit=400):
+                snapshot = entry.get('snapshot') if isinstance(entry.get('snapshot'), dict) else {}
+                source_type = str(entry.get('source_type') or '').strip()
+                bookmarks.append(
+                    {
+                        'id': entry.get('id'),
+                        'source_type': source_type,
+                        'source_id': entry.get('source_id'),
+                        'title': str(entry.get('title') or snapshot.get('title') or 'Saved source'),
+                        'preview': str(entry.get('preview') or snapshot.get('preview') or ''),
+                        'source_label': str(snapshot.get('source_label') or source_type.replace('_', ' ').title()),
+                        'context_label': str(snapshot.get('context_label') or ''),
+                        'author_display_name': str(snapshot.get('author_display_name') or ''),
+                        'created_at': entry.get('created_at'),
+                        'last_opened_at': entry.get('last_opened_at'),
+                        'attachment_count': int(snapshot.get('attachment_count') or 0),
+                        'has_source_layout': bool(snapshot.get('has_source_layout')),
+                        'has_deck_default': bool(entry.get('deck_default_ref')),
+                        'hero_ref': entry.get('hero_ref'),
+                        'open_href': url_for('ui.open_bookmark', bookmark_id=entry.get('id')),
+                    }
+                )
+        bookmark_stats = {
+            'total': len(bookmarks),
+            'channels': sum(1 for item in bookmarks if item.get('source_type') == 'channel_message'),
+            'feed': sum(1 for item in bookmarks if item.get('source_type') == 'feed_post'),
+            'dms': sum(1 for item in bookmarks if item.get('source_type') == 'dm_message'),
+            'deck_ready': sum(1 for item in bookmarks if item.get('has_deck_default')),
+        }
+        return render_template(
+            'bookmarks.html',
+            bookmarks=bookmarks,
+            bookmark_stats=bookmark_stats,
+            user_id=user_id,
+            is_admin=_is_admin(),
+            workspace_onboarding=_build_workspace_onboarding(user_id, page='messages'),
+        )
+
+    @ui.route('/bookmarks/open/<bookmark_id>')
+    @require_login
+    def open_bookmark(bookmark_id: str):
+        """Touch a bookmark and reopen the underlying source if it is still accessible."""
+        user_id = get_current_user()
+        bookmark_manager = _get_bookmark_manager()
+        if not bookmark_manager:
+            flash('Bookmarks are unavailable on this node.', 'warning')
+            return redirect(url_for('ui.bookmarks_page'))
+        bookmark = bookmark_manager.get_bookmark(bookmark_id, user_id)
+        if not bookmark:
+            flash('Bookmark not found.', 'warning')
+            return redirect(url_for('ui.bookmarks_page'))
+        payload = _resolve_bookmark_source_payload(user_id, bookmark.get('source_type'), bookmark.get('source_id'))
+        if not payload:
+            flash('Saved source is no longer available on this device or you no longer have access to it.', 'warning')
+            return redirect(url_for('ui.bookmarks_page'))
+        refreshed = bookmark_manager.upsert_bookmark(
+            user_id=user_id,
+            source_type=payload['source_type'],
+            source_id=payload['source_id'],
+            source_href=payload['source_href'],
+            title=payload['title'],
+            preview=payload['preview'],
+            snapshot=payload.get('snapshot'),
+            source_layout=payload.get('source_layout'),
+            hero_ref=payload.get('hero_ref'),
+            deck_default_ref=payload.get('deck_default_ref'),
+            container_type=payload.get('container_type'),
+            container_id=payload.get('container_id'),
+            source_author_id=payload.get('source_author_id'),
+        )
+        bookmark_manager.touch_bookmark_opened(refreshed['id'], user_id)
+        return redirect(payload['source_href'])
+
     # Channel message deep-link: redirect to /channels?channel=X&focus_message=Y so the UI can scroll to the message
     @ui.route('/channels/locate')
     @require_login
@@ -4502,7 +5075,18 @@ def create_ui_blueprint() -> Blueprint:
             # Ensure user is a member so they can see the channel
             if channel_manager.get_member_role(channel_id, user_id) is None:
                 return redirect(url_for('ui.channels'))
-            return redirect(url_for('ui.channels', channel=channel_id, focus_message=message_id))
+            open_deck = (request.args.get("open_deck") or "").strip().lower()
+            deck_flag = open_deck in ("1", "true", "yes")
+            if deck_flag:
+                return redirect(
+                    url_for(
+                        "ui.channels",
+                        channel=channel_id,
+                        focus_message=message_id,
+                        open_deck="1",
+                    )
+                )
+            return redirect(url_for("ui.channels", channel=channel_id, focus_message=message_id))
         except Exception:
             return redirect(url_for('ui.channels'))
 
@@ -4596,12 +5180,7 @@ def create_ui_blueprint() -> Blueprint:
                                  is_admin=_is_admin(),
                                  channel_sidebar_rev=channel_sidebar_snapshot.get('rev', ''),
                                  workspace_event_cursor=workspace_event_cursor,
-                                 poll_edit_window_seconds=poll_edit_window_seconds(),
-                                 workspace_onboarding=_build_workspace_onboarding(
-                                     user_id,
-                                     page='channels',
-                                     channels_count=len(channels),
-                                 ))
+                                 poll_edit_window_seconds=poll_edit_window_seconds())
                                  
         except Exception as e:
             logger.error(f"Channels error: {e}")
@@ -5607,6 +6186,10 @@ def create_ui_blueprint() -> Blueprint:
 
             # Create message metadata
             metadata: dict[str, Any] = {'attachments': processed_attachments} if processed_attachments else {}
+            from ..core.source_layout import normalize_source_layout
+            normalized_source_layout = normalize_source_layout(data.get('source_layout'))
+            if normalized_source_layout:
+                metadata['source_layout'] = normalized_source_layout
             if reply_to:
                 metadata['reply_to'] = reply_to
 
@@ -6090,7 +6673,7 @@ def create_ui_blueprint() -> Blueprint:
             return jsonify({'success': True, **result})
         except Exception as e:
             logger.error(f"Identity portability create grant error: {e}", exc_info=True)
-            return jsonify({'success': False, 'error': str(e)}), 400
+            return jsonify({'success': False, 'error': 'Failed to create grant'}), 400
 
     @ui.route('/ajax/admin/identity-portability/grants/import', methods=['POST'])
     @require_login
@@ -6131,7 +6714,7 @@ def create_ui_blueprint() -> Blueprint:
             return jsonify(response)
         except Exception as e:
             logger.error(f"Identity portability import grant error: {e}", exc_info=True)
-            return jsonify({'success': False, 'error': str(e)}), 400
+            return jsonify({'success': False, 'error': 'Failed to import grant'}), 400
 
     @ui.route('/ajax/admin/identity-portability/grants/<grant_id>/apply', methods=['POST'])
     @require_login
@@ -6158,7 +6741,7 @@ def create_ui_blueprint() -> Blueprint:
             return jsonify({'success': True, **result})
         except Exception as e:
             logger.error(f"Identity portability apply grant error: {e}", exc_info=True)
-            return jsonify({'success': False, 'error': str(e)}), 400
+            return jsonify({'success': False, 'error': 'Failed to apply grant'}), 400
 
     @ui.route('/ajax/admin/identity-portability/grants/<grant_id>/revoke', methods=['POST'])
     @require_login
@@ -6183,7 +6766,7 @@ def create_ui_blueprint() -> Blueprint:
             return jsonify({'success': True, **result})
         except Exception as e:
             logger.error(f"Identity portability revoke grant error: {e}", exc_info=True)
-            return jsonify({'success': False, 'error': str(e)}), 400
+            return jsonify({'success': False, 'error': 'Failed to revoke grant'}), 400
 
     @ui.route('/ajax/admin/agent-directives/presets', methods=['GET'])
     @require_login
@@ -8559,6 +9142,7 @@ def create_ui_blueprint() -> Blueprint:
             expires_at = data.get('expires_at')
             ttl_seconds = data.get('ttl_seconds')
             ttl_mode = data.get('ttl_mode')
+            from ..core.source_layout import normalize_source_layout
             
             if not content and not file_attachments:
                 return jsonify({'error': 'Post content or attachments required'}), 400
@@ -8621,7 +9205,12 @@ def create_ui_blueprint() -> Blueprint:
                 return jsonify({'error': f'Invalid visibility: {e}'}), 400
             
             # For media posts, add the first attachment URL to metadata for proper display
-            final_metadata = metadata or {}
+            final_metadata = dict(metadata or {})
+            normalized_source_layout = normalize_source_layout(data.get('source_layout', final_metadata.get('source_layout')))
+            if normalized_source_layout:
+                final_metadata['source_layout'] = normalized_source_layout
+            else:
+                final_metadata.pop('source_layout', None)
             try:
                 origin_peer = p2p_manager.get_peer_id() if p2p_manager else None
                 if origin_peer and not final_metadata.get('origin_peer'):
@@ -9166,6 +9755,7 @@ def create_ui_blueprint() -> Blueprint:
             permissions = data.get('permissions')
             metadata = data.get('metadata', {})
             new_attachments = data.get('new_attachments', [])
+            from ..core.source_layout import normalize_source_layout
             
             if not post_id:
                 return jsonify({'error': 'Post ID required'}), 400
@@ -9220,6 +9810,11 @@ def create_ui_blueprint() -> Blueprint:
             final_metadata = dict(base_metadata)
             if metadata:
                 final_metadata.update(metadata)
+            normalized_source_layout = normalize_source_layout(data.get('source_layout', final_metadata.get('source_layout')))
+            if normalized_source_layout:
+                final_metadata['source_layout'] = normalized_source_layout
+            else:
+                final_metadata.pop('source_layout', None)
             existing_attachments = final_metadata.get('attachments', [])
             all_attachments = existing_attachments + processed_new_attachments
             
@@ -9599,6 +10194,65 @@ def create_ui_blueprint() -> Blueprint:
             logger.error(f"Toggle post like error: {e}")
             return jsonify({'error': 'Internal server error'}), 500
 
+    @ui.route('/ajax/bookmarks/toggle', methods=['POST'])
+    @require_login
+    def ajax_toggle_bookmark():
+        """Create or remove a personal local bookmark for a source item."""
+        try:
+            validate_csrf_request()
+            bookmark_manager = _get_bookmark_manager()
+            if not bookmark_manager:
+                return jsonify({'error': 'Bookmarks unavailable on this node'}), 503
+            user_id = get_current_user()
+            data = request.get_json(silent=True) or {}
+            source_type = str(data.get('source_type') or '').strip().lower()
+            source_id = str(data.get('source_id') or '').strip()
+            if not source_type or not source_id:
+                return jsonify({'error': 'source_type and source_id are required'}), 400
+
+            existing = bookmark_manager.get_bookmark_for_source(user_id, source_type, source_id)
+            if existing:
+                removed = bookmark_manager.remove_bookmark(existing['id'], user_id)
+                return jsonify({
+                    'success': removed,
+                    'bookmarked': False,
+                    'bookmark_id': None,
+                    'source_type': source_type,
+                    'source_id': source_id,
+                })
+
+            payload = _resolve_bookmark_source_payload(user_id, source_type, source_id)
+            if not payload:
+                return jsonify({'error': 'Source is unavailable or access is denied'}), 404
+
+            bookmark = bookmark_manager.upsert_bookmark(
+                user_id=user_id,
+                source_type=payload['source_type'],
+                source_id=payload['source_id'],
+                source_href=payload['source_href'],
+                title=payload['title'],
+                preview=payload['preview'],
+                snapshot=payload.get('snapshot'),
+                source_layout=payload.get('source_layout'),
+                hero_ref=payload.get('hero_ref'),
+                deck_default_ref=payload.get('deck_default_ref'),
+                container_type=payload.get('container_type'),
+                container_id=payload.get('container_id'),
+                source_author_id=payload.get('source_author_id'),
+            )
+            return jsonify({
+                'success': True,
+                'bookmarked': True,
+                'bookmark_id': bookmark['id'],
+                'source_type': payload['source_type'],
+                'source_id': payload['source_id'],
+                'title': payload['title'],
+                'preview': payload['preview'],
+            })
+        except Exception as e:
+            logger.error(f"Toggle bookmark error: {e}")
+            return jsonify({'error': 'Internal server error'}), 500
+
     @ui.route('/ajax/vote_poll', methods=['POST'])
     @require_login
     def ajax_vote_poll():
@@ -9947,9 +10601,10 @@ def create_ui_blueprint() -> Blueprint:
             return jsonify({'error': 'Internal server error'}), 500
     
     @ui.route('/ajax/share_post', methods=['POST'])
+    @ui.route('/ajax/repost_post', methods=['POST'])
     @require_login
     def ajax_share_post():
-        """AJAX endpoint to share (repost) a feed post."""
+        """AJAX endpoint to create a secure repost wrapper for a feed post."""
         try:
             _, _, _, _, _, _, feed_manager, _, _, _, _ = _get_app_components_any(current_app)
             user_id = get_current_user()
@@ -9961,12 +10616,235 @@ def create_ui_blueprint() -> Blueprint:
             if not post_id:
                 return jsonify({'error': 'Post ID required'}), 400
 
-            shared = feed_manager.share_post(post_id, user_id, comment)
+            eligibility = feed_manager.get_repost_eligibility(post_id, user_id)
+            if not eligibility.get('allowed'):
+                return jsonify({'error': eligibility.get('reason') or 'Repost not allowed'}), int(eligibility.get('status_code') or 400)
+
+            shared = feed_manager.create_repost(post_id, user_id, comment)
             if shared:
                 return jsonify({'success': True, 'post': shared.to_dict()})
-            return jsonify({'error': 'Failed to share post'}), 500
+            return jsonify({'error': 'Failed to create repost'}), 500
         except Exception as e:
-            logger.error(f"Share post error: {e}")
+            logger.error(f"Repost post error: {e}")
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @ui.route('/ajax/variant_post', methods=['POST'])
+    @require_login
+    def ajax_variant_post():
+        """AJAX endpoint to create a lineage-preserving variant for a feed post."""
+        try:
+            _, _, _, _, _, _, feed_manager, _, _, _, _ = _get_app_components_any(current_app)
+            user_id = get_current_user()
+
+            data = request.get_json() or {}
+            post_id = str(data.get('post_id') or '').strip()
+            comment = str(data.get('comment') or '').strip()
+            relationship_kind = str(data.get('relationship_kind') or '').strip()
+            module_param_delta = str(data.get('module_param_delta') or '').strip()
+
+            if not post_id:
+                return jsonify({'error': 'Post ID required'}), 400
+
+            eligibility = feed_manager.get_variant_eligibility(post_id, user_id)
+            if not eligibility.get('allowed'):
+                return jsonify({'error': eligibility.get('reason') or 'Variant not allowed'}), int(eligibility.get('status_code') or 400)
+
+            variant = feed_manager.create_variant(
+                post_id,
+                user_id,
+                comment,
+                relationship_kind=relationship_kind,
+                module_param_delta=module_param_delta,
+            )
+            if variant:
+                return jsonify({'success': True, 'post': variant.to_dict()})
+            return jsonify({'error': 'Failed to create variant'}), 500
+        except Exception as e:
+            logger.error(f"Variant post error: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @ui.route('/ajax/repost_channel_message', methods=['POST'])
+    @require_login
+    def ajax_repost_channel_message():
+        """AJAX endpoint to create a secure same-channel repost wrapper."""
+        try:
+            db_manager, _, _, _, channel_manager, _, _, _, profile_manager, _, p2p_manager = _get_app_components_any(current_app)
+            user_id = get_current_user()
+            data = request.get_json() or {}
+            channel_id = str(data.get('channel_id') or '').strip()
+            message_id = str(data.get('message_id') or '').strip()
+            comment = str(data.get('comment') or '').strip()
+
+            if not channel_id:
+                return jsonify({'error': 'Channel ID required'}), 400
+            if not message_id:
+                return jsonify({'error': 'Message ID required'}), 400
+
+            access = channel_manager.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                if str(access.get('reason') or '').startswith('governance_'):
+                    return jsonify({
+                        'error': 'Channel access blocked by admin governance policy',
+                        'reason': access.get('reason'),
+                    }), 403
+                return jsonify({'error': 'You are not a member of this channel'}), 403
+
+            eligibility = channel_manager.get_repost_eligibility(message_id, user_id, channel_id)
+            if not eligibility.get('allowed'):
+                return jsonify({'error': eligibility.get('reason') or 'Repost not allowed'}), int(eligibility.get('status_code') or 400)
+
+            repost = channel_manager.create_repost(
+                source_message_id=message_id,
+                user_id=user_id,
+                channel_id=channel_id,
+                comment=comment,
+                origin_peer=p2p_manager.get_peer_id() if p2p_manager else None,
+            )
+            if not repost:
+                return jsonify({'error': 'Failed to create repost'}), 500
+
+            if p2p_manager and p2p_manager.is_running():
+                try:
+                    sender_display = None
+                    channel_mode = 'open'
+                    target_peer_ids = None
+                    try:
+                        with db_manager.get_connection() as conn:
+                            mode_row = conn.execute(
+                                "SELECT privacy_mode FROM channels WHERE id = ?",
+                                (channel_id,),
+                            ).fetchone()
+                        if mode_row:
+                            channel_mode = (mode_row['privacy_mode'] or 'open').lower()
+                        if channel_mode in {'private', 'confidential'}:
+                            local_peer = p2p_manager.get_peer_id() if p2p_manager else None
+                            target_peer_ids = channel_manager.get_member_peer_ids(channel_id, local_peer)
+                    except Exception:
+                        target_peer_ids = None
+                    if profile_manager:
+                        profile = profile_manager.get_profile(user_id)
+                        if profile:
+                            sender_display = profile.display_name or profile.username
+                    p2p_manager.broadcast_channel_message(
+                        channel_id=channel_id,
+                        user_id=user_id,
+                        content=repost.content,
+                        message_id=repost.id,
+                        timestamp=repost.created_at.isoformat() if getattr(repost, 'created_at', None) else datetime.now(timezone.utc).isoformat(),
+                        attachments=repost.attachments if getattr(repost, 'attachments', None) else None,
+                        source_layout=getattr(repost, 'source_layout', None),
+                        source_reference=getattr(repost, 'source_reference', None),
+                        repost_policy=getattr(repost, 'repost_policy', None),
+                        display_name=sender_display,
+                        expires_at=repost.expires_at.isoformat() if getattr(repost, 'expires_at', None) else None,
+                        parent_message_id=getattr(repost, 'parent_message_id', None),
+                        security={'privacy_mode': channel_mode},
+                        target_peer_ids=target_peer_ids,
+                    )
+                except Exception as p2p_err:
+                    logger.warning(f"Failed to broadcast channel repost via P2P: {p2p_err}")
+
+            return jsonify({'success': True, 'message': repost.to_dict()})
+        except Exception as e:
+            logger.error(f"Channel repost error: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @ui.route('/ajax/variant_channel_message', methods=['POST'])
+    @require_login
+    def ajax_variant_channel_message():
+        """AJAX endpoint to create a same-channel lineage variant wrapper."""
+        try:
+            db_manager, _, _, _, channel_manager, _, _, _, profile_manager, _, p2p_manager = _get_app_components_any(current_app)
+            user_id = get_current_user()
+            data = request.get_json() or {}
+            channel_id = str(data.get('channel_id') or '').strip()
+            message_id = str(data.get('message_id') or '').strip()
+            comment = str(data.get('comment') or '').strip()
+            relationship_kind = str(data.get('relationship_kind') or '').strip()
+            module_param_delta = str(data.get('module_param_delta') or '').strip()
+
+            if not channel_id:
+                return jsonify({'error': 'Channel ID required'}), 400
+            if not message_id:
+                return jsonify({'error': 'Message ID required'}), 400
+
+            access = channel_manager.get_channel_access_decision(
+                channel_id=channel_id,
+                user_id=user_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                if str(access.get('reason') or '').startswith('governance_'):
+                    return jsonify({
+                        'error': 'Channel access blocked by admin governance policy',
+                        'reason': access.get('reason'),
+                    }), 403
+                return jsonify({'error': 'You are not a member of this channel'}), 403
+
+            eligibility = channel_manager.get_variant_eligibility(message_id, user_id, channel_id)
+            if not eligibility.get('allowed'):
+                return jsonify({'error': eligibility.get('reason') or 'Variant not allowed'}), int(eligibility.get('status_code') or 400)
+
+            variant = channel_manager.create_variant(
+                source_message_id=message_id,
+                user_id=user_id,
+                channel_id=channel_id,
+                comment=comment,
+                relationship_kind=relationship_kind,
+                module_param_delta=module_param_delta,
+                origin_peer=p2p_manager.get_peer_id() if p2p_manager else None,
+            )
+            if not variant:
+                return jsonify({'error': 'Failed to create variant'}), 500
+
+            if p2p_manager and p2p_manager.is_running():
+                try:
+                    sender_display = None
+                    channel_mode = 'open'
+                    target_peer_ids = None
+                    try:
+                        with db_manager.get_connection() as conn:
+                            mode_row = conn.execute(
+                                "SELECT privacy_mode FROM channels WHERE id = ?",
+                                (channel_id,),
+                            ).fetchone()
+                        if mode_row:
+                            channel_mode = (mode_row['privacy_mode'] or 'open').lower()
+                        if channel_mode in {'private', 'confidential'}:
+                            local_peer = p2p_manager.get_peer_id() if p2p_manager else None
+                            target_peer_ids = channel_manager.get_member_peer_ids(channel_id, local_peer)
+                    except Exception:
+                        target_peer_ids = None
+                    if profile_manager:
+                        profile = profile_manager.get_profile(user_id)
+                        if profile:
+                            sender_display = profile.display_name or profile.username
+                    p2p_manager.broadcast_channel_message(
+                        channel_id=channel_id,
+                        user_id=user_id,
+                        content=variant.content,
+                        message_id=variant.id,
+                        timestamp=variant.created_at.isoformat() if getattr(variant, 'created_at', None) else datetime.now(timezone.utc).isoformat(),
+                        attachments=variant.attachments if getattr(variant, 'attachments', None) else None,
+                        source_layout=getattr(variant, 'source_layout', None),
+                        source_reference=getattr(variant, 'source_reference', None),
+                        repost_policy=getattr(variant, 'repost_policy', None),
+                        display_name=sender_display,
+                        expires_at=variant.expires_at.isoformat() if getattr(variant, 'expires_at', None) else None,
+                        parent_message_id=getattr(variant, 'parent_message_id', None),
+                        security={'privacy_mode': channel_mode},
+                        target_peer_ids=target_peer_ids,
+                    )
+                except Exception as p2p_err:
+                    logger.warning(f"Failed to broadcast channel variant via P2P: {p2p_err}")
+
+            return jsonify({'success': True, 'message': variant.to_dict()})
+        except Exception as e:
+            logger.error(f"Channel variant error: {e}", exc_info=True)
             return jsonify({'error': 'Internal server error'}), 500
 
     # ------------------------------------------------------------------
@@ -10105,6 +10983,7 @@ def create_ui_blueprint() -> Blueprint:
             content = (data.get('content') or '').strip()
             attachments = data.get('attachments')
             new_attachments = data.get('new_attachments') or []
+            from ..core.source_layout import normalize_source_layout
 
             if not message_id:
                 return jsonify({'error': 'Message ID required'}), 400
@@ -10164,6 +11043,11 @@ def create_ui_blueprint() -> Blueprint:
                 final_metadata['attachments'] = final_attachments
             else:
                 final_metadata.pop('attachments', None)
+            normalized_source_layout = normalize_source_layout(data.get('source_layout', final_metadata.get('source_layout')))
+            if normalized_source_layout:
+                final_metadata['source_layout'] = normalized_source_layout
+            else:
+                final_metadata.pop('source_layout', None)
 
             group_members_for_security = []
             if isinstance(final_metadata, dict):
@@ -10628,12 +11512,56 @@ def create_ui_blueprint() -> Blueprint:
                         focus_context_mode = 'missing'
             
             logger.debug(f"Retrieved {len(messages)} messages for channel {channel_id}")
+
+            # Authoritative source_layout blobs from DB for compositor (ORM row can lag rare paths;
+            # P2P/replication should persist this column — batch read avoids per-row drift).
+            layout_by_id: dict[str, Any] = {}
+            if messages and db_manager:
+                try:
+                    all_ids = [m.id for m in messages if getattr(m, 'id', None)]
+                    if all_ids:
+                        chunk_size = 120
+                        with db_manager.get_connection() as conn:
+                            for i in range(0, len(all_ids), chunk_size):
+                                chunk = all_ids[i : i + chunk_size]
+                                placeholders = ','.join('?' * len(chunk))
+                                rows = conn.execute(
+                                    f"""
+                                    SELECT id, source_layout FROM channel_messages
+                                    WHERE channel_id = ? AND id IN ({placeholders})
+                                    """,
+                                    [channel_id] + chunk,
+                                ).fetchall()
+                                for row in rows:
+                                    raw_sl = row['source_layout'] if 'source_layout' in row.keys() else None
+                                    if not raw_sl:
+                                        continue
+                                    try:
+                                        layout_by_id[str(row['id'])] = json.loads(raw_sl)
+                                    except Exception:
+                                        pass
+                except Exception as layout_batch_err:
+                    logger.debug(
+                        "Batch source_layout read for channel messages skipped: %s",
+                        layout_batch_err,
+                    )
+
+            from ..core.source_layout import normalize_source_layout as _normalize_sl_for_channel_ajax
             
             # Batch-check which messages the current user has liked
             msg_ids = [m.id for m in messages]
             user_liked_ids = set()
             stream_manager = current_app.config.get('STREAM_MANAGER')
             stream_status_cache: dict[str, str] = {}
+            bookmark_manager = _get_bookmark_manager()
+            bookmarked_messages = (
+                bookmark_manager.get_bookmark_map(
+                    user_id,
+                    [('channel_message', message_id) for message_id in msg_ids],
+                )
+                if bookmark_manager and msg_ids
+                else {}
+            )
             if interaction_manager:
                 user_liked_ids = interaction_manager.get_user_liked_ids(msg_ids, user_id)
             
@@ -10642,6 +11570,56 @@ def create_ui_blueprint() -> Blueprint:
             for message in messages:
                 try:
                     msg_dict = message.to_dict()
+                    repost_reference = None
+                    variant_reference = None
+                    try:
+                        repost_reference = channel_manager.resolve_repost_reference(message, user_id)
+                    except Exception:
+                        repost_reference = None
+                    try:
+                        variant_reference = channel_manager.resolve_variant_reference(message, user_id)
+                    except Exception:
+                        variant_reference = None
+                    msg_dict['is_repost'] = bool(repost_reference)
+                    msg_dict['is_variant'] = bool(variant_reference)
+                    try:
+                        if repost_reference:
+                            decorated_r = _decorate_channel_repost_reference_ui(
+                                repost_reference,
+                                db_manager,
+                                profile_manager,
+                            )
+                            if decorated_r is not None:
+                                msg_dict['repost_reference'] = decorated_r
+                            else:
+                                msg_dict['is_repost'] = False
+                        if variant_reference:
+                            decorated_v = _decorate_channel_variant_reference_ui(
+                                variant_reference,
+                                db_manager,
+                                profile_manager,
+                            )
+                            if decorated_v is not None:
+                                msg_dict['variant_reference'] = decorated_v
+                            else:
+                                msg_dict['is_variant'] = False
+                    except Exception as lineage_ui_err:
+                        logger.warning(
+                            "Lineage UI decorate failed for channel message %s: %s",
+                            getattr(message, 'id', '?'),
+                            lineage_ui_err,
+                        )
+                        msg_dict['is_repost'] = False
+                        msg_dict['is_variant'] = False
+                        msg_dict.pop('repost_reference', None)
+                        msg_dict.pop('variant_reference', None)
+                    blob = layout_by_id.get(str(message.id))
+                    if blob is not None:
+                        msg_dict['source_layout'] = _normalize_sl_for_channel_ajax(blob)
+                    else:
+                        msg_dict['source_layout'] = _normalize_sl_for_channel_ajax(
+                            msg_dict.get('source_layout')
+                        )
                     # Ensure attachments have url only when file exists on this instance; flag when not yet synced
                     for att in (msg_dict.get('attachments') or []):
                         if not isinstance(att, dict):
@@ -10669,6 +11647,7 @@ def create_ui_blueprint() -> Blueprint:
                     else:
                         msg_dict['like_count'] = 0
                     msg_dict['user_has_liked'] = message.id in user_liked_ids
+                    msg_dict['is_bookmarked'] = ('channel_message', message.id) in bookmarked_messages
 
                     poll_spec = parse_poll(message.content or '')
                     if poll_spec and interaction_manager:
@@ -11140,7 +12119,7 @@ def create_ui_blueprint() -> Blueprint:
         except Exception as e:
             logger.error(f"Get channel messages error: {e}", exc_info=True)
             # Return empty messages instead of 500 so the UI doesn't show an error
-            return jsonify({'messages': [], 'channel_id': channel_id, 'count': 0, 'warning': str(e)})
+            return jsonify({'messages': [], 'channel_id': channel_id, 'count': 0, 'warning': 'Failed to load messages'})
 
     @ui.route('/ajax/channel_search/<channel_id>', methods=['GET'])
     @require_login
@@ -11963,6 +12942,9 @@ def create_ui_blueprint() -> Blueprint:
             file_attachments = data.get('attachments', [])
             parent_message_id = data.get('parent_message_id')
             security = data.get('security')
+            from ..core.source_layout import normalize_source_layout
+            source_layout = normalize_source_layout(data.get('source_layout'))
+            repost_policy = data.get('repost_policy')
             ttl_mode = data.get('ttl_mode')
             ttl_seconds = data.get('ttl_seconds')
             expires_at = data.get('expires_at')
@@ -12062,6 +13044,8 @@ def create_ui_blueprint() -> Blueprint:
                 parent_message_id=parent_message_id,
                 attachments=processed_attachments,
                 security=security_clean,
+                source_layout=source_layout,
+                repost_policy=repost_policy,
                 expires_at=expires_at,
                 ttl_seconds=ttl_seconds,
                 ttl_mode=ttl_mode,
@@ -12600,6 +13584,9 @@ def create_ui_blueprint() -> Blueprint:
                             message_id=message.id,
                             timestamp=message.created_at.isoformat() if hasattr(message.created_at, 'isoformat') else str(message.created_at),
                             attachments=message.attachments if hasattr(message, 'attachments') and message.attachments else None,
+                            source_layout=getattr(message, 'source_layout', None),
+                            source_reference=getattr(message, 'source_reference', None),
+                            repost_policy=getattr(message, 'repost_policy', None),
                             display_name=sender_display,
                             expires_at=message.expires_at.isoformat() if getattr(message, 'expires_at', None) else None,
                             ttl_seconds=ttl_seconds,
@@ -13136,6 +14123,7 @@ def create_ui_blueprint() -> Blueprint:
             db_manager, _, _, _, channel_manager, file_manager, _, interaction_manager, profile_manager, _, p2p_manager = _get_app_components_any(current_app)
             user_id = get_current_user()
             from ..core.polls import parse_poll, poll_edit_lock_reason
+            from ..core.source_layout import normalize_source_layout
 
             data = request.get_json() or {}
             message_id = data.get('message_id')
@@ -13151,7 +14139,7 @@ def create_ui_blueprint() -> Blueprint:
             # Fetch existing message for ownership + channel info
             with db_manager.get_connection() as conn:
                 row = conn.execute(
-                    "SELECT id, channel_id, user_id, content, created_at, attachments, expires_at, ttl_seconds, ttl_mode, parent_message_id "
+                    "SELECT id, channel_id, user_id, content, created_at, attachments, source_layout, source_reference, repost_policy, expires_at, ttl_seconds, ttl_mode, parent_message_id "
                     "FROM channel_messages WHERE id = ?",
                     (message_id,)
                 ).fetchone()
@@ -13208,12 +14196,21 @@ def create_ui_blueprint() -> Blueprint:
             else:
                 final_attachments = list(attachments) if isinstance(attachments, list) else []
             final_attachments.extend(processed_new_attachments)
+            final_source_layout = normalize_source_layout(data.get('source_layout'))
+            if final_source_layout is None and row['source_layout']:
+                try:
+                    final_source_layout = normalize_source_layout(json.loads(row['source_layout']))
+                except Exception:
+                    final_source_layout = None
+            final_repost_policy = data.get('repost_policy')
 
             success = channel_manager.update_message(
                 message_id=message_id,
                 user_id=user_id,
                 content=content,
                 attachments=final_attachments if final_attachments else None,
+                source_layout=final_source_layout,
+                repost_policy=final_repost_policy,
                 allow_admin=False,
             )
 
@@ -13540,6 +14537,9 @@ def create_ui_blueprint() -> Blueprint:
                             message_id=message_id,
                             timestamp=str(row['created_at']),
                             attachments=final_attachments if final_attachments else None,
+                            source_layout=final_source_layout,
+                            source_reference=json.loads(row['source_reference']) if row['source_reference'] else None,
+                            repost_policy=final_repost_policy if final_repost_policy is not None else row['repost_policy'],
                             display_name=display_name,
                             expires_at=row['expires_at'],
                             ttl_seconds=row['ttl_seconds'],
@@ -15202,11 +16202,9 @@ def create_ui_blueprint() -> Blueprint:
                     logger.critical(f"Database import rollback failed: {rollback_err}")
                     return jsonify({
                         'error': 'Database import failed and automatic rollback also failed. Manual restore is required.',
-                        'details': str(import_err),
                     }), 500
                 return jsonify({
                     'error': 'Database import failed. Previous database was restored from backup.',
-                    'details': str(import_err),
                 }), 500
 
             return jsonify({

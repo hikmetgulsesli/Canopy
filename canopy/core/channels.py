@@ -4,20 +4,20 @@ Slack-style channel system for Canopy.
 Implements channel-based organization similar to Slack, with real-time
 messaging, threading, and work-focused communication.
 
-Author: Konrad Walus (architecture, design, and direction)
 Project: Canopy - Local Mesh Communication
 License: Apache 2.0
-Development: AI-assisted implementation (Claude, Codex, GitHub Copilot, Cursor IDE, Ollama)
 """
 
 import logging
 import math
+import re
 import secrets
 import json
 import hashlib
+import sqlite3
 import threading
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Union, Tuple, cast
+from typing import Dict, List, Optional, Any, Union, Tuple, cast, Set
 from dataclasses import dataclass
 from enum import Enum
 
@@ -29,6 +29,7 @@ from .events import (
     EVENT_CHANNEL_MESSAGE_READ,
     EVENT_CHANNEL_STATE_UPDATED,
 )
+from .source_layout import normalize_source_layout
 from ..security.api_keys import ApiKeyManager, Permission
 from .logging_config import log_performance, LogOperation
 from ..network.routing import (
@@ -37,6 +38,290 @@ from ..network.routing import (
 )
 
 logger = logging.getLogger('canopy.channels')
+
+
+_CHANNEL_REPOST_POLICY_VALUES = {'same_scope', 'deny'}
+_CHANNEL_SOURCE_REFERENCE_KIND_VALUES = {'repost_v1', 'variant_v1'}
+_CHANNEL_VARIANT_RELATIONSHIP_VALUES = {
+    'curated_recomposition',
+    'module_variant',
+    'parameterized_variant',
+}
+_CHANNEL_REPOST_REFERENCE_BODY_MAX_CHARS = 8000
+_CHANNEL_REPOST_REFERENCE_ATTACHMENT_IMAGE_CAP = 6
+_CHANNEL_REPOST_REFERENCE_YOUTUBE_CAP = 6
+
+# YouTube video ids in message body (aligns with client rich-text embed patterns).
+_CHANNEL_YOUTUBE_ID_IN_CONTENT_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/(?:shorts|live)/)([\w-]{11})\b",
+    re.IGNORECASE,
+)
+
+
+def _channel_youtube_embeds_from_content(content: str) -> Dict[str, Any]:
+    """Structured link hints when the original is plain text with YouTube URL(s) (no attachments).
+
+    Matches the common case where the channel row shows inline YouTube embeds from ``content``
+    but ``message_type`` is TEXT and ``attachments`` is empty — repost cards must still get
+    ``has_source_layout`` (Deck) and preview thumbnails for each distinct video (capped).
+    """
+    text = str(content or "")
+    ids_ordered: List[str] = []
+    seen: Set[str] = set()
+    for match in _CHANNEL_YOUTUBE_ID_IN_CONTENT_RE.finditer(text):
+        video_id = str(match.group(1) or "").strip()
+        if len(video_id) != 11 or video_id in seen:
+            continue
+        seen.add(video_id)
+        ids_ordered.append(video_id)
+        if len(ids_ordered) >= _CHANNEL_REPOST_REFERENCE_YOUTUBE_CAP:
+            break
+    if not ids_ordered:
+        return {}
+    first = ids_ordered[0]
+    canonical = f"https://www.youtube.com/watch?v={first}"
+    out: Dict[str, Any] = {
+        "link_url": canonical,
+        "link_title": canonical,
+        "youtube_video_id": first,
+        "youtube_video_ids": ids_ordered,
+    }
+    return out
+
+
+def _normalize_origin_peer_id(value: Any) -> Optional[str]:
+    peer_id = str(value or '').strip() if isinstance(value, str) else ''
+    return peer_id or None
+
+
+def _normalize_channel_repost_policy(value: Any) -> Optional[str]:
+    policy = str(value or '').strip().lower()
+    if policy in _CHANNEL_REPOST_POLICY_VALUES:
+        return policy
+    return None
+
+
+def _normalize_channel_variant_relationship(value: Any) -> str:
+    relationship = str(value or '').strip().lower()
+    if relationship in _CHANNEL_VARIANT_RELATIONSHIP_VALUES:
+        return relationship
+    return 'curated_recomposition'
+
+
+def _normalize_channel_source_reference(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    kind = str(value.get('kind') or '').strip().lower()
+    source_type = str(value.get('source_type') or '').strip().lower()
+    source_id = str(value.get('source_id') or '').strip()
+    channel_id = str(value.get('channel_id') or '').strip()
+    if kind not in _CHANNEL_SOURCE_REFERENCE_KIND_VALUES or source_type != 'channel_message' or not source_id or not channel_id:
+        return None
+
+    normalized: Dict[str, Any] = {
+        'kind': kind,
+        'source_type': 'channel_message',
+        'source_id': source_id,
+        'channel_id': channel_id,
+    }
+    created_by_user_id = str(value.get('created_by_user_id') or '').strip()
+    if created_by_user_id:
+        normalized['created_by_user_id'] = created_by_user_id
+    if kind == 'variant_v1':
+        normalized['relationship_kind'] = _normalize_channel_variant_relationship(value.get('relationship_kind'))
+        module_param_delta = str(value.get('module_param_delta') or '').strip()
+        if module_param_delta:
+            normalized['module_param_delta'] = module_param_delta[:500]
+    return normalized
+
+
+def _extract_channel_source_reference(value: Any) -> Optional[Dict[str, Any]]:
+    return _normalize_channel_source_reference(value)
+
+
+def _is_channel_repost_reference(value: Any) -> bool:
+    reference = _extract_channel_source_reference(value)
+    if not reference:
+        return False
+    return str(reference.get('kind') or '').strip().lower() == 'repost_v1'
+
+
+def _is_channel_variant_reference(value: Any) -> bool:
+    reference = _extract_channel_source_reference(value)
+    if not reference:
+        return False
+    return str(reference.get('kind') or '').strip().lower() == 'variant_v1'
+
+
+def _build_channel_repost_preview_text(content: str, limit: int = 220) -> str:
+    preview = ' '.join(str(content or '').split()).strip()
+    if len(preview) <= limit:
+        return preview
+    return preview[: max(0, limit - 3)].rstrip() + '...'
+
+
+def _truncate_channel_repost_reference_body(
+    text: str,
+    max_chars: int = _CHANNEL_REPOST_REFERENCE_BODY_MAX_CHARS,
+) -> tuple[str, bool]:
+    raw = str(text or '')
+    if len(raw) <= max_chars:
+        return raw, False
+    cut = raw[: max(0, max_chars - 1)].rstrip()
+    return cut + '…', True
+
+
+def _safe_channel_message_type_label(message: Any) -> str:
+    """JSON/UI-safe message type string for lineage preview payloads."""
+    mt = getattr(message, 'message_type', None)
+    if mt is None:
+        return 'text'
+    try:
+        val = getattr(mt, 'value', None)
+        if val is not None:
+            return str(val)
+    except Exception:
+        pass
+    return str(mt)
+
+
+def _safe_channel_created_at_iso(message: Any) -> str:
+    """ISO timestamp for lineage previews; never raises."""
+    dt = getattr(message, 'created_at', None)
+    if dt is None:
+        return ''
+    iso_fn = getattr(dt, 'isoformat', None)
+    if callable(iso_fn):
+        try:
+            return str(iso_fn())
+        except Exception:
+            return ''
+    return str(dt)
+
+
+def _channel_repost_embed_from_original(message: Any) -> Dict[str, Any]:
+    embed: Dict[str, Any] = {}
+    attachments = getattr(message, 'attachments', None)
+    images: List[Dict[str, str]] = []
+    if isinstance(attachments, list):
+        for item in attachments:
+            if not isinstance(item, dict):
+                continue
+            typ = str(item.get('type') or '')
+            file_id = str(item.get('id') or item.get('file_id') or '').strip()
+            url = str(item.get('url') or '').strip()
+            if not url and file_id:
+                url = f"/files/{file_id}"
+            if not url or not typ.startswith('image/'):
+                continue
+            images.append({
+                'url': url,
+                'name': str(item.get('name') or 'Image'),
+                'type': typ,
+            })
+            if len(images) >= _CHANNEL_REPOST_REFERENCE_ATTACHMENT_IMAGE_CAP:
+                break
+    if images:
+        embed['attachment_images'] = images
+
+    for key, value in _channel_youtube_embeds_from_content(getattr(message, 'content', '')).items():
+        embed.setdefault(key, value)
+
+    return embed
+
+
+def _channel_attachment_list_signals_deck_queue(
+    attachments: Any,
+    db_manager: Any = None,
+) -> bool:
+    """True when attachments include media or a Canopy HTML module the deck can use.
+
+    When attachment dicts only carry ``id``/``file_id`` (common after sync), optional
+    ``db_manager`` resolves ``files.original_name`` / ``content_type`` for the same
+    rules as inline metadata.
+    """
+    if not isinstance(attachments, list):
+        return False
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        typ = str(
+            item.get('type') or item.get('content_type') or item.get('mime_type') or ''
+        ).lower()
+        name = str(
+            item.get('name')
+            or item.get('filename')
+            or item.get('original_name')
+            or item.get('file_name')
+            or ''
+        ).lower()
+        if typ.startswith('image/') or typ.startswith('video/') or typ.startswith('audio/'):
+            return True
+        if name.endswith('.canopy-module.html') or name.endswith('.canopy-module.htm'):
+            return True
+        if typ.startswith('text/html'):
+            return True
+        if name.endswith('.html') or name.endswith('.htm'):
+            return True
+
+        fid = str(item.get('id') or item.get('file_id') or '').strip()
+        if not fid or not db_manager:
+            continue
+        try:
+            with db_manager.get_connection() as conn:
+                row = conn.execute(
+                    "SELECT original_name, content_type FROM files WHERE id = ? LIMIT 1",
+                    (fid,),
+                ).fetchone()
+        except Exception:
+            row = None
+        if not row:
+            continue
+        try:
+            db_name = str(row['original_name'] or '').lower()
+            db_ct = str(row['content_type'] or '').lower()
+        except (TypeError, KeyError, IndexError):
+            continue
+        if db_ct.startswith('image/') or db_ct.startswith('video/') or db_ct.startswith('audio/'):
+            return True
+        if db_name.endswith('.canopy-module.html') or db_name.endswith('.canopy-module.htm'):
+            return True
+        if db_ct.startswith('text/html'):
+            return True
+        if db_name.endswith('.html') or db_name.endswith('.htm'):
+            return True
+    return False
+
+
+def _channel_original_signals_deck_ui(
+    original: Any,
+    embed: Dict[str, Any],
+    db_manager: Any = None,
+) -> bool:
+    """Deck-eligible antecedent without requiring persisted source_layout JSON."""
+    if embed.get('attachment_images'):
+        return True
+    if str(embed.get('link_url') or embed.get('video_url') or '').strip():
+        return True
+    if str(embed.get('youtube_video_id') or '').strip():
+        return True
+    yids = embed.get('youtube_video_ids')
+    if isinstance(yids, list) and any(str(x or '').strip() for x in yids):
+        return True
+    atts = getattr(original, 'attachments', None)
+    if _channel_attachment_list_signals_deck_queue(atts, db_manager):
+        return True
+    mt = getattr(original, 'message_type', None)
+    if mt in (MessageType.IMAGE, MessageType.LINK):
+        return True
+    # FILE (or any row with stored attachments) usually has a renderable surface on the source card.
+    if isinstance(atts, list) and len(atts) > 0 and mt in (
+        MessageType.FILE,
+        MessageType.TEXT,
+        MessageType.THREAD_REPLY,
+    ):
+        return True
+    return False
 
 
 class ChannelType(Enum):
@@ -138,6 +423,9 @@ class Message:
     reactions: Optional[Dict[str, List[str]]] = None  # emoji -> [user_ids]
     attachments: Optional[List[Dict[str, Any]]] = None
     security: Optional[Dict[str, Any]] = None
+    source_layout: Optional[Dict[str, Any]] = None
+    source_reference: Optional[Dict[str, Any]] = None
+    repost_policy: Optional[str] = None
     edited_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
     origin_peer: Optional[str] = None
@@ -243,6 +531,9 @@ class Message:
             'reactions': self.reactions or {},
             'attachments': attachments,
             'security': self.security or {},
+            'source_layout': self.source_layout,
+            'source_reference': self.source_reference,
+            'repost_policy': self.repost_policy,
             'edited_at': self.edited_at.isoformat() if self.edited_at else None,
             'origin_peer': self.origin_peer,
             'crypto_state': self.crypto_state,
@@ -727,6 +1018,8 @@ class ChannelManager:
                         reactions TEXT,  -- JSON blob
                         attachments TEXT,  -- JSON blob
                         security TEXT,  -- JSON blob for future encryption metadata
+                        source_reference TEXT,  -- JSON blob for repost wrappers
+                        repost_policy TEXT DEFAULT 'same_scope',
                         encrypted_content TEXT,  -- future E2E payload storage
                         crypto_state TEXT DEFAULT 'plaintext',  -- plaintext|encrypted|pending_key|decrypt_failed
                         key_id TEXT,
@@ -909,11 +1202,16 @@ class ChannelManager:
                     logger.debug(f"Could not create expires_at index: {idx_err}")
 
                 # Add ttl_seconds, ttl_mode, edited_at, security so catchup/edit can send them
-                for col, typ in [('ttl_seconds', 'INTEGER'), ('ttl_mode', 'TEXT'), ('edited_at', 'TIMESTAMP'), ('security', 'TEXT')]:
+                for col, typ in [('ttl_seconds', 'INTEGER'), ('ttl_mode', 'TEXT'), ('edited_at', 'TIMESTAMP'), ('security', 'TEXT'), ('source_layout', 'TEXT'), ('source_reference', 'TEXT'), ('repost_policy', 'TEXT')]:
                     try:
                         conn.execute(f"SELECT {col} FROM channel_messages LIMIT 1")
                     except Exception:
-                        conn.execute(f"ALTER TABLE channel_messages ADD COLUMN {col} {typ}")
+                        if col == 'repost_policy':
+                            conn.execute(
+                                "ALTER TABLE channel_messages ADD COLUMN repost_policy TEXT DEFAULT 'same_scope'"
+                            )
+                        else:
+                            conn.execute(f"ALTER TABLE channel_messages ADD COLUMN {col} {typ}")
                         logger.info(f"Added {col} column to channel_messages table")
 
                 # Phase-1 E2E scaffolding columns on channel_messages
@@ -4480,6 +4778,10 @@ class ChannelManager:
                     thread_id: Optional[str] = None, parent_message_id: Optional[str] = None,
                     attachments: Optional[List[Dict[str, Any]]] = None,
                     security: Optional[Dict[str, Any]] = None,
+                    source_layout: Optional[Dict[str, Any]] = None,
+                    source_reference: Optional[Dict[str, Any]] = None,
+                    repost_policy: Optional[str] = None,
+                    allow_source_reference: bool = False,
                     expires_at: Optional[Any] = None,
                     ttl_seconds: Optional[int] = None,
                     ttl_mode: Optional[str] = None,
@@ -4506,6 +4808,13 @@ class ChannelManager:
             if sec_error:
                 logger.warning(f"Dropping invalid security metadata for channel {channel_id}: {sec_error}")
             security = security_clean
+            source_layout = normalize_source_layout(source_layout)
+            source_reference = (
+                _normalize_channel_source_reference(source_reference)
+                if allow_source_reference else None
+            )
+            repost_policy = _normalize_channel_repost_policy(repost_policy) or 'same_scope'
+            origin_peer = _normalize_origin_peer_id(origin_peer)
 
             normalized_attachments = Message.normalize_attachments(attachments)
             if normalized_attachments:
@@ -4540,6 +4849,9 @@ class ChannelManager:
                 parent_message_id=parent_message_id,
                 attachments=normalized_attachments,
                 security=security,
+                source_layout=source_layout,
+                source_reference=source_reference,
+                repost_policy=repost_policy,
                 expires_at=expires_dt,
                 origin_peer=origin_peer,
             )
@@ -4552,13 +4864,16 @@ class ChannelManager:
                 with self.db.get_connection() as conn:
                     conn.execute("""
                         INSERT INTO channel_messages 
-                        (id, channel_id, user_id, content, message_type, thread_id, parent_message_id, attachments, security, created_at, origin_peer, expires_at, ttl_seconds, ttl_mode)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (id, channel_id, user_id, content, message_type, thread_id, parent_message_id, attachments, security, source_layout, source_reference, repost_policy, created_at, origin_peer, expires_at, ttl_seconds, ttl_mode)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         message_id, channel_id, user_id, content, message_type.value,
                         thread_id, parent_message_id,
                         json.dumps(normalized_attachments) if normalized_attachments else None,
                         json.dumps(security) if security else None,
+                        json.dumps(source_layout) if source_layout else None,
+                        json.dumps(source_reference) if source_reference else None,
+                        repost_policy,
                         created_db,
                         origin_peer,
                         expires_db,
@@ -4611,12 +4926,16 @@ class ChannelManager:
 
     def update_message(self, message_id: str, user_id: str, content: str,
                        attachments: Optional[List[Dict[str, Any]]] = None,
+                       source_layout: Optional[Dict[str, Any]] = None,
+                       source_reference: Optional[Dict[str, Any]] = None,
+                       repost_policy: Optional[str] = None,
+                       allow_source_reference: bool = False,
                        allow_admin: bool = False) -> bool:
         """Update a channel message (author or admin)."""
         try:
             with self.db.get_connection() as conn:
                 row = conn.execute(
-                    "SELECT channel_id, user_id, attachments, message_type FROM channel_messages WHERE id = ?",
+                    "SELECT channel_id, user_id, attachments, message_type, source_layout, source_reference, repost_policy FROM channel_messages WHERE id = ?",
                     (message_id,)
                 ).fetchone()
                 if not row or (row['user_id'] != user_id and not allow_admin):
@@ -4625,6 +4944,8 @@ class ChannelManager:
                 channel_id = str(row['channel_id'] or '').strip()
 
                 final_attachments = attachments
+                final_source_layout = source_layout
+                final_source_reference = None
                 if final_attachments is None:
                     if row['attachments']:
                         try:
@@ -4632,6 +4953,26 @@ class ChannelManager:
                         except Exception:
                             final_attachments = None
                 final_attachments = Message.normalize_attachments(final_attachments) if final_attachments else None
+                if final_source_layout is None and row['source_layout']:
+                    try:
+                        final_source_layout = json.loads(row['source_layout'])
+                    except Exception:
+                        final_source_layout = None
+                final_source_layout = normalize_source_layout(final_source_layout)
+                if row['source_reference']:
+                    try:
+                        final_source_reference = _normalize_channel_source_reference(
+                            json.loads(row['source_reference'])
+                        )
+                    except Exception:
+                        final_source_reference = None
+                if allow_source_reference and source_reference is not None:
+                    final_source_reference = _normalize_channel_source_reference(source_reference)
+                final_repost_policy = (
+                    _normalize_channel_repost_policy(repost_policy)
+                    if repost_policy is not None else
+                    _normalize_channel_repost_policy(row['repost_policy'])
+                ) or 'same_scope'
 
                 if final_attachments:
                     final_message_type = MessageType.FILE.value
@@ -4642,11 +4983,14 @@ class ChannelManager:
                 edited_db = self._format_db_timestamp(edited_at)
 
                 conn.execute(
-                    "UPDATE channel_messages SET content = ?, message_type = ?, attachments = ?, edited_at = ? WHERE id = ?",
+                    "UPDATE channel_messages SET content = ?, message_type = ?, attachments = ?, source_layout = ?, source_reference = ?, repost_policy = ?, edited_at = ? WHERE id = ?",
                     (
                         content,
                         final_message_type,
                         json.dumps(final_attachments) if final_attachments else None,
+                        json.dumps(final_source_layout) if final_source_layout else None,
+                        json.dumps(final_source_reference) if final_source_reference else None,
+                        final_repost_policy,
                         edited_db,
                         message_id,
                     )
@@ -5249,7 +5593,10 @@ class ChannelManager:
                     logger.warning(f"User {user_id} cannot delete message {message_id}")
                     return False
                 # Remove FK references: likes and parent_message_id on other messages
-                conn.execute("DELETE FROM likes WHERE message_id = ?", (message_id,))
+                try:
+                    conn.execute("DELETE FROM likes WHERE message_id = ?", (message_id,))
+                except sqlite3.OperationalError as like_err:
+                    logger.debug(f"Skipping like cleanup for channel message delete: {like_err}")
                 conn.execute(
                     "UPDATE channel_messages SET parent_message_id = NULL WHERE parent_message_id = ?",
                     (message_id,),
@@ -5417,6 +5764,9 @@ class ChannelManager:
                 reactions=json.loads(row['reactions']) if row['reactions'] else None,
                 attachments=json.loads(row['attachments']) if row['attachments'] else None,
                 security=json.loads(row['security']) if row['security'] else None,
+                source_layout=json.loads(row['source_layout']) if ('source_layout' in row.keys() and row['source_layout']) else None,
+                source_reference=json.loads(row['source_reference']) if ('source_reference' in row.keys() and row['source_reference']) else None,
+                repost_policy=_normalize_channel_repost_policy(row['repost_policy']) if ('repost_policy' in row.keys()) else None,
                 edited_at=edited_at,
                 expires_at=expires_at,
                 origin_peer=row['origin_peer'] if 'origin_peer' in row.keys() else None,
@@ -5689,6 +6039,466 @@ class ChannelManager:
                 return self._row_to_channel_message(row, "single")
         except Exception as e:
             logger.error(f"Failed to get channel message {message_id}: {e}", exc_info=True)
+            return None
+
+    def get_repost_policy(self, message: Optional[Message]) -> str:
+        """Resolve repost policy for a channel message; default to same-scope reposts."""
+        if not message:
+            return 'same_scope'
+        policy = _normalize_channel_repost_policy(getattr(message, 'repost_policy', None))
+        return policy or 'same_scope'
+
+    def is_repost_message(self, message: Optional[Message]) -> bool:
+        """Return True when a channel message is a repost wrapper."""
+        if not message:
+            return False
+        return _is_channel_repost_reference(getattr(message, 'source_reference', None))
+
+    def is_variant_message(self, message: Optional[Message]) -> bool:
+        """Return True when a channel message is a lineage variant wrapper."""
+        if not message:
+            return False
+        return _is_channel_variant_reference(getattr(message, 'source_reference', None))
+
+    def _get_message_for_reference(
+        self,
+        channel_id: str,
+        message_id: str,
+        viewer_id: str,
+    ) -> tuple[str, Optional[Message]]:
+        """Resolve a channel message for repost rendering without widening access."""
+        try:
+            with self.db.get_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT *
+                    FROM channel_messages
+                    WHERE id = ?
+                    """,
+                    (message_id,),
+                ).fetchone()
+            if not row:
+                return ('missing', None)
+
+            message_channel_id = str(row['channel_id'] or '').strip()
+            if not message_channel_id or message_channel_id != str(channel_id or '').strip():
+                return ('access_changed', None)
+
+            access = self.get_channel_access_decision(
+                channel_id=message_channel_id,
+                user_id=viewer_id,
+                require_membership=True,
+            )
+            if not access.get('allowed'):
+                return ('access_changed', None)
+
+            message = self._row_to_channel_message(row, "repost_reference")
+            if not message:
+                return ('missing', None)
+            if message.is_expired:
+                return ('expired', None)
+            if self.get_repost_policy(message) == 'deny':
+                return ('policy_denied', None)
+            return ('available', message)
+        except Exception as e:
+            logger.error(
+                "Failed to resolve channel repost source %s in %s: %s",
+                message_id,
+                channel_id,
+                e,
+                exc_info=True,
+            )
+            return ('missing', None)
+
+    def get_repost_eligibility(
+        self,
+        message_id: str,
+        user_id: str,
+        channel_id: str,
+    ) -> Dict[str, Any]:
+        """Evaluate whether a user can create a repost wrapper for a channel message."""
+        source_channel_id = ''
+        try:
+            with self.db.get_connection() as conn:
+                row = conn.execute(
+                    "SELECT channel_id FROM channel_messages WHERE id = ?",
+                    (message_id,),
+                ).fetchone()
+            if row:
+                source_channel_id = str(row['channel_id'] or '').strip()
+        except Exception as lookup_err:
+            logger.debug(f"Channel repost source lookup failed for {message_id}: {lookup_err}")
+
+        if not source_channel_id:
+            return {
+                'allowed': False,
+                'status_code': 404,
+                'reason': 'Message not found',
+            }
+
+        if source_channel_id != str(channel_id or '').strip():
+            source_access = self.get_channel_access_decision(
+                channel_id=source_channel_id,
+                user_id=user_id,
+                require_membership=True,
+            )
+            if source_access.get('allowed'):
+                return {
+                    'allowed': False,
+                    'status_code': 403,
+                    'reason': 'Channel reposts are limited to the same channel in v1',
+                }
+            return {
+                'allowed': False,
+                'status_code': 403,
+                'reason': 'Access denied',
+            }
+
+        state, original = self._get_message_for_reference(source_channel_id, message_id, user_id)
+        if state != 'available' or not original:
+            if state == 'policy_denied':
+                return {
+                    'allowed': False,
+                    'status_code': 403,
+                    'reason': 'This message cannot be reposted',
+                }
+            return {
+                'allowed': False,
+                'status_code': 404 if state in {'missing', 'expired'} else 403,
+                'reason': 'Message not found' if state in {'missing', 'expired'} else 'Access denied',
+            }
+
+        if self.is_repost_message(original):
+            return {
+                'allowed': False,
+                'status_code': 400,
+                'reason': 'Repost chains are not supported',
+            }
+
+        post_decision = self.can_user_post_message(
+            channel_id=channel_id,
+            user_id=user_id,
+            parent_message_id=None,
+            allow_admin=False,
+        )
+        if not post_decision.get('allowed'):
+            return {
+                'allowed': False,
+                'status_code': 403,
+                'reason': str(post_decision.get('reason') or 'posting_denied'),
+                'post_policy': post_decision.get('post_policy'),
+                'can_reply': post_decision.get('can_reply'),
+            }
+
+        return {
+            'allowed': True,
+            'status_code': 200,
+            'reason': 'ok',
+            'message': original,
+        }
+
+    def resolve_repost_reference(self, message: Message, viewer_id: str) -> Optional[Dict[str, Any]]:
+        """Resolve a repost wrapper into a live original-source preview contract."""
+        source_reference = _extract_channel_source_reference(message.source_reference)
+        if not source_reference:
+            return None
+        if str(source_reference.get('kind') or '').strip().lower() != 'repost_v1':
+            return None
+
+        source_id = str(source_reference.get('source_id') or '').strip()
+        source_channel_id = str(source_reference.get('channel_id') or message.channel_id or '').strip()
+        result: Dict[str, Any] = {
+            'kind': str(source_reference.get('kind') or '').strip() or 'repost_v1',
+            'source_type': 'channel_message',
+            'source_id': source_id,
+            'channel_id': source_channel_id,
+            'available': False,
+            'unavailable_reason': 'missing',
+        }
+        if not source_id or not source_channel_id:
+            return result
+
+        state, original = self._get_message_for_reference(source_channel_id, source_id, viewer_id)
+        if state != 'available' or not original:
+            result['unavailable_reason'] = state
+            return result
+
+        source_layout = original.source_layout if isinstance(original.source_layout, dict) else None
+        deck_default_ref = (
+            str(source_layout.get('deck', {}).get('default_ref') or '').strip()
+            if isinstance(source_layout, dict) and isinstance(source_layout.get('deck'), dict)
+            else ''
+        )
+        body_text, body_truncated = _truncate_channel_repost_reference_body(original.content)
+        embed = _channel_repost_embed_from_original(original)
+        has_deck_ui = bool(source_layout) or _channel_original_signals_deck_ui(original, embed, self.db)
+        try:
+            result.update({
+                'available': True,
+                'unavailable_reason': None,
+                'author_id': original.user_id,
+                'created_at': _safe_channel_created_at_iso(original),
+                'message_type': _safe_channel_message_type_label(original),
+                'preview_text': _build_channel_repost_preview_text(original.content),
+                'body_text': body_text,
+                'body_truncated': body_truncated,
+                'embed': embed,
+                'has_source_layout': has_deck_ui,
+                'deck_default_ref': deck_default_ref or None,
+            })
+        except Exception as preview_err:
+            logger.warning(
+                "Repost reference preview build failed for source %s: %s",
+                source_id,
+                preview_err,
+            )
+            result['available'] = False
+            result['unavailable_reason'] = 'missing'
+        return result
+
+    def get_variant_eligibility(
+        self,
+        message_id: str,
+        user_id: str,
+        channel_id: str,
+    ) -> Dict[str, Any]:
+        """Evaluate whether a user can create a lineage variant for a channel message."""
+        source_channel_id = ''
+        try:
+            with self.db.get_connection() as conn:
+                row = conn.execute(
+                    "SELECT channel_id FROM channel_messages WHERE id = ?",
+                    (message_id,),
+                ).fetchone()
+            if row:
+                source_channel_id = str(row['channel_id'] or '').strip()
+        except Exception as lookup_err:
+            logger.debug(f"Channel variant source lookup failed for {message_id}: {lookup_err}")
+
+        if not source_channel_id:
+            return {
+                'allowed': False,
+                'status_code': 404,
+                'reason': 'Message not found',
+            }
+
+        if source_channel_id != str(channel_id or '').strip():
+            source_access = self.get_channel_access_decision(
+                channel_id=source_channel_id,
+                user_id=user_id,
+                require_membership=True,
+            )
+            if source_access.get('allowed'):
+                return {
+                    'allowed': False,
+                    'status_code': 403,
+                    'reason': 'Variants are limited to the same channel in v1',
+                }
+            return {
+                'allowed': False,
+                'status_code': 403,
+                'reason': 'Access denied',
+            }
+
+        state, original = self._get_message_for_reference(source_channel_id, message_id, user_id)
+        if state != 'available' or not original:
+            if state == 'policy_denied':
+                return {
+                    'allowed': False,
+                    'status_code': 403,
+                    'reason': 'This message cannot be used as a variant source',
+                }
+            return {
+                'allowed': False,
+                'status_code': 404 if state in {'missing', 'expired'} else 403,
+                'reason': 'Message not found' if state in {'missing', 'expired'} else 'Access denied',
+            }
+
+        if self.is_repost_message(original):
+            return {
+                'allowed': False,
+                'status_code': 400,
+                'reason': 'Repost wrappers cannot be used as variant sources',
+            }
+
+        if self.get_repost_policy(original) == 'deny':
+            return {
+                'allowed': False,
+                'status_code': 403,
+                'reason': 'This message does not allow variants',
+            }
+
+        post_decision = self.can_user_post_message(
+            channel_id=channel_id,
+            user_id=user_id,
+            parent_message_id=None,
+            allow_admin=False,
+        )
+        if not post_decision.get('allowed'):
+            return {
+                'allowed': False,
+                'status_code': 403,
+                'reason': str(post_decision.get('reason') or 'posting_denied'),
+                'post_policy': post_decision.get('post_policy'),
+                'can_reply': post_decision.get('can_reply'),
+            }
+
+        return {
+            'allowed': True,
+            'status_code': 200,
+            'reason': 'ok',
+            'message': original,
+        }
+
+    def resolve_variant_reference(self, message: Message, viewer_id: str) -> Optional[Dict[str, Any]]:
+        """Resolve a lineage variant into a live antecedent-source preview contract."""
+        source_reference = _extract_channel_source_reference(message.source_reference)
+        if not source_reference:
+            return None
+        if str(source_reference.get('kind') or '').strip().lower() != 'variant_v1':
+            return None
+
+        source_id = str(source_reference.get('source_id') or '').strip()
+        source_channel_id = str(source_reference.get('channel_id') or message.channel_id or '').strip()
+        relationship_kind = _normalize_channel_variant_relationship(source_reference.get('relationship_kind'))
+        result: Dict[str, Any] = {
+            'kind': 'variant_v1',
+            'source_type': 'channel_message',
+            'source_id': source_id,
+            'channel_id': source_channel_id,
+            'available': False,
+            'unavailable_reason': 'missing',
+            'relationship_kind': relationship_kind,
+            'module_param_delta': str(source_reference.get('module_param_delta') or '').strip() or None,
+        }
+        if not source_id or not source_channel_id:
+            return result
+
+        state, original = self._get_message_for_reference(source_channel_id, source_id, viewer_id)
+        if state != 'available' or not original:
+            result['unavailable_reason'] = state
+            return result
+
+        source_layout = original.source_layout if isinstance(original.source_layout, dict) else None
+        deck_default_ref = (
+            str(source_layout.get('deck', {}).get('default_ref') or '').strip()
+            if isinstance(source_layout, dict) and isinstance(source_layout.get('deck'), dict)
+            else ''
+        )
+        body_text, body_truncated = _truncate_channel_repost_reference_body(original.content)
+        embed = _channel_repost_embed_from_original(original)
+        has_deck_ui = bool(source_layout) or _channel_original_signals_deck_ui(original, embed, self.db)
+        try:
+            result.update({
+                'available': True,
+                'unavailable_reason': None,
+                'author_id': original.user_id,
+                'created_at': _safe_channel_created_at_iso(original),
+                'message_type': _safe_channel_message_type_label(original),
+                'preview_text': _build_channel_repost_preview_text(original.content),
+                'body_text': body_text,
+                'body_truncated': body_truncated,
+                'embed': embed,
+                'has_source_layout': has_deck_ui,
+                'deck_default_ref': deck_default_ref or None,
+            })
+        except Exception as preview_err:
+            logger.warning(
+                "Variant reference preview build failed for source %s: %s",
+                source_id,
+                preview_err,
+            )
+            result['available'] = False
+            result['unavailable_reason'] = 'missing'
+        return result
+
+    def create_repost(
+        self,
+        source_message_id: str,
+        user_id: str,
+        channel_id: str,
+        comment: str = '',
+        origin_peer: Optional[str] = None,
+    ) -> Optional[Message]:
+        """Create a secure same-channel repost wrapper for an eligible channel message."""
+        try:
+            eligibility = self.get_repost_eligibility(source_message_id, user_id, channel_id)
+            if not eligibility.get('allowed'):
+                logger.warning(
+                    "Cannot repost channel message %s for user %s in %s: %s",
+                    source_message_id,
+                    user_id,
+                    channel_id,
+                    eligibility.get('reason'),
+                )
+                return None
+
+            original = cast(Message, eligibility['message'])
+            # Persist the antecedent's channel (same as posting channel in v1; avoids stale param drift).
+            antecedent_channel_id = str(getattr(original, 'channel_id', None) or channel_id or '').strip()
+            return self.send_message(
+                channel_id=channel_id,
+                user_id=user_id,
+                content=str(comment or '').strip(),
+                message_type=MessageType.TEXT,
+                source_reference={
+                    'kind': 'repost_v1',
+                    'source_type': 'channel_message',
+                    'source_id': original.id,
+                    'channel_id': antecedent_channel_id,
+                    'created_by_user_id': user_id,
+                },
+                allow_source_reference=True,
+                origin_peer=origin_peer,
+            )
+        except Exception as e:
+            logger.error(f"Failed to create channel repost: {e}", exc_info=True)
+            return None
+
+    def create_variant(
+        self,
+        source_message_id: str,
+        user_id: str,
+        channel_id: str,
+        comment: str = '',
+        *,
+        relationship_kind: str = 'curated_recomposition',
+        module_param_delta: str = '',
+        origin_peer: Optional[str] = None,
+    ) -> Optional[Message]:
+        """Create a secure same-channel lineage variant wrapper."""
+        try:
+            eligibility = self.get_variant_eligibility(source_message_id, user_id, channel_id)
+            if not eligibility.get('allowed'):
+                logger.warning(
+                    "Cannot create variant from channel message %s for user %s in %s: %s",
+                    source_message_id,
+                    user_id,
+                    channel_id,
+                    eligibility.get('reason'),
+                )
+                return None
+
+            original = cast(Message, eligibility['message'])
+            return self.send_message(
+                channel_id=channel_id,
+                user_id=user_id,
+                content=str(comment or '').strip(),
+                message_type=MessageType.TEXT,
+                source_reference={
+                    'kind': 'variant_v1',
+                    'source_type': 'channel_message',
+                    'source_id': original.id,
+                    'channel_id': channel_id,
+                    'created_by_user_id': user_id,
+                    'relationship_kind': relationship_kind,
+                    'module_param_delta': module_param_delta,
+                },
+                allow_source_reference=True,
+                origin_peer=origin_peer,
+            )
+        except Exception as e:
+            logger.error(f"Failed to create channel variant: {e}", exc_info=True)
             return None
 
     def get_channel_activity_since(self, user_id: str, since: datetime, limit: int = 50) -> List[Dict[str, Any]]:
@@ -6200,7 +7010,8 @@ class ChannelManager:
                     SELECT id, channel_id, user_id, content,
                            message_type, created_at, attachments, expires_at,
                            origin_peer,
-                           ttl_seconds, ttl_mode, parent_message_id,
+                           ttl_seconds, ttl_mode, parent_message_id, source_layout,
+                           source_reference, repost_policy,
                            encrypted_content, crypto_state, key_id, nonce
                     FROM channel_messages
                     WHERE channel_id = ?
@@ -6224,6 +7035,9 @@ class ChannelManager:
                         'ttl_seconds': row['ttl_seconds'] if 'ttl_seconds' in row.keys() else None,
                         'ttl_mode': row['ttl_mode'] if 'ttl_mode' in row.keys() else None,
                         'parent_message_id': row['parent_message_id'] if 'parent_message_id' in row.keys() else None,
+                        'source_layout': json.loads(row['source_layout']) if ('source_layout' in row.keys() and row['source_layout']) else None,
+                        'source_reference': json.loads(row['source_reference']) if ('source_reference' in row.keys() and row['source_reference']) else None,
+                        'repost_policy': _normalize_channel_repost_policy(row['repost_policy']) if 'repost_policy' in row.keys() else None,
                         'encrypted_content': (
                             row['encrypted_content'] if 'encrypted_content' in row.keys() else None
                         ),

@@ -1394,8 +1394,6 @@
         </div>
     </div>
 
-    {% include '_workspace_onboarding.html' %}
-
     <div class="messages-shell">
         <aside class="dm-sidebar">
             <div class="dm-sidebar-search">
@@ -1528,18 +1526,6 @@
     let dmQueuedSnapshotOptions = null;
     let dmComposerDragDepth = 0;
     const DM_WORKSPACE_EVENT_TYPES = ['dm.message.created', 'dm.message.edited', 'dm.message.deleted', 'attachment.available'];
-    const DM_SEARCH_QUERY = {{ search_query|tojson }};
-
-    function isDmSearchActive() {
-        if (String(DM_SEARCH_QUERY || '').trim()) {
-            return true;
-        }
-        try {
-            return new URL(window.location.href).searchParams.has('search');
-        } catch (error) {
-            return window.location.search.includes('search=');
-        }
-    }
 
     function matchesInitialRecipients() {
         const current = selectedRecipients.map(rec => rec.user_id).filter(Boolean).sort();
@@ -1671,7 +1657,7 @@
 
     function loadDmSnapshot(options) {
         const opts = options || {};
-        if (isDmSearchActive()) {
+        if (window.location.search.includes('search=')) {
             if (opts.hardFallback) window.location.reload();
             return Promise.resolve(null);
         }
@@ -1759,7 +1745,7 @@
     }
 
     function pollDmEvents() {
-        if (dmEventPollInFlight || isDmSearchActive()) {
+        if (dmEventPollInFlight || window.location.search.includes('search=')) {
             return;
         }
         dmEventPollInFlight = true;
@@ -1802,7 +1788,7 @@
 
     function startDmPolling() {
         stopDmPolling();
-        if (isDmSearchActive()) {
+        if (window.location.search.includes('search=')) {
             return;
         }
         pollDmEvents();
@@ -1821,10 +1807,6 @@
     }
 
     function refreshMessages() {
-        if (isDmSearchActive()) {
-            window.location.reload();
-            return;
-        }
         loadDmSnapshot({ forceBottom: false, allowDeferred: false, hardFallback: true }).catch(() => {});
     }
 
@@ -2931,7 +2913,7 @@
         }
         startDmPolling();
         document.addEventListener('visibilitychange', () => {
-            if (!document.hidden && !isDmSearchActive()) {
+            if (!document.hidden) {
                 pollDmEvents();
                 loadDmSnapshot({
                     allowDeferred: true,

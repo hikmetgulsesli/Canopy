@@ -4,10 +4,8 @@ Main Flask application for Canopy.
 Creates and configures the Flask app with all necessary components
 and routes for the local mesh communication system.
 
-Author: Konrad Walus (architecture, design, and direction)
 Project: Canopy - Local Mesh Communication
 License: Apache 2.0
-Development: AI-assisted implementation (Claude, Codex, GitHub Copilot, Cursor IDE, Ollama)
 """
 
 import json
@@ -29,6 +27,7 @@ from .files import FileManager
 from .interactions import InteractionManager
 from .profile import ProfileManager
 from .feed import FeedManager
+from .bookmarks import BookmarkManager
 from .tasks import TaskManager
 from .search import SearchManager
 from .streams import StreamManager
@@ -336,6 +335,11 @@ def create_app(config: Optional[Config] = None) -> Flask:
         feed_manager.workspace_events = workspace_event_manager
         app.config['FEED_MANAGER'] = feed_manager
         logger.info("Feed manager initialized successfully")
+
+        logger.info("Initializing bookmark manager...")
+        bookmark_manager = BookmarkManager(db_manager)
+        app.config['BOOKMARK_MANAGER'] = bookmark_manager
+        logger.info("Bookmark manager initialized successfully")
 
         logger.info("Initializing task manager...")
         task_manager = TaskManager(db_manager)
@@ -1331,6 +1335,9 @@ def create_app(config: Optional[Config] = None) -> Flask:
         def _on_p2p_channel_message(channel_id: str, user_id: str, content: str,
                                      message_id: str, timestamp: str, from_peer: str,
                                      attachments: Optional[list[Any]] = None, security: Optional[dict[str, Any]] = None,
+                                     source_layout: Optional[dict[str, Any]] = None,
+                                     source_reference: Optional[dict[str, Any]] = None,
+                                     repost_policy: Optional[str] = None,
                                      message_type: str = 'text',
                                      display_name: Optional[str] = None, expires_at: Optional[str] = None,
                                      ttl_seconds: Optional[int] = None, ttl_mode: Optional[str] = None,
@@ -1682,26 +1689,36 @@ def create_app(config: Optional[Config] = None) -> Flask:
                         from datetime import datetime as _dt, timezone as _tz
                         edited_db = _dt.now(_tz.utc).strftime('%Y-%m-%d %H:%M:%S')
 
-                    # Preserve existing attachments if none provided
+                    # Preserve existing attachments / source layout if none provided
                     stored_attachments = attachments_json
                     stored_message_type = message_type or 'text'
                     stored_security = security_json
+                    stored_source_layout = json.dumps(source_layout) if isinstance(source_layout, dict) and source_layout else None
+                    stored_source_reference = json.dumps(source_reference) if isinstance(source_reference, dict) and source_reference else None
+                    stored_repost_policy = str(repost_policy or '').strip().lower() or None
                     stored_encrypted = encrypted_content_db
                     stored_crypto_state = crypto_state_db
                     stored_key_id = key_id_db
                     stored_nonce = nonce_db
-                    if attachments_json is None:
+                    if attachments_json is None or stored_source_layout is None or stored_source_reference is None or stored_repost_policy is None:
                         try:
                             with db_manager.get_connection() as conn:
                                 row = conn.execute(
-                                    "SELECT attachments, message_type, security, encrypted_content, crypto_state, key_id, nonce "
+                                    "SELECT attachments, message_type, security, source_layout, source_reference, repost_policy, encrypted_content, crypto_state, key_id, nonce "
                                     "FROM channel_messages WHERE id = ?",
                                     (message_id,)
                                 ).fetchone()
                                 if row:
-                                    stored_attachments = row['attachments']
+                                    if attachments_json is None:
+                                        stored_attachments = row['attachments']
                                     stored_message_type = row['message_type'] or stored_message_type
                                     stored_security = row['security']
+                                    if stored_source_layout is None:
+                                        stored_source_layout = row['source_layout']
+                                    if stored_source_reference is None:
+                                        stored_source_reference = row['source_reference']
+                                    if stored_repost_policy is None:
+                                        stored_repost_policy = row['repost_policy']
                                     if stored_encrypted is None:
                                         stored_encrypted = row['encrypted_content']
                                     if (not stored_key_id) and row['key_id']:
@@ -1720,7 +1737,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     with db_manager.get_connection() as conn:
                         conn.execute(
                             "UPDATE channel_messages "
-                            "SET content = ?, message_type = ?, attachments = ?, security = ?, edited_at = ?, "
+                            "SET content = ?, message_type = ?, attachments = ?, security = ?, source_layout = ?, source_reference = ?, repost_policy = ?, edited_at = ?, "
                             "expires_at = ?, ttl_seconds = ?, ttl_mode = ?, "
                             "encrypted_content = ?, crypto_state = ?, key_id = ?, nonce = ? "
                             "WHERE id = ?",
@@ -1729,6 +1746,9 @@ def create_app(config: Optional[Config] = None) -> Flask:
                                 stored_message_type,
                                 stored_attachments,
                                 stored_security,
+                                stored_source_layout,
+                                stored_source_reference,
+                                stored_repost_policy,
                                 edited_db,
                                 expires_db,
                                 ttl_sec_db,
@@ -1810,11 +1830,15 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     conn.execute("""
                         INSERT OR IGNORE INTO channel_messages
                         (id, channel_id, user_id, content, message_type,
-                         attachments, security, created_at, origin_peer, expires_at, ttl_seconds, ttl_mode,
+                         attachments, security, source_layout, source_reference, repost_policy, created_at, origin_peer, expires_at, ttl_seconds, ttl_mode,
                          parent_message_id, encrypted_content, crypto_state, key_id, nonce)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (mid, channel_id, user_id, content_rewritten,
-                          message_type, attachments_json, security_json, normalised_ts,
+                          message_type, attachments_json, security_json,
+                          json.dumps(source_layout) if isinstance(source_layout, dict) and source_layout else None,
+                          json.dumps(source_reference) if isinstance(source_reference, dict) and source_reference else None,
+                          str(repost_policy or '').strip().lower() or 'same_scope',
+                          normalised_ts,
                           effective_origin_peer,
                           expires_db,
                           int(ttl_seconds) if ttl_seconds is not None else None,
@@ -4333,6 +4357,12 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     # save to local FileManager, just like live messages.
                     attachments_json = None
                     atts = msg.get('attachments')
+                    source_layout_json = None
+                    if isinstance(msg.get('source_layout'), dict):
+                        try:
+                            source_layout_json = json.dumps(msg.get('source_layout'))
+                        except Exception:
+                            source_layout_json = None
                     if atts:
                         processed_atts = []
                         for att in atts:
@@ -4354,17 +4384,24 @@ def create_app(config: Optional[Config] = None) -> Flask:
 
                     origin_peer = msg.get('origin_peer') or from_peer
                     parent_message_id = (msg.get('parent_message_id') or '').strip() or None
+                    source_reference_json = None
+                    if isinstance(msg.get('source_reference'), dict):
+                        try:
+                            source_reference_json = json.dumps(msg.get('source_reference'))
+                        except Exception:
+                            source_reference_json = None
+                    repost_policy_db = str(msg.get('repost_policy') or '').strip().lower() or 'same_scope'
 
                     with db_manager.get_connection() as conn:
                         conn.execute("""
                             INSERT OR IGNORE INTO channel_messages
                             (id, channel_id, user_id, content,
-                             message_type, attachments, created_at, origin_peer, expires_at,
+                             message_type, attachments, source_layout, source_reference, repost_policy, created_at, origin_peer, expires_at,
                              parent_message_id, encrypted_content, crypto_state, key_id, nonce)
-                            VALUES (?, ?, ?, ?, ?, ?,
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
                                     COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?, ?)
                         """, (mid, channel_id, user_id, content,
-                              message_type, attachments_json,
+                              message_type, attachments_json, source_layout_json, source_reference_json, repost_policy_db,
                               normalised_ts, origin_peer, expires_db, parent_message_id,
                               encrypted_content_db, crypto_state_db, key_id_db, nonce_db))
                         conn.execute(

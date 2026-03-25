@@ -49,6 +49,16 @@
                             <li><a class="dropdown-item" href="#" onclick="replyToMessage('{{ message.id }}', {{ message.sender_label|tojson }}, {{ (message.reply_preview.preview if message.reply_preview else message.content[:140])|tojson }}); return false;">
                                 <i class="bi bi-reply"></i> Reply
                             </a></li>
+                            <li><a class="dropdown-item{% if message.is_bookmarked %} active{% endif %}"
+                                   href="#"
+                                   data-bookmark-button="1"
+                                   data-source-type="dm_message"
+                                   data-source-id="{{ message.id }}"
+                                   data-bookmarked="{{ 'true' if message.is_bookmarked else 'false' }}"
+                                   onclick="event.preventDefault();">
+                                <i class="bi bi-bookmark{% if message.is_bookmarked %}-fill{% endif %}"></i>
+                                <span data-bookmark-label>{% if message.is_bookmarked %}Saved{% else %}Save{% endif %}</span>
+                            </a></li>
                             {% if message.outbound %}
                                 <li><a class="dropdown-item" href="#" onclick="editMessage('{{ message.id }}'); return false;">
                                     <i class="bi bi-pencil"></i> Edit
@@ -60,7 +70,7 @@
                         </ul>
                     </div>
                     <div class="dm-bubble">
-                        <div class="message-content" data-message-content="1">
+                        <div class="message-content" data-message-content="1"{% if message.source_layout %} data-canopy-source-layout="{{ message.source_layout|tojson|forceescape }}"{% endif %}>
                             {% if message.reply_preview %}
                                 <button type="button" class="dm-bubble-reply-preview" onclick="jumpToMessage('{{ message.reply_preview.id }}')">
                                     <strong>{{ message.reply_preview.sender_name }}</strong>
@@ -68,7 +78,7 @@
                                 </button>
                             {% endif %}
                             {% if message.content %}
-                                <div class="dm-bubble-copy dm-message-text">{{ message.content }}</div>
+                                <div class="dm-bubble-copy dm-message-text" data-canopy-source-ref="content:lede">{{ message.content }}</div>
                             {% endif %}
                             {% if message.attachments %}
                                 <div class="dm-attachment-list">
@@ -113,8 +123,10 @@
     <div class="dm-empty-state">
         <div class="dm-empty-card">
             {% if active_thread %}
-                No messages in this conversation yet.
+                <i class="bi bi-chat-square-text" aria-hidden="true"></i>
+                No messages in this conversation yet. Say hello!
             {% else %}
+                <i class="bi bi-send" aria-hidden="true"></i>
                 No direct messages yet. Start by selecting recipients below.
             {% endif %}
         </div>

@@ -4,10 +4,8 @@ P2P Network Manager for Canopy.
 Coordinates all P2P networking components and provides a unified interface
 for the application layer.
 
-Author: Konrad Walus (architecture, design, and direction)
 Project: Canopy - Local Mesh Communication
 License: Apache 2.0
-Development: AI-assisted implementation (Claude, Codex, GitHub Copilot, Cursor IDE, Ollama)
 """
 
 import asyncio
@@ -2002,6 +2000,17 @@ class P2PNetworkManager:
             logger.debug(f"Declining relay offer for {target_peer}: already connected")
             return
 
+        # Only accept a relay offer from a peer we are currently connected to.
+        # A relay offer relayed through a third party would name a peer we cannot
+        # directly reach as the next-hop, producing a useless or potentially
+        # misleading routing table entry.
+        if self.connection_manager and not self.connection_manager.is_connected(relay_peer):
+            logger.warning(
+                f"Declining relay offer from {relay_peer} for {target_peer}: "
+                f"relay peer is not directly connected"
+            )
+            return
+
         logger.info(f"Accepted relay offer from {relay_peer} for {target_peer}")
         self.message_router.update_routing_table(target_peer, relay_peer)
         self._active_relays[target_peer] = relay_peer
@@ -2492,6 +2501,9 @@ class P2PNetworkManager:
                                    content: str, message_id: str,
                                    timestamp: str,
                                    attachments: Optional[list[Any]] = None,
+                                   source_layout: Optional[dict[str, Any]] = None,
+                                   source_reference: Optional[dict[str, Any]] = None,
+                                   repost_policy: Optional[str] = None,
                                    display_name: Optional[str] = None,
                                    expires_at: Optional[str] = None,
                                    ttl_seconds: Optional[int] = None,
@@ -2616,6 +2628,12 @@ class P2PNetworkManager:
             metadata['edited_at'] = edited_at
         if security:
             metadata['security'] = security
+        if isinstance(source_layout, dict) and source_layout:
+            metadata['source_layout'] = source_layout
+        if isinstance(source_reference, dict) and source_reference:
+            metadata['source_reference'] = source_reference
+        if repost_policy is not None:
+            metadata['repost_policy'] = repost_policy
 
         # Include sender display_name so remote peers can show the
         # correct name even if they haven't received a profile sync

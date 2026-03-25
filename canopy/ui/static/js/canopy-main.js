@@ -1554,6 +1554,586 @@
                 .replace(/'/g, '&#39;');
         }
 
+        const CANOPY_DECK_WIDGET_RENDER_MODES = new Set(['iframe', 'card', 'stream_summary', 'module_runtime']);
+        const CANOPY_DECK_WIDGET_TYPES = new Set([
+            'map',
+            'chart',
+            'media_embed',
+            'story',
+            'media_stream',
+            'telemetry_panel',
+            'module_surface',
+        ]);
+        const CANOPY_DECK_WIDGET_CALLBACKS = new Set(['open_stream_workspace']);
+        const CANOPY_DECK_WIDGET_ACTION_RISKS = new Set(['view', 'low']);
+        const CANOPY_DECK_WIDGET_ACTION_SCOPES = new Set(['source', 'station']);
+        const CANOPY_DECK_WIDGET_HUMAN_GATES = new Set(['none', 'recommended', 'required']);
+        const CANOPY_DECK_WIDGET_STATION_KINDS = new Set([
+            'source_bundle',
+            'reference_surface',
+            'stream_station',
+            'telemetry_station',
+            'station_surface',
+        ]);
+        const CANOPY_DECK_WIDGET_DOMAINS = new Set([
+            'media',
+            'sensor',
+            'security',
+            'news',
+            'radio',
+            'tv',
+            'education',
+            'mapping',
+            'market',
+            'operations',
+            'general',
+        ]);
+        const CANOPY_MODULE_BUNDLE_FORMATS = new Set(['single_html']);
+        const CANOPY_MODULE_CAPABILITIES = new Set([
+            'source.read',
+            'source.snapshot',
+            'deck.return',
+            'deck.close',
+            'deck.media.observe',
+            'clipboard.write',
+            'module.storage.local',
+        ]);
+        const CANOPY_DECK_IFRAME_HOSTS = new Set([
+            'www.youtube-nocookie.com',
+            'player.vimeo.com',
+            'open.spotify.com',
+            'w.soundcloud.com',
+            'www.google.com',
+            'www.openstreetmap.org',
+            's.tradingview.com',
+            'www.loom.com',
+        ]);
+        const CANOPY_DECK_EXTERNAL_HOSTS = new Set([
+            'www.youtube.com',
+            'youtu.be',
+            'vimeo.com',
+            'www.loom.com',
+            'loom.com',
+            'open.spotify.com',
+            'www.soundcloud.com',
+            'soundcloud.com',
+            'www.google.com',
+            'maps.google.com',
+            'www.openstreetmap.org',
+            'www.tradingview.com',
+            'tradingview.com',
+            'x.com',
+            'www.x.com',
+            'twitter.com',
+            'www.twitter.com',
+        ]);
+
+        function normalizeDeckWidgetText(value, maxLength = 240) {
+            const normalized = String(value == null ? '' : value).trim().replace(/\s+/g, ' ');
+            if (!normalized) return '';
+            return normalized.slice(0, maxLength);
+        }
+
+        function sanitizeDeckWidgetUrl(rawUrl, allowedHosts) {
+            const urlObj = safeUrlParse(rawUrl);
+            if (!urlObj) return '';
+            const protocol = String(urlObj.protocol || '').toLowerCase();
+            const host = String(urlObj.hostname || '').toLowerCase();
+            if (protocol !== 'https:' && protocol !== 'http:') return '';
+            if (protocol === 'http:' && host !== window.location.hostname) return '';
+            if (Array.isArray(allowedHosts) || allowedHosts instanceof Set) {
+                const list = allowedHosts instanceof Set ? allowedHosts : new Set(allowedHosts);
+                if (!list.has(host)) return '';
+            }
+            return urlObj.toString();
+        }
+
+        function normalizeDeckWidgetBadges(badges) {
+            if (!Array.isArray(badges)) return [];
+            return badges
+                .map((value) => normalizeDeckWidgetText(value, 48))
+                .filter(Boolean)
+                .slice(0, 6);
+        }
+
+        function normalizeDeckWidgetDetails(details) {
+            if (!Array.isArray(details)) return [];
+            return details
+                .map((entry) => {
+                    if (!entry || typeof entry !== 'object') return null;
+                    const label = normalizeDeckWidgetText(entry.label, 32);
+                    const value = normalizeDeckWidgetText(entry.value, 80);
+                    if (!label || !value) return null;
+                    return { label, value };
+                })
+                .filter(Boolean)
+                .slice(0, 8);
+        }
+
+        function normalizeDeckModuleCapabilityList(values) {
+            if (!Array.isArray(values)) return [];
+            return values
+                .map((value) => normalizeDeckWidgetText(value, 48).toLowerCase())
+                .filter((value, index, list) => value && CANOPY_MODULE_CAPABILITIES.has(value) && list.indexOf(value) === index)
+                .slice(0, 8);
+        }
+
+        function sanitizeDeckModuleBundleUrl(rawUrl) {
+            const urlObj = safeUrlParse(rawUrl);
+            if (!urlObj) return '';
+            const protocol = String(urlObj.protocol || '').toLowerCase();
+            if (protocol !== 'https:' && protocol !== 'http:') return '';
+            if (String(urlObj.origin || '') !== String(window.location.origin || '')) return '';
+            const path = String(urlObj.pathname || '');
+            if (/^\/static\/modules\/[A-Za-z0-9._-]+$/.test(path)) {
+                return `${path}${urlObj.search || ''}${urlObj.hash || ''}`;
+            }
+            const filesMatch = path.match(/^\/files\/([^/?#]+)$/);
+            if (!filesMatch) return '';
+            const encSeg = filesMatch[1];
+            if (encSeg.includes('/') || /%(?:2f|5c)/i.test(encSeg)) return '';
+            let decoded;
+            try {
+                decoded = decodeURIComponent(encSeg);
+            } catch (_) {
+                return '';
+            }
+            if (!decoded || decoded.includes('/') || decoded.includes('\\') || decoded === '.' || decoded === '..') return '';
+            if (!/^[A-Za-z0-9_.-]+$/.test(decoded)) return '';
+            return `/files/${encodeURIComponent(decoded)}${urlObj.search || ''}${urlObj.hash || ''}`;
+        }
+
+        function normalizeDeckModuleRuntime(rawRuntime, title) {
+            if (!rawRuntime || typeof rawRuntime !== 'object') return null;
+            const format = String(rawRuntime.format || 'single_html').trim().toLowerCase();
+            if (!CANOPY_MODULE_BUNDLE_FORMATS.has(format)) return null;
+            const rawBundleId = rawRuntime.bundle_file_id != null ? rawRuntime.bundle_file_id : rawRuntime.file_id;
+            const bundleFileId = String(rawBundleId == null ? '' : rawBundleId).trim().slice(0, 120);
+            const fallbackBundleUrl = bundleFileId ? `/files/${encodeURIComponent(bundleFileId)}` : '';
+            const primaryBundleUrl = sanitizeDeckModuleBundleUrl(rawRuntime.bundle_url || '');
+            const bundleUrl = primaryBundleUrl || sanitizeDeckModuleBundleUrl(fallbackBundleUrl);
+            if (!bundleUrl) return null;
+            const moduleType = normalizeDeckWidgetText(rawRuntime.module_type || title || 'module surface', 56) || 'module surface';
+            const runtimeLabel = normalizeDeckWidgetText(rawRuntime.runtime_label || 'Canopy Module', 48) || 'Canopy Module';
+            const capabilities = rawRuntime.capabilities && typeof rawRuntime.capabilities === 'object'
+                ? rawRuntime.capabilities
+                : {};
+            return {
+                format,
+                bundle_file_id: bundleFileId,
+                bundle_url: bundleUrl,
+                module_type: moduleType,
+                runtime_label: runtimeLabel,
+                capabilities: {
+                    required: normalizeDeckModuleCapabilityList(capabilities.required),
+                    optional: normalizeDeckModuleCapabilityList(capabilities.optional),
+                },
+            };
+        }
+
+        function defaultDeckWidgetStationSurface(widgetType, providerLabel, title) {
+            if (widgetType === 'map') {
+                return {
+                    kind: 'reference_surface',
+                    domain: 'mapping',
+                    label: 'Map Surface',
+                    summary: 'Shared geographic context bound to this source.',
+                    recurring: false,
+                    scope: 'source',
+                };
+            }
+            if (widgetType === 'chart') {
+                return {
+                    kind: 'reference_surface',
+                    domain: 'market',
+                    label: 'Chart Surface',
+                    summary: 'Shared chart context bound to this source.',
+                    recurring: false,
+                    scope: 'source',
+                };
+            }
+            if (widgetType === 'media_stream') {
+                return {
+                    kind: 'stream_station',
+                    domain: 'media',
+                    label: providerLabel || 'Media Station',
+                    summary: 'Live operational surface for a shared stream.',
+                    recurring: true,
+                    scope: 'station',
+                };
+            }
+            if (widgetType === 'telemetry_panel') {
+                return {
+                    kind: 'telemetry_station',
+                    domain: 'sensor',
+                    label: providerLabel || 'Telemetry Station',
+                    summary: 'Live telemetry surface with bounded operator actions.',
+                    recurring: true,
+                    scope: 'station',
+                };
+            }
+            if (widgetType === 'module_surface') {
+                return {
+                    kind: 'station_surface',
+                    domain: 'education',
+                    label: providerLabel || title || 'Interactive Module',
+                    summary: 'Safe executable module bound to this source and opened inside the Canopy deck.',
+                    recurring: false,
+                    scope: 'source',
+                };
+            }
+            if (widgetType === 'story') {
+                return {
+                    kind: 'station_surface',
+                    domain: 'news',
+                    label: providerLabel || title || 'Story Surface',
+                    summary: 'Story world combining media, references, and interactive context.',
+                    recurring: false,
+                    scope: 'source',
+                };
+            }
+            return {
+                kind: 'source_bundle',
+                domain: 'media',
+                label: providerLabel || title || 'Source Bundle',
+                summary: 'Typed operational context bound to the source.',
+                recurring: false,
+                scope: 'source',
+            };
+        }
+
+        function normalizeDeckWidgetStationSurface(rawSurface, widgetType, providerLabel, title) {
+            const fallback = defaultDeckWidgetStationSurface(widgetType, providerLabel, title);
+            if (!rawSurface || typeof rawSurface !== 'object') return fallback;
+            const kind = String(rawSurface.kind || fallback.kind).trim().toLowerCase();
+            const domain = String(rawSurface.domain || fallback.domain).trim().toLowerCase();
+            const label = normalizeDeckWidgetText(rawSurface.label || fallback.label, 56) || fallback.label;
+            const summary = normalizeDeckWidgetText(rawSurface.summary || fallback.summary, 180) || fallback.summary;
+            const scope = String(rawSurface.scope || fallback.scope).trim().toLowerCase();
+            return {
+                kind: CANOPY_DECK_WIDGET_STATION_KINDS.has(kind) ? kind : fallback.kind,
+                domain: CANOPY_DECK_WIDGET_DOMAINS.has(domain) ? domain : fallback.domain,
+                label,
+                summary,
+                recurring: rawSurface.recurring == null ? !!fallback.recurring : !!rawSurface.recurring,
+                scope: CANOPY_DECK_WIDGET_ACTION_SCOPES.has(scope) ? scope : fallback.scope,
+            };
+        }
+
+        function defaultDeckWidgetActionPolicy(widgetType, actions) {
+            const hasCallback = Array.isArray(actions) && actions.some((action) => action && action.kind === 'callback');
+            return {
+                bounded: true,
+                max_risk: hasCallback || widgetType === 'media_stream' || widgetType === 'telemetry_panel' ? 'low' : 'view',
+                human_gate: 'none',
+                audit_label: hasCallback ? 'Bounded actions' : 'View-only actions',
+            };
+        }
+
+        function normalizeDeckWidgetActionPolicy(rawPolicy, widgetType, actions) {
+            const fallback = defaultDeckWidgetActionPolicy(widgetType, actions);
+            if (!rawPolicy || typeof rawPolicy !== 'object') return fallback;
+            const maxRisk = String(rawPolicy.max_risk || fallback.max_risk).trim().toLowerCase();
+            const humanGate = String(rawPolicy.human_gate || fallback.human_gate).trim().toLowerCase();
+            const auditLabel = normalizeDeckWidgetText(rawPolicy.audit_label || fallback.audit_label, 56) || fallback.audit_label;
+            return {
+                bounded: rawPolicy.bounded == null ? true : !!rawPolicy.bounded,
+                max_risk: CANOPY_DECK_WIDGET_ACTION_RISKS.has(maxRisk) ? maxRisk : fallback.max_risk,
+                human_gate: CANOPY_DECK_WIDGET_HUMAN_GATES.has(humanGate) ? humanGate : fallback.human_gate,
+                audit_label: auditLabel,
+            };
+        }
+
+        function normalizeDeckWidgetSourceBinding(rawBinding) {
+            if (!rawBinding || typeof rawBinding !== 'object') {
+                return {
+                    binding_type: 'source',
+                    source_scope: 'source',
+                    return_label: 'Return to source',
+                };
+            }
+            const bindingType = normalizeDeckWidgetText(rawBinding.binding_type || 'source', 32).toLowerCase() || 'source';
+            const sourceScope = String(rawBinding.source_scope || 'source').trim().toLowerCase();
+            const returnLabel = normalizeDeckWidgetText(rawBinding.return_label || 'Return to source', 48) || 'Return to source';
+            return {
+                binding_type: bindingType,
+                source_scope: CANOPY_DECK_WIDGET_ACTION_SCOPES.has(sourceScope) ? sourceScope : 'source',
+                return_label: returnLabel,
+            };
+        }
+
+        function normalizeDeckWidgetActions(actions, actionPolicy) {
+            if (!Array.isArray(actions)) return [];
+            const policy = actionPolicy || defaultDeckWidgetActionPolicy('media_embed', actions);
+            return actions
+                .map((action) => {
+                    if (!action || typeof action !== 'object') return null;
+                    const kind = String(action.kind || '').trim().toLowerCase();
+                    const label = normalizeDeckWidgetText(action.label, 32);
+                    const icon = /^bi-[a-z0-9-]+$/i.test(String(action.icon || '').trim()) ? String(action.icon).trim() : '';
+                    const risk = String(action.risk || (kind === 'callback' ? 'low' : 'view')).trim().toLowerCase();
+                    const scope = String(action.scope || (kind === 'callback' ? 'station' : 'source')).trim().toLowerCase();
+                    const requiresConfirmation = !!action.requires_confirmation;
+                    if (!label) return null;
+                    if (!CANOPY_DECK_WIDGET_ACTION_RISKS.has(risk)) return null;
+                    if (!CANOPY_DECK_WIDGET_ACTION_SCOPES.has(scope)) return null;
+                    if (policy.max_risk === 'view' && risk !== 'view') return null;
+                    if (kind === 'external_link') {
+                        const url = sanitizeDeckWidgetUrl(action.url, CANOPY_DECK_EXTERNAL_HOSTS);
+                        if (!url) return null;
+                        return { kind, label, icon, url, risk, scope, requires_confirmation: requiresConfirmation };
+                    }
+                    if (kind === 'clipboard') {
+                        const text = normalizeDeckWidgetText(action.text, 160);
+                        if (!text) return null;
+                        return { kind, label, icon, text, risk, scope, requires_confirmation: requiresConfirmation };
+                    }
+                    if (kind === 'callback') {
+                        const handler = String(action.handler || '').trim();
+                        if (!CANOPY_DECK_WIDGET_CALLBACKS.has(handler)) return null;
+                        const args = action.args && typeof action.args === 'object' ? action.args : {};
+                        if (handler === 'open_stream_workspace') {
+                            const streamId = normalizeDeckWidgetText(args.streamId, 120);
+                            const mediaKind = normalizeDeckWidgetText(args.mediaKind, 16).toLowerCase();
+                            const slotId = normalizeDeckWidgetText(args.slotId, 120);
+                            const streamKind = normalizeDeckWidgetText(args.streamKind, 24).toLowerCase();
+                            if (!streamId || !slotId) return null;
+                            return {
+                                kind,
+                                label,
+                                icon,
+                                handler,
+                                risk,
+                                scope,
+                                requires_confirmation: requiresConfirmation,
+                                args: { streamId, mediaKind, slotId, streamKind },
+                            };
+                        }
+                    }
+                    return null;
+                })
+                .filter(Boolean)
+                .slice(0, 4);
+        }
+
+        function sanitizeDeckWidgetManifest(rawManifest) {
+            if (!rawManifest || typeof rawManifest !== 'object') return null;
+            const widgetType = String(rawManifest.widget_type || '').trim().toLowerCase();
+            const renderMode = String(rawManifest.render_mode || '').trim().toLowerCase();
+            if (!CANOPY_DECK_WIDGET_TYPES.has(widgetType)) return null;
+            if (!CANOPY_DECK_WIDGET_RENDER_MODES.has(renderMode)) return null;
+            const title = normalizeDeckWidgetText(rawManifest.title, 96);
+            if (!title) return null;
+            const subtitle = normalizeDeckWidgetText(rawManifest.subtitle, 160);
+            const providerLabel = normalizeDeckWidgetText(rawManifest.provider_label, 32) || 'Widget';
+            const bodyText = normalizeDeckWidgetText(rawManifest.body_text, 420);
+            const key = normalizeDeckWidgetText(rawManifest.key, 160) || `${widgetType}:${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+            const icon = /^bi-[a-z0-9-]+$/i.test(String(rawManifest.icon || '').trim()) ? String(rawManifest.icon).trim() : 'bi-grid-3x3-gap';
+            const embedUrl = renderMode === 'iframe'
+                ? sanitizeDeckWidgetUrl(rawManifest.embed_url, CANOPY_DECK_IFRAME_HOSTS)
+                : '';
+            const externalUrl = rawManifest.external_url
+                ? sanitizeDeckWidgetUrl(rawManifest.external_url, CANOPY_DECK_EXTERNAL_HOSTS)
+                : '';
+            const thumbUrl = typeof _safeImageSrc === 'function'
+                ? _safeImageSrc(rawManifest.thumb_url || '')
+                : normalizeDeckWidgetText(rawManifest.thumb_url, 240);
+            if (renderMode === 'iframe' && !embedUrl) return null;
+            const stationSurface = normalizeDeckWidgetStationSurface(rawManifest.station_surface, widgetType, providerLabel, title);
+            const sourceBinding = normalizeDeckWidgetSourceBinding(rawManifest.source_binding);
+            const actionPolicy = normalizeDeckWidgetActionPolicy(rawManifest.action_policy, widgetType, rawManifest.actions);
+            const moduleRuntime = renderMode === 'module_runtime'
+                ? normalizeDeckModuleRuntime(rawManifest.module_runtime, title)
+                : null;
+            if (renderMode === 'module_runtime' && !moduleRuntime) return null;
+            return {
+                version: 1,
+                key,
+                widget_type: widgetType,
+                render_mode: renderMode,
+                title,
+                subtitle,
+                provider_label: providerLabel,
+                icon,
+                body_text: bodyText,
+                embed_url: embedUrl,
+                external_url: externalUrl,
+                thumb_url: thumbUrl,
+                badges: normalizeDeckWidgetBadges(rawManifest.badges),
+                details: normalizeDeckWidgetDetails(rawManifest.details),
+                station_surface: stationSurface,
+                action_policy: actionPolicy,
+                source_binding: sourceBinding,
+                actions: normalizeDeckWidgetActions(rawManifest.actions, actionPolicy),
+                module_runtime: moduleRuntime,
+            };
+        }
+
+        function buildDeckWidgetManifestAttrs(rawManifest) {
+            const manifest = sanitizeDeckWidgetManifest(rawManifest);
+            if (!manifest) return '';
+            const json = escapeEmbedAttr(JSON.stringify(manifest));
+            return (
+                ' data-canopy-widget-manifest="' + json + '"' +
+                ' data-canopy-widget-type="' + escapeEmbedAttr(manifest.widget_type) + '"' +
+                ' data-canopy-widget-key="' + escapeEmbedAttr(manifest.key) + '"' +
+                ' data-canopy-source-ref="widget:' + escapeEmbedAttr(manifest.key) + '"'
+            );
+        }
+
+        function parseDeckWidgetManifest(node) {
+            if (!node || !node.getAttribute) return null;
+            const raw = node.getAttribute('data-canopy-widget-manifest');
+            if (!raw) return null;
+            try {
+                return sanitizeDeckWidgetManifest(JSON.parse(raw));
+            } catch (_) {
+                return null;
+            }
+        }
+
+        /**
+         * Human-readable title from a .canopy-module.html filename (matches channel attachment card builder).
+         */
+        function humanizeCanopyModuleBundleTitle(rawName) {
+            const raw = String(rawName || 'canopy-module').replace(/\.canopy-module\.html?$/i, '');
+            const spaced = raw
+                .replace(/[-_]+/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (!spaced) return 'Canopy Module';
+            return spaced.replace(/\b\w/g, (ch) => ch.toUpperCase());
+        }
+
+        /**
+         * Build a module_surface manifest object (before sanitization) from bundle file id and filename.
+         * Used when the inline JSON attribute is missing or fails to parse/sanitize.
+         */
+        function buildCanopyModuleSurfaceManifestFromBundleId(fileId, rawFileName) {
+            const fid = String(fileId || '').trim();
+            if (!fid) return null;
+            const bundleUrl = `/files/${encodeURIComponent(fid)}`;
+            const title = humanizeCanopyModuleBundleTitle(rawFileName);
+            const safeName = String(rawFileName || 'module bundle').trim().slice(0, 200) || 'module bundle';
+            return {
+                version: 1,
+                key: `module:${fid}`,
+                widget_type: 'module_surface',
+                render_mode: 'module_runtime',
+                title,
+                subtitle: 'Safe executable lesson or station logic bound to this source.',
+                provider_label: 'Canopy Module',
+                icon: 'bi-box-fill',
+                body_text: 'Single-file module bundle executed inside the Canopy Module Runtime.',
+                badges: ['Module', 'Sandboxed', 'Source-bound'],
+                details: [
+                    { label: 'File', value: safeName },
+                    { label: 'Format', value: 'Single HTML bundle' },
+                ],
+                station_surface: {
+                    kind: 'station_surface',
+                    domain: 'education',
+                    label: `${title} Surface`,
+                    summary: 'Executable lesson or station logic remains bound to this source while capabilities stay brokered.',
+                    recurring: false,
+                    scope: 'source',
+                },
+                action_policy: {
+                    bounded: true,
+                    max_risk: 'view',
+                    human_gate: 'none',
+                    audit_label: 'Bounded runtime',
+                },
+                source_binding: {
+                    binding_type: 'message_attachment',
+                    source_scope: 'source',
+                    return_label: 'Return to source',
+                },
+                module_runtime: {
+                    format: 'single_html',
+                    bundle_file_id: fid,
+                    bundle_url: bundleUrl,
+                    module_type: title,
+                    runtime_label: 'Canopy Module',
+                    capabilities: {
+                        required: ['source.read', 'deck.return'],
+                        optional: ['clipboard.write', 'module.storage.local'],
+                    },
+                },
+            };
+        }
+
+        /**
+         * When JSON.parse/sanitize fails on data-canopy-widget-manifest, recover bundle file id from the raw string.
+         */
+        function extractDeckModuleBundleFileIdFromManifestAttr(raw) {
+            if (!raw || typeof raw !== 'string') return '';
+            const idMatch = raw.match(/"bundle_file_id"\s*:\s*"([^"]+)"/);
+            if (idMatch && idMatch[1]) {
+                const id = String(idMatch[1]).trim();
+                if (id && /^[A-Za-z0-9_.-]+$/.test(id)) return id;
+            }
+            const urlMatch = raw.match(/"bundle_url"\s*:\s*"(\/files\/[^"]+)"/);
+            if (urlMatch && urlMatch[1]) {
+                try {
+                    const u = new URL(urlMatch[1], window.location.origin);
+                    const m = String(u.pathname || '').match(/^\/files\/([^/]+)$/);
+                    if (!m || !m[1]) return '';
+                    const seg = decodeURIComponent(m[1]);
+                    if (seg && /^[A-Za-z0-9_.-]+$/.test(seg)) return seg;
+                } catch (_) {
+                    return '';
+                }
+            }
+            return '';
+        }
+
+        /**
+         * DOM root for module deck open — prefer explicit marker so we never match an unrelated ancestor
+         * that has an empty or invalid data-canopy-widget-manifest (e.g. another embed).
+         */
+        function resolveCanopyModuleDeckManifestHost(node) {
+            if (!(node instanceof Element)) return null;
+            const marked = node.closest('[data-canopy-module-card]');
+            if (marked) return marked;
+            const feedAtt = node.closest(
+                '.attachment-item[data-canopy-widget-manifest], .attachment-item[data-canopy-module-bundle-id]'
+            );
+            if (feedAtt) return feedAtt;
+            const dmCard = node.closest(
+                '.dm-attachment-card[data-canopy-widget-manifest], .dm-attachment-card[data-canopy-module-bundle-id]'
+            );
+            if (dmCard) return dmCard;
+            return node.closest('[data-canopy-widget-manifest],[data-canopy-module-bundle-id]');
+        }
+
+        /**
+         * Bundle file id: data-canopy-module-bundle-id, scrape manifest attr, or any same-origin /files/<id> link on the card (Download).
+         */
+        function extractCanopyModuleBundleFileIdFromHost(host) {
+            if (!host || !host.getAttribute) return '';
+            let fid = String(host.getAttribute('data-canopy-module-bundle-id') || '').trim();
+            if (fid) return fid;
+            fid = extractDeckModuleBundleFileIdFromManifestAttr(host.getAttribute('data-canopy-widget-manifest') || '');
+            if (fid) return fid;
+            if (host.querySelectorAll) {
+                const links = host.querySelectorAll('a[href*="/files/"]');
+                for (let i = 0; i < links.length; i++) {
+                    try {
+                        const u = new URL(links[i].href, window.location.origin);
+                        if (String(u.origin || '') !== String(window.location.origin || '')) continue;
+                        const m = String(u.pathname || '').match(/^\/files\/([^/]+)$/);
+                        if (!m || !m[1]) continue;
+                        const id = decodeURIComponent(m[1]);
+                        if (id && /^[A-Za-z0-9_.-]+$/.test(id)) return id;
+                    } catch (_) {
+                        /* ignore */
+                    }
+                }
+            }
+            return '';
+        }
+
         function trimEmbedUrlTrailingPunctuation(rawUrl) {
             let url = String(rawUrl || '');
             let trailing = '';
@@ -1584,8 +2164,9 @@
             const sandbox = options.sandbox ? ' sandbox="' + escapeEmbedAttr(options.sandbox) + '"' : '';
             const referrerPolicy = escapeEmbedAttr(options.referrerPolicy || 'strict-origin-when-cross-origin');
             const caption = buildEmbedCaption(options.caption || '');
+            const widgetAttrs = buildDeckWidgetManifestAttrs(options.widgetManifest);
             return (
-                '<div class="embed-preview iframe-embed ' + escapeEmbedAttr(providerClass) + extraClass + '">' +
+                '<div class="embed-preview iframe-embed ' + escapeEmbedAttr(providerClass) + extraClass + '"' + widgetAttrs + '>' +
                 '<iframe src="' + safeSrc + '" title="' + safeTitle + '" frameborder="0" loading="lazy" allowfullscreen ' +
                 'referrerpolicy="' + referrerPolicy + '" allow="' + allow + '"' + sandbox + heightStyle +
                 ' class="' + frameClass.trim() + '"></iframe>' +
@@ -1617,8 +2198,9 @@
             const safeIcon = escapeEmbedAttr(iconClass || 'bi-box-arrow-up-right');
             const providerLabel = options.providerLabel ? '<span class="embed-provider-pill">' + escapeEmbedHtml(options.providerLabel) + '</span>' : '';
             const note = options.note ? '<div class="embed-provider-note">' + escapeEmbedHtml(options.note) + '</div>' : '';
+            const widgetAttrs = buildDeckWidgetManifestAttrs(options.widgetManifest);
             return (
-                '<div class="embed-preview provider-card-embed ' + escapeEmbedAttr(providerClass) + '">' +
+                '<div class="embed-preview provider-card-embed ' + escapeEmbedAttr(providerClass) + '"' + widgetAttrs + '>' +
                 '<a class="provider-embed-card" href="' + safeUrl + '" target="_blank" rel="noopener noreferrer">' +
                 '<div class="provider-embed-head">' +
                 '<span class="provider-embed-icon"><i class="bi ' + safeIcon + '"></i></span>' +
@@ -1798,17 +2380,36 @@
             return 'https://s.tradingview.com/widgetembed/?' + params.toString();
         }
 
-        function buildYouTubeFacade(videoId) {
+        function buildYouTubeEmbedSrc(videoId, autoplay = true) {
+            const safeId = escapeEmbedAttr(videoId);
+            return 'https://www.youtube-nocookie.com/embed/' + safeId +
+                '?enablejsapi=1&autoplay=' + (autoplay ? '1' : '0') +
+                '&playsinline=1&rel=0&origin=' + encodeURIComponent(window.location.origin);
+        }
+
+        function createYouTubeFacadeElement(videoId, iframeSrc) {
             const safeId = escapeEmbedAttr(videoId);
             const thumbUrl = 'https://img.youtube.com/vi/' + safeId + '/hqdefault.jpg';
-            const iframeSrc = 'https://www.youtube-nocookie.com/embed/' + safeId + '?enablejsapi=1&autoplay=1&playsinline=1&rel=0&origin=' + encodeURIComponent(window.location.origin);
+            const facade = document.createElement('div');
+            facade.className = 'yt-facade';
+            facade.setAttribute('data-iframe-src', iframeSrc);
+            facade.setAttribute('title', 'Click to play');
+            facade.style.cssText = "position:relative;cursor:pointer;aspect-ratio:16/9;background:#000 url('" +
+                escapeEmbedAttr(thumbUrl) +
+                "') center/cover no-repeat;border-radius:10px;overflow:hidden;";
+            facade.innerHTML =
+                '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.25);transition:background 0.15s;">' +
+                '<svg width="68" height="48" viewBox="0 0 68 48" style="filter:drop-shadow(0 2px 8px rgba(0,0,0,0.4));"><path d="M66.52 7.74c-.78-2.93-2.49-5.41-5.42-6.19C55.79.13 34 0 34 0S12.21.13 6.9 1.55C3.97 2.33 2.27 4.81 1.48 7.74.06 13.05 0 24 0 24s.06 10.95 1.48 16.26c.78 2.93 2.49 5.41 5.42 6.19C12.21 47.87 34 48 34 48s21.79-.13 27.1-1.55c2.93-.78 4.64-3.26 5.42-6.19C67.94 34.95 68 24 68 24s-.06-10.95-1.48-16.26z" fill="#FF0000"/><path d="M45 24L27 14v20" fill="#fff"/></svg>' +
+                '</div>';
+            return facade;
+        }
+
+        function buildYouTubeFacade(videoId) {
+            const safeId = escapeEmbedAttr(videoId);
             const caption = buildEmbedCaption('YouTube');
             return (
                 '<div class="embed-preview iframe-embed youtube-embed" data-video-id="' + safeId + '">' +
-                '<div class="yt-facade" data-iframe-src="' + escapeEmbedAttr(iframeSrc) + '" style="position:relative;cursor:pointer;aspect-ratio:16/9;background:#000 url(\'' + escapeEmbedAttr(thumbUrl) + '\') center/cover no-repeat;border-radius:10px;overflow:hidden;" title="Click to play">' +
-                '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.25);transition:background 0.15s;">' +
-                '<svg width="68" height="48" viewBox="0 0 68 48" style="filter:drop-shadow(0 2px 8px rgba(0,0,0,0.4));"><path d="M66.52 7.74c-.78-2.93-2.49-5.41-5.42-6.19C55.79.13 34 0 34 0S12.21.13 6.9 1.55C3.97 2.33 2.27 4.81 1.48 7.74.06 13.05 0 24 0 24s.06 10.95 1.48 16.26c.78 2.93 2.49 5.41 5.42 6.19C12.21 47.87 34 48 34 48s21.79-.13 27.1-1.55c2.93-.78 4.64-3.26 5.42-6.19C67.94 34.95 68 24 68 24s-.06-10.95-1.48-16.26z" fill="#FF0000"/><path d="M45 24L27 14v20" fill="#fff"/></svg>' +
-                '</div></div>' +
+                createYouTubeFacadeElement(videoId, buildYouTubeEmbedSrc(videoId, true)).outerHTML +
                 caption +
                 '</div>'
             );
@@ -1838,7 +2439,11 @@
             iframe.style.background = '#000';
             iframe.style.display = 'block';
             facade.replaceWith(iframe);
-            registerMediaNode(iframe);
+            if (typeof window !== 'undefined' && typeof window.canopyRegisterMediaNode === 'function') {
+                window.canopyRegisterMediaNode(iframe);
+            } else if (typeof registerMediaNode === 'function') {
+                registerMediaNode(iframe);
+            }
             return iframe;
         }
 
@@ -1862,12 +2467,30 @@
                 pattern: /https?:\/\/(?:www\.)?vimeo\.com\/(?:video\/)?(\d+)(?:[/?#]\S*)?/g,
                 render(match, videoId) {
                     const parts = trimEmbedUrlTrailingPunctuation(match);
+                    const embedUrl = 'https://player.vimeo.com/video/' + encodeURIComponent(videoId);
                     return {
                         html: buildIframeEmbedPreview(
                             'vimeo-embed',
-                            'https://player.vimeo.com/video/' + encodeURIComponent(videoId),
+                            embedUrl,
                             'Vimeo video ' + videoId,
-                            { caption: 'Vimeo' }
+                            {
+                                caption: 'Vimeo',
+                                widgetManifest: {
+                                    key: `vimeo:${videoId}`,
+                                    widget_type: 'media_embed',
+                                    render_mode: 'iframe',
+                                    title: 'Vimeo video',
+                                    subtitle: 'Expanded Vimeo playback inside the deck.',
+                                    provider_label: 'Vimeo',
+                                    icon: 'bi-vimeo',
+                                    embed_url: embedUrl,
+                                    external_url: parts.url,
+                                    badges: ['Video', 'Embed'],
+                                    actions: [
+                                        { kind: 'external_link', label: 'Open Vimeo', icon: 'bi-box-arrow-up-right', url: parts.url },
+                                    ],
+                                },
+                            }
                         ),
                         trailing: parts.trailing,
                     };
@@ -1878,12 +2501,30 @@
                 pattern: /https?:\/\/(?:www\.)?loom\.com\/(?:share|embed)\/([A-Za-z0-9]+)(?:\?\S*)?/g,
                 render(match, shareId) {
                     const parts = trimEmbedUrlTrailingPunctuation(match);
+                    const embedUrl = 'https://www.loom.com/embed/' + encodeURIComponent(shareId);
                     return {
                         html: buildIframeEmbedPreview(
                             'loom-embed',
-                            'https://www.loom.com/embed/' + encodeURIComponent(shareId),
+                            embedUrl,
                             'Loom recording ' + shareId,
-                            { caption: 'Loom' }
+                            {
+                                caption: 'Loom',
+                                widgetManifest: {
+                                    key: `loom:${shareId}`,
+                                    widget_type: 'media_embed',
+                                    render_mode: 'iframe',
+                                    title: 'Loom recording',
+                                    subtitle: 'Deck-ready walkthrough video.',
+                                    provider_label: 'Loom',
+                                    icon: 'bi-camera-reels',
+                                    embed_url: embedUrl,
+                                    external_url: parts.url,
+                                    badges: ['Video', 'Walkthrough'],
+                                    actions: [
+                                        { kind: 'external_link', label: 'Open Loom', icon: 'bi-box-arrow-up-right', url: parts.url },
+                                    ],
+                                },
+                            }
                         ),
                         trailing: parts.trailing,
                     };
@@ -1891,19 +2532,36 @@
             },
             {
                 key: 'spotify',
-                pattern: /https?:\/\/open\.spotify\.com\/(track|album|playlist|episode|show|artist)\/([A-Za-z0-9]+)(?:\?\S*)?/g,
+                pattern:
+                    /https?:\/\/open\.spotify\.com\/(?:intl-[a-z]{2}(?:-[a-z]{2})?\/)?(track|album|playlist|episode|show|artist)\/([A-Za-z0-9]+)(?:\?\S*)?/gi,
                 render(match, kind, entityId) {
                     const parts = trimEmbedUrlTrailingPunctuation(match);
+                    const embedUrl = 'https://open.spotify.com/embed/' + encodeURIComponent(kind) + '/' + encodeURIComponent(entityId) + '?utm_source=generator';
                     return {
                         html: buildIframeEmbedPreview(
                             'spotify-embed',
-                            'https://open.spotify.com/embed/' + encodeURIComponent(kind) + '/' + encodeURIComponent(entityId) + '?utm_source=generator',
+                            embedUrl,
                             'Spotify ' + kind,
                             {
                                 caption: 'Spotify',
                                 height: spotifyEmbedHeight(kind),
                                 allow: 'autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture',
                                 extraClass: 'fixed-height-embed',
+                                widgetManifest: {
+                                    key: `spotify:${kind}:${entityId}`,
+                                    widget_type: 'media_embed',
+                                    render_mode: 'iframe',
+                                    title: 'Spotify ' + kind,
+                                    subtitle: 'Deck-ready audio player.',
+                                    provider_label: 'Spotify',
+                                    icon: 'bi-spotify',
+                                    embed_url: embedUrl,
+                                    external_url: parts.url,
+                                    badges: ['Audio', kind],
+                                    actions: [
+                                        { kind: 'external_link', label: 'Open Spotify', icon: 'bi-box-arrow-up-right', url: parts.url },
+                                    ],
+                                },
                             }
                         ),
                         trailing: parts.trailing,
@@ -1915,16 +2573,32 @@
                 pattern: /https?:\/\/(?:www\.)?soundcloud\.com\/[^\s<"]+/g,
                 render(match) {
                     const parts = trimEmbedUrlTrailingPunctuation(match);
+                    const embedUrl = 'https://w.soundcloud.com/player/?url=' + encodeURIComponent(parts.url) + '&color=%2359de89&auto_play=false&hide_related=false&show_comments=true&show_user=true&show_reposts=false&show_teaser=true&visual=false';
                     return {
                         html: buildIframeEmbedPreview(
                             'soundcloud-embed',
-                            'https://w.soundcloud.com/player/?url=' + encodeURIComponent(parts.url) + '&color=%2359de89&auto_play=false&hide_related=false&show_comments=true&show_user=true&show_reposts=false&show_teaser=true&visual=false',
+                            embedUrl,
                             'SoundCloud audio',
                             {
                                 caption: 'SoundCloud',
                                 height: 166,
                                 allow: 'autoplay',
                                 extraClass: 'fixed-height-embed',
+                                widgetManifest: {
+                                    key: `soundcloud:${parts.url}`,
+                                    widget_type: 'media_embed',
+                                    render_mode: 'iframe',
+                                    title: 'SoundCloud audio',
+                                    subtitle: 'Deck-ready shared audio.',
+                                    provider_label: 'SoundCloud',
+                                    icon: 'bi-soundwave',
+                                    embed_url: embedUrl,
+                                    external_url: parts.url,
+                                    badges: ['Audio', 'Embed'],
+                                    actions: [
+                                        { kind: 'external_link', label: 'Open SoundCloud', icon: 'bi-box-arrow-up-right', url: parts.url },
+                                    ],
+                                },
                             }
                         ),
                         trailing: parts.trailing,
@@ -1977,6 +2651,21 @@
                                     allow: 'geolocation',
                                     referrerPolicy: 'no-referrer-when-downgrade',
                                     extraClass: 'fixed-height-embed map-service-embed',
+                                    widgetManifest: {
+                                        key: `map:${parts.url}`,
+                                        widget_type: 'map',
+                                        render_mode: 'iframe',
+                                        title: 'Google Maps',
+                                        subtitle: 'Explore the shared location in the deck.',
+                                        provider_label: 'Google Maps',
+                                        icon: 'bi-geo-alt-fill',
+                                        embed_url: embedUrl,
+                                        external_url: parts.url,
+                                        badges: ['Map', 'Interactive'],
+                                        actions: [
+                                            { kind: 'external_link', label: 'Open map', icon: 'bi-box-arrow-up-right', url: parts.url },
+                                        ],
+                                    },
                                 }
                             ),
                             trailing: parts.trailing,
@@ -1994,6 +2683,20 @@
                                 note: getGoogleMapsEmbedApiKey()
                                     ? 'Open this location in Google Maps.'
                                     : 'Inline Google Maps requires CANOPY_GOOGLE_MAPS_EMBED_API_KEY; showing a safe card instead.',
+                                widgetManifest: {
+                                    key: `map-card:${parts.url}`,
+                                    widget_type: 'map',
+                                    render_mode: 'card',
+                                    title: 'Google Maps link',
+                                    subtitle: 'Open the shared location externally.',
+                                    provider_label: 'Google Maps',
+                                    icon: 'bi-geo-alt-fill',
+                                    external_url: parts.url,
+                                    badges: ['Map', 'External'],
+                                    actions: [
+                                        { kind: 'external_link', label: 'Open map', icon: 'bi-box-arrow-up-right', url: parts.url },
+                                    ],
+                                },
                             }
                         ),
                         trailing: parts.trailing,
@@ -2016,6 +2719,21 @@
                                     caption: 'OpenStreetMap',
                                     height: 320,
                                     extraClass: 'fixed-height-embed map-service-embed',
+                                    widgetManifest: {
+                                        key: `osm:${parts.url}`,
+                                        widget_type: 'map',
+                                        render_mode: 'iframe',
+                                        title: 'OpenStreetMap',
+                                        subtitle: 'Explore the shared map context in the deck.',
+                                        provider_label: 'OpenStreetMap',
+                                        icon: 'bi-map',
+                                        embed_url: embedUrl,
+                                        external_url: parts.url,
+                                        badges: ['Map', 'Interactive'],
+                                        actions: [
+                                            { kind: 'external_link', label: 'Open map', icon: 'bi-box-arrow-up-right', url: parts.url },
+                                        ],
+                                    },
                                 }
                             ),
                             trailing: parts.trailing,
@@ -2028,7 +2746,24 @@
                             'Map link',
                             'Open this location in OpenStreetMap.',
                             'bi-map',
-                            { providerLabel: 'OpenStreetMap', note: 'Preview card for shared map context.' }
+                            {
+                                providerLabel: 'OpenStreetMap',
+                                note: 'Preview card for shared map context.',
+                                widgetManifest: {
+                                    key: `osm-card:${parts.url}`,
+                                    widget_type: 'map',
+                                    render_mode: 'card',
+                                    title: 'OpenStreetMap link',
+                                    subtitle: 'Open the shared map externally.',
+                                    provider_label: 'OpenStreetMap',
+                                    icon: 'bi-map',
+                                    external_url: parts.url,
+                                    badges: ['Map', 'External'],
+                                    actions: [
+                                        { kind: 'external_link', label: 'Open map', icon: 'bi-box-arrow-up-right', url: parts.url },
+                                    ],
+                                },
+                            }
                         ),
                         trailing: parts.trailing,
                     };
@@ -2050,6 +2785,21 @@
                                     caption: 'TradingView',
                                     height: 360,
                                     extraClass: 'fixed-height-embed chart-service-embed',
+                                    widgetManifest: {
+                                        key: `chart:${parts.url}`,
+                                        widget_type: 'chart',
+                                        render_mode: 'iframe',
+                                        title: 'TradingView chart',
+                                        subtitle: 'Interactive market context in the deck.',
+                                        provider_label: 'TradingView',
+                                        icon: 'bi-graph-up-arrow',
+                                        embed_url: embedUrl,
+                                        external_url: parts.url,
+                                        badges: ['Chart', 'Interactive'],
+                                        actions: [
+                                            { kind: 'external_link', label: 'Open chart', icon: 'bi-box-arrow-up-right', url: parts.url },
+                                        ],
+                                    },
                                 }
                             ),
                             trailing: parts.trailing,
@@ -2062,7 +2812,24 @@
                             'TradingView chart',
                             'Open the live chart or symbol page in TradingView.',
                             'bi-graph-up-arrow',
-                            { providerLabel: 'TradingView', note: 'Official TradingView widgets exist; this safe card keeps the channel lightweight.' }
+                            {
+                                providerLabel: 'TradingView',
+                                note: 'Official TradingView widgets exist; this safe card keeps the channel lightweight.',
+                                widgetManifest: {
+                                    key: `chart-card:${parts.url}`,
+                                    widget_type: 'chart',
+                                    render_mode: 'card',
+                                    title: 'TradingView chart',
+                                    subtitle: 'Open the live chart externally.',
+                                    provider_label: 'TradingView',
+                                    icon: 'bi-graph-up-arrow',
+                                    external_url: parts.url,
+                                    badges: ['Chart', 'External'],
+                                    actions: [
+                                        { kind: 'external_link', label: 'Open chart', icon: 'bi-box-arrow-up-right', url: parts.url },
+                                    ],
+                                },
+                            }
                         ),
                         trailing: parts.trailing,
                     };
@@ -2295,6 +3062,12 @@
                 return CANOPY_MARKDOWN_PREVIEW_EXTENSIONS.includes(ext) || type === 'text/markdown' || type === 'text/x-markdown';
             }
 
+            function canopyIsModuleBundle(filename, contentType) {
+                const name = String(filename || '').toLowerCase();
+                const type = String(contentType || '').toLowerCase();
+                return type === 'text/html' && (name.endsWith('.canopy-module.html') || name.endsWith('.canopy-module.htm'));
+            }
+
             function canopyIsSpreadsheetPreviewable(filename, contentType) {
                 const ext = canopyFileExtension(filename);
                 const type = String(contentType || '').toLowerCase();
@@ -2302,6 +3075,7 @@
             }
 
             function canopyIsTextPreviewable(filename, contentType) {
+                if (canopyIsModuleBundle(filename, contentType)) return false;
                 if (canopyIsSpreadsheetPreviewable(filename, contentType)) return false;
                 const ext = canopyFileExtension(filename);
                 const type = String(contentType || '').toLowerCase();
@@ -2482,6 +3256,7 @@
                 window.canopyIsTextPreviewable = canopyIsTextPreviewable;
                 window.canopyIsMarkdownPreviewable = canopyIsMarkdownPreviewable;
                 window.canopyAttachmentPreviewLabels = canopyAttachmentPreviewLabels;
+                window.canopyIsModuleBundle = canopyIsModuleBundle;
             }
 
             function renderInlineSheetFallback(body) {
@@ -4478,30 +5253,8 @@
         function applyTheme(theme) {
             document.documentElement.setAttribute('data-theme', theme);
             localStorage.setItem('canopy-theme', theme);
-            
-            // Enhanced logging
-            console.log('Applied theme:', theme);
-            console.log('Document data-theme attribute:', document.documentElement.getAttribute('data-theme'));
-            console.log('All CSS classes on document:', document.documentElement.className);
-            
-            // Force a style recalculation
+
             document.documentElement.offsetHeight;
-            
-            // Log some test elements to see if styling is applied
-            setTimeout(() => {
-                const testCard = document.querySelector('.card');
-                const testBtn = document.querySelector('.btn');
-                if (testCard) {
-                    const cardStyles = window.getComputedStyle(testCard);
-                    console.log('🃏 Card background:', cardStyles.backgroundColor);
-                    console.log('🃏 Card color:', cardStyles.color);
-                }
-                if (testBtn) {
-                    const btnStyles = window.getComputedStyle(testBtn);
-                    console.log('Button background:', btnStyles.backgroundColor);
-                    console.log('Button color:', btnStyles.color);
-                }
-            }, 100);
         }
 
         function loadSavedTheme() {
@@ -4533,129 +5286,10 @@
         // Apply theme immediately (before DOM content loaded)
         (function() {
             const savedTheme = localStorage.getItem('canopy-theme') || 'dark';
-            console.log('Early theme application:', savedTheme);
             if (savedTheme !== 'auto') {
                 document.documentElement.setAttribute('data-theme', savedTheme);
-                console.log('Set data-theme attribute to:', savedTheme);
             }
         })();
-        
-        // Debug function to find elements with light backgrounds
-        function debugLightElements() {
-            const lightElements = [];
-            const allElements = document.querySelectorAll('*');
-            
-            allElements.forEach(el => {
-                const styles = window.getComputedStyle(el);
-                const bgColor = styles.backgroundColor;
-                const color = styles.color;
-                
-                // Check for light backgrounds (white, light gray, etc.)
-                if (bgColor && (
-                    bgColor.includes('rgb(255, 255, 255)') || 
-                    bgColor.includes('rgba(255, 255, 255') ||
-                    bgColor.includes('#fff') ||
-                    bgColor.includes('#ffffff') ||
-                    bgColor.includes('white') ||
-                    (bgColor.includes('rgb(') && 
-                     bgColor.split(',').every(part => {
-                        const num = parseInt(part.replace(/[^\d]/g, ''));
-                        return num > 200; // Light colors
-                     }))
-                )) {
-                    lightElements.push({
-                        element: el,
-                        tagName: el.tagName,
-                        className: el.className,
-                        backgroundColor: bgColor,
-                        color: color,
-                        id: el.id || 'no-id'
-                    });
-                }
-            });
-            
-            console.log('Found', lightElements.length, 'elements with light backgrounds:');
-            lightElements.forEach((item, index) => {
-                console.log(`${index + 1}. ${item.tagName}.${item.className} (${item.id})`, 
-                    `bg: ${item.backgroundColor}`, item.element);
-            });
-            
-            return lightElements;
-        }
-        
-        // Add debug function to window for manual testing
-        window.debugLightElements = debugLightElements;
-        
-        // Quick theme switching for testing
-        window.testTheme = function(theme) {
-            console.log('Testing theme:', theme);
-            applyTheme(theme);
-            setTimeout(() => {
-                console.log('Checking for light elements after theme change...');
-                debugLightElements();
-            }, 500);
-        };
-        
-        // Quick test all themes
-        window.testAllThemes = function() {
-            const themes = ['dark', 'light', 'liquid-glass', 'auto'];
-            let index = 0;
-            
-            function nextTheme() {
-                if (index < themes.length) {
-                    console.log(`Testing theme ${index + 1}/${themes.length}: ${themes[index]}`);
-                    testTheme(themes[index]);
-                    index++;
-                    setTimeout(nextTheme, 3000); // Wait 3 seconds between themes
-                } else {
-                    console.log('All themes tested.');
-                }
-            }
-            
-            nextTheme();
-        };
-        
-        // Test responsive image sizing
-        window.testResponsiveImages = function() {
-            const images = document.querySelectorAll('.message-image, .post-image, .channel-image, .comment-image img');
-            console.log(`Found ${images.length} responsive images`);
-            
-            images.forEach((img, index) => {
-                const computedStyle = window.getComputedStyle(img);
-                const maxWidth = computedStyle.maxWidth;
-                const maxHeight = computedStyle.maxHeight;
-                const actualWidth = img.offsetWidth;
-                const actualHeight = img.offsetHeight;
-                
-                console.log(`${index + 1}. ${img.className}:`, {
-                    maxWidth,
-                    maxHeight,
-                    actualSize: `${actualWidth}x${actualHeight}px`,
-                    element: img
-                });
-            });
-            
-            // Test different screen sizes simulation
-            const viewportWidth = window.innerWidth;
-            console.log(`Current viewport: ${viewportWidth}px`);
-            if (viewportWidth <= 375) {
-                console.log('Small phone mode active');
-            } else if (viewportWidth <= 576) {
-                console.log('Mobile phone mode active');
-            } else if (viewportWidth <= 768) {
-                console.log('Tablet mode active');
-            } else {
-                console.log('Desktop mode active');
-            }
-        };
-        
-        // Auto-run debug after theme is loaded
-        document.addEventListener('DOMContentLoaded', function() {
-            setTimeout(() => {
-                console.log('Running automatic light element detection...');
-                debugLightElements();
-            }, 1000);
-        });
 
         // Auto-refresh timestamps
         setInterval(() => {
@@ -4874,7 +5508,32 @@
         // --- Sidebar media mini player (audio/video/youtube off-screen helper) ---
         function initSidebarMediaMiniPlayer() {
             const mini = document.getElementById('sidebar-media-mini');
-            if (!mini) return;
+            if (!mini) {
+                /* Deck helpers are normally defined below; without the sidebar host, only deep-link fallbacks work. */
+                if (typeof window !== 'undefined') {
+                    window.openDeckForFeedAntecedentPost = function (sourcePostId) {
+                        const pid = String(sourcePostId || '').trim();
+                        if (!pid) return false;
+                        try {
+                            window.location.href = `/feed?focus_post=${encodeURIComponent(pid)}&open_deck=1`;
+                        } catch (_) {
+                            /* ignore */
+                        }
+                        return false;
+                    };
+                    window.openDeckForChannelAntecedentMessage = function (sourceMessageId) {
+                        const mid = String(sourceMessageId || '').trim();
+                        if (!mid) return false;
+                        try {
+                            window.location.href = `/channels/locate?message_id=${encodeURIComponent(mid)}&open_deck=1`;
+                        } catch (_) {
+                            /* ignore */
+                        }
+                        return false;
+                    };
+                }
+                return;
+            }
 
             const icon = document.getElementById('sidebar-media-mini-icon');
             const titleEl = document.getElementById('sidebar-media-mini-title');
@@ -4896,6 +5555,7 @@
             const deckShell = deck ? deck.querySelector('.sidebar-media-deck-shell') : null;
             const deckBackdrop = document.getElementById('sidebar-media-deck-backdrop');
             const deckStage = document.getElementById('sidebar-media-deck-stage');
+            const deckStageShell = deckStage ? deckStage.closest('.sidebar-media-deck-stage-shell') : null;
             const deckVisual = document.getElementById('sidebar-media-deck-visual');
             const deckVisualCover = document.getElementById('sidebar-media-deck-visual-cover');
             const deckVisualIcon = document.getElementById('sidebar-media-deck-visual-icon');
@@ -4909,6 +5569,18 @@
             const deckProvider = document.getElementById('sidebar-media-deck-provider');
             const deckProviderLabel = document.getElementById('sidebar-media-deck-provider-label');
             const deckCount = document.getElementById('sidebar-media-deck-count');
+            const deckStationSummary = document.getElementById('sidebar-media-deck-station-summary');
+            const deckStationPolicy = document.getElementById('sidebar-media-deck-station-policy');
+            const deckStationTitle = document.getElementById('sidebar-media-deck-station-title');
+            const deckStationSubtitle = document.getElementById('sidebar-media-deck-station-subtitle');
+            const deckStationBadges = document.getElementById('sidebar-media-deck-station-badges');
+            const deckWidgetSummary = document.getElementById('sidebar-media-deck-widget-summary');
+            const deckWidgetBadges = document.getElementById('sidebar-media-deck-widget-badges');
+            const deckWidgetDetails = document.getElementById('sidebar-media-deck-widget-details');
+            const deckWidgetActions = document.getElementById('sidebar-media-deck-widget-actions');
+            const deckDetail = document.querySelector('.sidebar-media-deck-detail');
+            const deckProgressRow = document.getElementById('sidebar-media-deck-progress-row');
+            const deckControls = document.getElementById('sidebar-media-deck-controls');
             const deckSeek = document.getElementById('sidebar-media-deck-seek');
             const deckCurrentTime = document.getElementById('sidebar-media-deck-current-time');
             const deckDuration = document.getElementById('sidebar-media-deck-duration');
@@ -4924,6 +5596,9 @@
             const deckCloseBtn = document.getElementById('sidebar-media-deck-close');
             const deckQueue = document.getElementById('sidebar-media-deck-queue');
             const deckQueueCount = document.getElementById('sidebar-media-deck-queue-count');
+            const deckQueueShell = deckQueue ? deckQueue.closest('.sidebar-media-deck-queue-shell') : null;
+            const deckQueueToggle = document.getElementById('sidebar-media-deck-queue-toggle');
+            const deckDetailToggle = document.getElementById('sidebar-media-deck-detail-toggle');
 
             const state = {
                 current: null,
@@ -4937,11 +5612,27 @@
                 deckOpen: false,
                 deckItems: [],
                 deckSelectedKey: '',
+                deckSourceEl: null,
+                /** Message/post root captured when opening deck or mini; queue rebuild must not depend on docked media's DOM parent. */
+                deckOriginSourceEl: null,
+                deckOriginMessageId: '',
+                deckOriginPostId: '',
                 deckQueueSignature: '',
+                deckQueueNeedsRefresh: false,
                 deckSeeking: false,
                 mediaCounter: 0,
                 miniUpdateFrame: 0,
-                miniUpdateTimer: null
+                miniUpdateTimer: null,
+                persistMediaRetryHandle: null,
+                moduleBundleCache: new Map(),
+                moduleSessions: new Map(),
+                moduleSessionCounter: 0,
+                deckQueueCollapsed: false,
+                deckDetailCollapsed: false,
+                deckLayoutMode: 'default',
+                deckLayoutPrimedKey: '',
+                /** Last `state.deckItems.length` applied in `syncDeckLayoutMode` (module layout). */
+                deckLayoutLastQueueCount: -1,
             };
 
             function updateMiniPlacementControl() {
@@ -5023,6 +5714,13 @@
                 if (type === 'audio') return 'bi-music-note-beamed';
                 if (type === 'video') return 'bi-camera-video';
                 if (type === 'youtube') return 'bi-youtube';
+                if (type === 'map') return 'bi-geo-alt';
+                if (type === 'chart') return 'bi-graph-up-arrow';
+                if (type === 'media_stream') return 'bi-broadcast';
+                if (type === 'telemetry_panel') return 'bi-cpu';
+                if (type === 'module_surface') return 'bi-box-fill';
+                if (type === 'media_embed') return 'bi-grid-1x2';
+                if (type === 'story') return 'bi-newspaper';
                 return 'bi-play-circle';
             }
 
@@ -5030,11 +5728,98 @@
                 if (type === 'audio') return 'Audio';
                 if (type === 'video') return 'Video';
                 if (type === 'youtube') return 'YouTube';
+                if (type === 'map') return 'Map';
+                if (type === 'chart') return 'Chart';
+                if (type === 'media_stream') return 'Live stream';
+                if (type === 'telemetry_panel') return 'Telemetry';
+                if (type === 'module_surface') return 'Canopy Module';
+                if (type === 'media_embed') return 'Embedded media';
+                if (type === 'story') return 'Story';
                 return 'Media';
+            }
+
+            function isDeckMediaItem(item) {
+                return !!(item && (item.type === 'audio' || item.type === 'video' || item.type === 'youtube'));
+            }
+
+            /**
+             * Resolve the post/message root for a deck queue item.
+             * When media has been moved into the deck or mini host, `sourceContainer(item.el)` is null — do not use it.
+             */
+            function deckItemSourceEl(item) {
+                if (!item) return null;
+                if (item.sourceEl && item.sourceEl.isConnected) return item.sourceEl;
+                if (item.el && item.el.isConnected) {
+                    const el = item.el;
+                    if (el.closest && el.closest('#sidebar-media-deck-stage, #sidebar-media-mini-video')) {
+                        return null;
+                    }
+                    return sourceContainer(el);
+                }
+                return null;
+            }
+
+            function firstConnectedDeckAnchor(...candidates) {
+                for (let i = 0; i < candidates.length; i++) {
+                    const el = candidates[i];
+                    if (el && el.isConnected) return el;
+                }
+                return null;
+            }
+
+            /** If the pinned source node was replaced (e.g. channel re-render), re-resolve from stored ids. */
+            function refreshDeckOriginSourceElIfStale() {
+                if (state.deckOriginSourceEl && state.deckOriginSourceEl.isConnected) return;
+                const mid = String(state.deckOriginMessageId || '').trim();
+                const pid = String(state.deckOriginPostId || '').trim();
+                if (mid && typeof document.querySelector === 'function') {
+                    const esc = window.CSS && typeof window.CSS.escape === 'function'
+                        ? window.CSS.escape(mid)
+                        : mid.replace(/["\\]/g, '\\$&');
+                    const row = document.querySelector(`.message-item[data-message-id="${esc}"]`);
+                    if (row && row.isConnected) {
+                        state.deckOriginSourceEl = row;
+                        return;
+                    }
+                }
+                if (pid && typeof document.querySelector === 'function') {
+                    const esc = window.CSS && typeof window.CSS.escape === 'function'
+                        ? window.CSS.escape(pid)
+                        : pid.replace(/["\\]/g, '\\$&');
+                    const card = document.querySelector(`.post-card[data-post-id="${esc}"]`);
+                    if (card && card.isConnected) {
+                        state.deckOriginSourceEl = card;
+                    }
+                }
+            }
+
+            function pinDeckOriginIdsFromSourceEl(sourceEl) {
+                if (!sourceEl || !sourceEl.getAttribute) return;
+                state.deckOriginMessageId = String(sourceEl.getAttribute('data-message-id') || '').trim();
+                state.deckOriginPostId = String(sourceEl.getAttribute('data-post-id') || '').trim();
             }
 
             function ensureMediaIdentity(el) {
                 if (!el) return '';
+                const type = mediaTypeFor(el);
+                if (type === 'youtube') {
+                    const wrapper = (el.matches && el.matches('.youtube-embed'))
+                        ? el
+                        : (el.closest ? el.closest('.youtube-embed') : null);
+                    const holder = wrapper || el;
+                    if (!holder.__canopyMiniMediaId) {
+                        state.mediaCounter += 1;
+                        holder.__canopyMiniMediaId = `canopy-media-${state.mediaCounter}`;
+                    }
+                    if (el !== holder) {
+                        el.__canopyMiniMediaId = holder.__canopyMiniMediaId;
+                    }
+                    const iframe = holder.querySelector ? holder.querySelector('iframe') : null;
+                    if (iframe) {
+                        iframe.__canopyMiniMediaId = holder.__canopyMiniMediaId;
+                    }
+                    return String(holder.__canopyMiniMediaId || '');
+                }
                 if (!el.__canopyMiniMediaId) {
                     state.mediaCounter += 1;
                     el.__canopyMiniMediaId = `canopy-media-${state.mediaCounter}`;
@@ -5047,15 +5832,6 @@
                     return _safeImageSrc(value || '');
                 }
                 return value || '';
-            }
-
-            function clearDeckStageDockedNodes() {
-                if (!deckStage) return;
-                Array.from(deckStage.children).forEach((child) => {
-                    if (child !== deckVisual) {
-                        child.remove();
-                    }
-                });
             }
 
             function isYouTubePlayingState(ytState) {
@@ -5175,6 +5951,284 @@
                 return postOrMessage || el.closest('.card');
             }
 
+            function parseSourceLayoutConfig(rootEl) {
+                if (!(rootEl instanceof Element)) return null;
+                const raw = String(rootEl.getAttribute('data-canopy-source-layout') || '').trim();
+                if (!raw) return null;
+                try {
+                    const parsed = JSON.parse(raw);
+                    if (!parsed || typeof parsed !== 'object') return null;
+                    return parsed;
+                } catch (_) {
+                    return null;
+                }
+            }
+
+            function getSourceLayoutSignature(layout) {
+                try {
+                    return JSON.stringify(layout || {});
+                } catch (_) {
+                    return '';
+                }
+            }
+
+            function getSourceLayoutRoot(sourceEl) {
+                if (!(sourceEl instanceof Element)) return null;
+                return sourceEl.querySelector('[data-canopy-source-layout]');
+            }
+
+            function getSourceLayoutDefaultRef(sourceEl) {
+                const layoutRoot = getSourceLayoutRoot(sourceEl);
+                if (!(layoutRoot instanceof Element)) return '';
+                const layout = parseSourceLayoutConfig(layoutRoot);
+                const ref = layout && layout.deck ? String(layout.deck.default_ref || '').trim() : '';
+                return ref || '';
+            }
+
+            function findSourceRefNode(rootEl, ref) {
+                if (!(rootEl instanceof Element)) return null;
+                const cleanRef = String(ref || '').trim();
+                if (!cleanRef) return null;
+                const nodes = rootEl.querySelectorAll('[data-canopy-source-ref]');
+                for (const node of nodes) {
+                    if (String(node.getAttribute('data-canopy-source-ref') || '').trim() === cleanRef) {
+                        return node;
+                    }
+                }
+                return null;
+            }
+
+            function hasMeaningfulSourceChildren(node) {
+                if (!(node instanceof Element)) return false;
+                if (node.querySelector('[data-canopy-source-ref], .attachment-item, .dm-attachment, .mg-cell, .embed-preview, .provider-card-embed')) {
+                    return true;
+                }
+                return !!String(node.textContent || '').trim();
+            }
+
+            function pruneEmptySourceLayoutWrappers(rootEl) {
+                if (!(rootEl instanceof Element)) return;
+                rootEl.querySelectorAll('.media-grid, .post-attachments, .attachments, .dm-attachment-list').forEach((node) => {
+                    if (!hasMeaningfulSourceChildren(node)) {
+                        node.remove();
+                    }
+                });
+            }
+
+            function createSourceLayoutActions(actions) {
+                if (!Array.isArray(actions) || !actions.length) return null;
+                const row = document.createElement('div');
+                row.className = 'canopy-source-layout-actions';
+                actions.forEach((action) => {
+                    if (!action || String(action.kind || '').trim() !== 'link') return;
+                    const label = String(action.label || '').trim();
+                    const url = String(action.url || '').trim();
+                    if (!label || !url) return;
+                    const isHttp = url.startsWith('http://') || url.startsWith('https://');
+                    const isPath = url.startsWith('/') && !url.startsWith('//');
+                    if (!isHttp && !isPath) return;
+                    const link = document.createElement('a');
+                    link.className = 'btn btn-sm btn-outline-secondary';
+                    link.href = url;
+                    if (url.startsWith('http://') || url.startsWith('https://')) {
+                        link.target = '_blank';
+                        link.rel = 'noopener noreferrer';
+                    }
+                    link.textContent = label;
+                    row.appendChild(link);
+                });
+                return row.childElementCount ? row : null;
+            }
+
+            function moveSourceNode(node, slot, claimed) {
+                if (!(node instanceof Element) || !(slot instanceof Element)) return;
+                if (claimed.has(node)) return;
+                claimed.add(node);
+                slot.appendChild(node);
+            }
+
+            /**
+             * Channel images use a single `.mg-cell` inside `.media-grid` with max-width caps.
+             * Moving only the cell leaves an empty grid and keeps thumbnail sizing — promote the
+             * whole grid when this attachment is the only cell in that grid.
+             */
+            function promoteAttachmentHostNode(node) {
+                if (!(node instanceof Element) || !node.classList || !node.classList.contains('mg-cell')) {
+                    return node;
+                }
+                const grid = node.closest('.media-grid');
+                if (!(grid instanceof Element)) return node;
+                try {
+                    const cells = grid.querySelectorAll('.mg-cell');
+                    if (cells.length === 1) return grid;
+                } catch (_) {
+                    return node;
+                }
+                return node;
+            }
+
+            function applySourceLayout(rootEl) {
+                if (!(rootEl instanceof Element)) return;
+                const layout = parseSourceLayoutConfig(rootEl);
+                if (!layout) return;
+                const signature = getSourceLayoutSignature(layout);
+                const existingShell = Array.from(rootEl.children || []).find((child) => child.classList && child.classList.contains('canopy-source-layout-shell')) || null;
+                if (existingShell && existingShell.getAttribute('data-layout-signature') === signature) {
+                    if (layout.deck && layout.deck.default_ref) {
+                        rootEl.setAttribute('data-canopy-default-deck-ref', String(layout.deck.default_ref || '').trim());
+                    }
+                    return;
+                }
+                /* Layout JSON changed (e.g. live edit): rebuild. Removing the shell returns moved
+                   nodes to rootEl so findSourceRefNode / moveSourceNode can run again. */
+                if (existingShell) {
+                    while (existingShell.firstChild) {
+                        rootEl.insertBefore(existingShell.firstChild, existingShell);
+                    }
+                    existingShell.remove();
+                }
+
+                const shell = document.createElement('div');
+                shell.className = 'canopy-source-layout-shell';
+                shell.setAttribute('data-layout-signature', signature);
+
+                const top = document.createElement('div');
+                top.className = 'canopy-source-layout-top';
+                const main = document.createElement('div');
+                main.className = 'canopy-source-layout-main';
+                const side = document.createElement('aside');
+                side.className = 'canopy-source-layout-side';
+                top.appendChild(main);
+                top.appendChild(side);
+
+                const hero = document.createElement('div');
+                hero.className = 'canopy-source-layout-hero';
+                const lede = document.createElement('div');
+                lede.className = 'canopy-source-layout-lede';
+                const actions = document.createElement('div');
+                actions.className = 'canopy-source-layout-actions-wrap';
+                const strip = document.createElement('div');
+                strip.className = 'canopy-source-layout-strip';
+                const below = document.createElement('div');
+                below.className = 'canopy-source-layout-below';
+
+                main.appendChild(hero);
+                main.appendChild(lede);
+                main.appendChild(actions);
+                shell.appendChild(top);
+                shell.appendChild(strip);
+                shell.appendChild(below);
+
+                const claimed = new Set();
+                const heroRef = layout.hero && layout.hero.ref ? String(layout.hero.ref).trim() : '';
+                const ledeRef = layout.lede && layout.lede.ref ? String(layout.lede.ref).trim() : 'content:lede';
+                if (heroRef) {
+                    let heroNode = findSourceRefNode(rootEl, heroRef);
+                    heroNode = promoteAttachmentHostNode(heroNode);
+                    moveSourceNode(heroNode, hero, claimed);
+                }
+                if (ledeRef) {
+                    const ledeNode = findSourceRefNode(rootEl, ledeRef);
+                    if (ledeNode && !claimed.has(ledeNode)) {
+                        moveSourceNode(ledeNode, lede, claimed);
+                    }
+                }
+                if (Array.isArray(layout.supporting)) {
+                    layout.supporting.forEach((entry) => {
+                        let node = findSourceRefNode(rootEl, entry && entry.ref);
+                        node = promoteAttachmentHostNode(node);
+                        if (!(node instanceof Element) || claimed.has(node)) return;
+                        const placement = String(entry.placement || '').trim();
+                        const targetSlot = placement === 'right' ? side : placement === 'strip' ? strip : below;
+                        const labelText = entry && entry.label ? String(entry.label).trim() : '';
+                        if (labelText) {
+                            const wrap = document.createElement('div');
+                            wrap.className = 'canopy-source-layout-supporting-block';
+                            const lab = document.createElement('div');
+                            lab.className = 'canopy-source-layout-slot-label';
+                            lab.textContent = labelText;
+                            wrap.appendChild(lab);
+                            moveSourceNode(node, wrap, claimed);
+                            moveSourceNode(wrap, targetSlot, claimed);
+                        } else {
+                            moveSourceNode(node, targetSlot, claimed);
+                        }
+                    });
+                }
+
+                pruneEmptySourceLayoutWrappers(rootEl);
+                Array.from(rootEl.childNodes).forEach((child) => {
+                    if (child === shell) return;
+                    if (child instanceof Element && claimed.has(child)) return;
+                    if (child instanceof Text && !String(child.textContent || '').trim()) {
+                        child.remove();
+                        return;
+                    }
+                    below.appendChild(child);
+                });
+
+                const deckRef = layout.deck && layout.deck.default_ref ? String(layout.deck.default_ref).trim() : '';
+                let toolbar = createSourceLayoutActions(layout.actions);
+                if (!toolbar && deckRef) {
+                    toolbar = document.createElement('div');
+                    toolbar.className = 'canopy-source-layout-actions canopy-source-layout-actions--deck-only';
+                }
+                if (toolbar && deckRef) {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'btn btn-sm btn-outline-primary canopy-source-layout-deck-launch';
+                    btn.setAttribute('aria-label', 'Open Canopy media deck for this source');
+                    btn.innerHTML = '<i class="bi bi-grid-1x2-fill me-1" aria-hidden="true"></i>Open deck';
+                    btn.addEventListener('click', () => {
+                        try {
+                            const src = sourceContainer(rootEl);
+                            if (src) openMediaDeckForSource(src, {});
+                        } catch (_) {}
+                    });
+                    toolbar.appendChild(btn);
+                }
+                if (toolbar) {
+                    actions.appendChild(toolbar);
+                }
+                if (layout.hero && layout.hero.label && String(layout.hero.label).trim() && hero.childNodes.length) {
+                    const hl = document.createElement('div');
+                    hl.className = 'canopy-source-layout-hero-label';
+                    hl.textContent = String(layout.hero.label).trim();
+                    hero.insertBefore(hl, hero.firstChild);
+                }
+                [hero, lede, actions, side, strip, below].forEach((slot) => {
+                    if (!slot.childNodes.length) slot.remove();
+                });
+                if (!top.childNodes.length) top.remove();
+                rootEl.appendChild(shell);
+                if (deckRef) {
+                    rootEl.setAttribute('data-canopy-default-deck-ref', deckRef);
+                }
+            }
+
+            function applySourceLayoutsInScope(scope) {
+                const seen = new Set();
+                const maybeApply = (node) => {
+                    if (!(node instanceof Element)) return;
+                    const root = node.matches('[data-canopy-source-layout]')
+                        ? node
+                        : (node.closest ? node.closest('[data-canopy-source-layout]') : null);
+                    if (!root || seen.has(root)) return;
+                    seen.add(root);
+                    applySourceLayout(root);
+                };
+                maybeApply(scope instanceof Element ? scope : null);
+                if (scope && scope.querySelectorAll) {
+                    scope.querySelectorAll('[data-canopy-source-layout]').forEach(maybeApply);
+                } else {
+                    document.querySelectorAll('[data-canopy-source-layout]').forEach(maybeApply);
+                }
+            }
+
+            if (typeof window !== 'undefined') {
+                window.canopyApplySourceLayoutsInScope = applySourceLayoutsInScope;
+            }
+
             function sourceSubtitle(el) {
                 const post = el.closest('.post-card[data-post-id]');
                 if (post) {
@@ -5240,11 +6294,33 @@
 
             function getYouTubeVideoId(el) {
                 if (!el) return '';
-                return String(
+                const wrapper = el.closest ? el.closest('.youtube-embed') : null;
+                const direct = String(
                     el.getAttribute('data-video-id') ||
-                    (el.closest('.youtube-embed') && el.closest('.youtube-embed').getAttribute('data-video-id')) ||
+                    (wrapper && wrapper.getAttribute('data-video-id')) ||
                     ''
                 ).trim();
+                if (direct) return direct;
+                const src = String(
+                    el.getAttribute('src') ||
+                    el.getAttribute('data-iframe-src') ||
+                    (wrapper && wrapper.getAttribute('data-iframe-src')) ||
+                    (wrapper && wrapper.querySelector && wrapper.querySelector('.yt-facade')
+                        && wrapper.querySelector('.yt-facade').getAttribute('data-iframe-src')) ||
+                    ''
+                ).trim();
+                if (!src) return '';
+                try {
+                    const url = new URL(src, window.location.origin);
+                    const embedMatch = url.pathname.match(/\/embed\/([^/?#&]+)/);
+                    if (embedMatch && embedMatch[1]) return String(embedMatch[1]).trim();
+                    if ((url.hostname === 'youtu.be' || url.hostname.endsWith('.youtu.be')) && url.pathname) {
+                        return String(url.pathname.split('/').filter(Boolean)[0] || '').trim();
+                    }
+                    const watchId = String(url.searchParams.get('v') || '').trim();
+                    if (watchId) return watchId;
+                } catch (_) {}
+                return '';
             }
 
             function resolveMediaThumbnail(el, type) {
@@ -5306,9 +6382,32 @@
                 };
             }
 
+            function populateMediaPlaceholderPreview(placeholder, el, type) {
+                if (!(placeholder instanceof Element) || !el) return;
+                const thumb = resolveMediaThumbnail(el, type);
+                const label = type === 'youtube' ? 'Playing in deck' : 'Open in deck';
+                placeholder.setAttribute('aria-label', label);
+                placeholder.setAttribute('title', label);
+                if (thumb) {
+                    placeholder.style.backgroundImage = `linear-gradient(rgba(15, 23, 42, 0.18), rgba(15, 23, 42, 0.5)), url("${String(thumb).replace(/"/g, '%22')}")`;
+                    placeholder.style.backgroundSize = 'cover';
+                    placeholder.style.backgroundPosition = 'center';
+                }
+                const badge = document.createElement('div');
+                badge.className = 'canopy-media-placeholder-badge';
+                badge.innerHTML = `<i class="bi ${mediaIcon(type)}"></i><span>${label}</span>`;
+                placeholder.appendChild(badge);
+            }
+
             function ensureMediaPlaceholder(el, type) {
                 if (!el) return null;
-                if (type === 'youtube' && el.__canopyAutoDockPlaceholder) return el.__canopyAutoDockPlaceholder;
+                if (type === 'youtube') {
+                    if (el.__canopyAutoDockPlaceholder) return el.__canopyAutoDockPlaceholder;
+                    const existingWrapper = getMediaDockWrapper(el, type);
+                    if (existingWrapper && existingWrapper !== el && existingWrapper.__canopyAutoDockPlaceholder) {
+                        return existingWrapper.__canopyAutoDockPlaceholder;
+                    }
+                }
                 if (type === 'video' && el.__canopyMiniVideoPlaceholder) return el.__canopyMiniVideoPlaceholder;
                 const wrapper = getMediaDockWrapper(el, type);
                 if (!wrapper || !wrapper.parentNode) return null;
@@ -5317,9 +6416,12 @@
                 const placeholder = document.createElement('div');
                 placeholder.className = type === 'youtube' ? 'canopy-yt-mini-placeholder' : 'canopy-video-mini-placeholder';
                 placeholder.style.cssText = `width:${size.width}px;height:${size.height}px;`;
+                populateMediaPlaceholderPreview(placeholder, el, type);
                 wrapper.parentNode.insertBefore(placeholder, wrapper);
                 if (type === 'youtube') {
-                    el.__canopyAutoDockPlaceholder = placeholder;
+                    const storeTarget = wrapper !== el ? wrapper : el;
+                    storeTarget.__canopyAutoDockPlaceholder = placeholder;
+                    if (el !== storeTarget) el.__canopyAutoDockPlaceholder = placeholder;
                 } else if (type === 'video') {
                     el.__canopyMiniVideoPlaceholder = placeholder;
                 }
@@ -5349,18 +6451,33 @@
                         }
                         return;
                     }
-                    const ph = el.__canopyAutoDockPlaceholder;
                     const wrapper = getMediaDockWrapper(el, type);
+                    const ph = el.__canopyAutoDockPlaceholder
+                        || (wrapper && wrapper !== el ? wrapper.__canopyAutoDockPlaceholder : null);
                     if (ph && ph.isConnected && ph.parentNode && wrapper) {
-                        prepareYouTubeEmbedForHostMove(el);
+                        prepareYouTubeEmbedForHostMove(el, {
+                            skipResumeUrlRewrite: true,
+                        });
                         ph.parentNode.insertBefore(wrapper, ph);
                         ph.remove();
-                        const ytIframe = resolveYouTubeMediaElement(el, { activate: false });
-                        if (ytIframe && ytIframe.tagName.toLowerCase() === 'iframe') {
-                            maybeRestoreYouTubeDockState(ytIframe);
+                        const videoId = getYouTubeVideoId(wrapper || el);
+                        if (videoId) {
+                            const existingCaption = wrapper.querySelector('.embed-provider-caption');
+                            const iframe = resolveYouTubeMediaElement(wrapper, { activate: false });
+                            if (iframe && iframe.tagName && iframe.tagName.toLowerCase() === 'iframe') {
+                                resetYouTubePlayerBridge(iframe);
+                            }
+                            wrapper.innerHTML = '';
+                            wrapper.appendChild(createYouTubeFacadeElement(videoId, buildYouTubeEmbedSrc(videoId, true)));
+                            if (existingCaption) {
+                                wrapper.appendChild(existingCaption);
+                            } else {
+                                wrapper.insertAdjacentHTML('beforeend', buildEmbedCaption('YouTube'));
+                            }
                         }
                     }
                     delete el.__canopyAutoDockPlaceholder;
+                    if (wrapper && wrapper !== el) delete wrapper.__canopyAutoDockPlaceholder;
                 } else if (type === 'video') {
                     const ph = el.__canopyMiniVideoPlaceholder;
                     if (ph && ph.isConnected && ph.parentNode) {
@@ -5369,6 +6486,33 @@
                     }
                     delete el.__canopyMiniVideoPlaceholder;
                 }
+            }
+
+            function restoreDeckStageChildToSource(node) {
+                if (!(node instanceof Element)) return false;
+                let mediaEl = null;
+                if (node.matches && node.matches('video, .youtube-embed')) {
+                    mediaEl = node;
+                } else if (node.querySelector) {
+                    mediaEl = node.querySelector('video, .youtube-embed');
+                }
+                if (!mediaEl) return false;
+                const type = mediaTypeFor(mediaEl);
+                if (type !== 'youtube' && type !== 'video') return false;
+                restoreDockedMedia(mediaEl, { preferMini: false });
+                return true;
+            }
+
+            function clearDeckStageDockedNodes() {
+                if (!deckStage) return;
+                Array.from(deckStage.children).forEach((child) => {
+                    if (child === deckVisual) return;
+                    teardownDeckModuleSessionsInNode(child);
+                    restoreDeckStageChildToSource(child);
+                    if (child.parentNode === deckStage) {
+                        child.remove();
+                    }
+                });
             }
 
             function moveDockedMediaToHost(el, host) {
@@ -5513,9 +6657,225 @@
                 return items;
             }
 
+            function buildDeckWidgetItem(node, manifest, sourceEl) {
+                if (!(node instanceof Element) || !manifest || !manifest.key) return null;
+                return {
+                    key: manifest.key,
+                    el: node,
+                    sourceEl: sourceEl || sourceContainer(node),
+                    type: manifest.widget_type,
+                    title: manifest.title,
+                    subtitle: manifest.subtitle || sourceSubtitle(node),
+                    thumb: manifest.thumb_url || '',
+                    providerLabel: manifest.provider_label || mediaProviderLabel(manifest.widget_type),
+                    icon: manifest.icon || mediaIcon(manifest.widget_type),
+                    manifest,
+                };
+            }
+
+            function mergeExplicitDeckItem(items, explicitItem) {
+                const merged = Array.isArray(items) ? items.slice() : [];
+                if (!explicitItem || !explicitItem.key) return merged;
+                const existingIndex = merged.findIndex((item) => String(item && item.key || '') === String(explicitItem.key || ''));
+                if (existingIndex >= 0) {
+                    merged[existingIndex] = {
+                        ...merged[existingIndex],
+                        ...explicitItem,
+                        sourceEl: explicitItem.sourceEl || merged[existingIndex].sourceEl || null,
+                        manifest: explicitItem.manifest || merged[existingIndex].manifest || null,
+                        el: explicitItem.el || merged[existingIndex].el,
+                    };
+                    return merged;
+                }
+                merged.push(explicitItem);
+                return merged;
+            }
+
+            /**
+             * Resolve a widget manifest for deck queue discovery: inline JSON, or module card bundle-id rebuild
+             * (matches openMediaDeckForManifestNode so queue rebuilds do not drop modules without data-canopy-widget-manifest).
+             */
+            function widgetManifestFromDeckNode(node) {
+                if (!(node instanceof Element)) return null;
+                let manifest = parseDeckWidgetManifest(node);
+                if (manifest) return manifest;
+                if (String(node.getAttribute('data-canopy-module-card') || '').trim() !== '1') return null;
+                const fid = extractCanopyModuleBundleFileIdFromHost(node);
+                if (!fid) return null;
+                let rawName = String(node.getAttribute('data-canopy-module-bundle-name') || '').trim();
+                if (!rawName) {
+                    const titleEl = node.querySelector('.stream-card-title, .fw-semibold');
+                    if (titleEl && titleEl.textContent) rawName = titleEl.textContent.trim();
+                }
+                const rawBuilt = buildCanopyModuleSurfaceManifestFromBundleId(fid, rawName);
+                return rawBuilt ? sanitizeDeckWidgetManifest(rawBuilt) : null;
+            }
+
+            function buildSourceWidgetList(sourceEl) {
+                const items = [];
+                const seen = new Set();
+                if (!sourceEl || !sourceEl.querySelectorAll) return items;
+                const candidates = new Set();
+                sourceEl.querySelectorAll('[data-canopy-widget-manifest]').forEach((n) => candidates.add(n));
+                sourceEl.querySelectorAll('[data-canopy-module-card="1"]').forEach((n) => candidates.add(n));
+                candidates.forEach((node) => {
+                    const manifest = widgetManifestFromDeckNode(node);
+                    const item = buildDeckWidgetItem(node, manifest, sourceEl);
+                    if (!item || seen.has(item.key)) return;
+                    seen.add(item.key);
+                    items.push(item);
+                });
+                return items;
+            }
+
+            /** True if el is still under this deck session's message/post (survives stale sourceEl refs). */
+            function widgetDeckOriginContainsEl(origin, el) {
+                if (!(el instanceof Element) || !el.isConnected) return false;
+                if (origin && origin.isConnected && origin.contains(el)) return true;
+                const mid = String(state.deckOriginMessageId || '').trim();
+                if (mid && typeof document.querySelector === 'function') {
+                    const esc = window.CSS && typeof window.CSS.escape === 'function'
+                        ? window.CSS.escape(mid)
+                        : mid.replace(/["\\]/g, '\\$&');
+                    const row = document.querySelector(`.message-item[data-message-id="${esc}"]`);
+                    if (row && row.isConnected && row.contains(el)) return true;
+                }
+                const pid = String(state.deckOriginPostId || '').trim();
+                if (pid && typeof document.querySelector === 'function') {
+                    const esc = window.CSS && typeof window.CSS.escape === 'function'
+                        ? window.CSS.escape(pid)
+                        : pid.replace(/["\\]/g, '\\$&');
+                    const card = document.querySelector(`.post-card[data-post-id="${esc}"]`);
+                    if (card && card.isConnected && card.contains(el)) return true;
+                }
+                return false;
+            }
+
+            /** On deck open: ensure every widget node under sourceEl appears in the list (Deck launcher + Open module parity). */
+            function mergeDeckWidgetUnionIntoDeckItems(sourceEl, items) {
+                if (!sourceEl || !sourceEl.isConnected || !sourceEl.querySelectorAll) return items;
+                const out = Array.isArray(items) ? items.slice() : [];
+                const keys = new Set();
+                out.forEach((i) => {
+                    if (i && i.key !== undefined && i.key !== null && i.key !== '') keys.add(i.key);
+                });
+                try {
+                    buildSourceWidgetList(sourceEl).forEach((w) => {
+                        if (!w || w.key === undefined || w.key === null || w.key === '' || keys.has(w.key)) return;
+                        out.push(w);
+                        keys.add(w.key);
+                    });
+                } catch (_) {
+                    /* Do not block deck open if widget discovery throws on malformed DOM. */
+                }
+                return out;
+            }
+
+            /**
+             * After a queue rebuild, never drop widget rows that still belong to this session's post/message
+             * if the fresh DOM scan missed them (docked media, anchor churn, manifest attr edge cases).
+             */
+            function deckItemKeyUsable(key) {
+                return key !== undefined && key !== null && key !== '';
+            }
+
+            function deckItemBelongsToOrigin(item, origin) {
+                if (!item) return false;
+                const itemSource = item.sourceEl instanceof Element ? item.sourceEl : null;
+                if (origin && origin.isConnected && itemSource && itemSource === origin) {
+                    return true;
+                }
+                const originMessageId = String((origin && origin.getAttribute && origin.getAttribute('data-message-id')) || state.deckOriginMessageId || '').trim();
+                const originPostId = String((origin && origin.getAttribute && origin.getAttribute('data-post-id')) || state.deckOriginPostId || '').trim();
+                const itemMessageId = String((itemSource && itemSource.getAttribute && itemSource.getAttribute('data-message-id')) || '').trim();
+                const itemPostId = String((itemSource && itemSource.getAttribute && itemSource.getAttribute('data-post-id')) || '').trim();
+                if (originMessageId && itemMessageId && originMessageId === itemMessageId) return true;
+                if (originPostId && itemPostId && originPostId === itemPostId) return true;
+                return false;
+            }
+
+            function canPreserveDeckItemFromPrevious(item, origin) {
+                if (!item || !deckItemKeyUsable(item.key)) return false;
+                if (isDeckMediaItem(item)) {
+                    const wrapper = getMediaDockWrapper(item.el, item.type);
+                    const stillConnected = !!((wrapper && wrapper.isConnected) || (item.el instanceof Element && item.el.isConnected));
+                    return stillConnected && deckItemBelongsToOrigin(item, origin);
+                }
+                if (!item.manifest) return false;
+                if (!(item.el instanceof Element) || !item.el.isConnected) return false;
+                return widgetDeckOriginContainsEl(origin, item.el) || deckItemBelongsToOrigin(item, origin);
+            }
+
+            function reconcileDeckQueueItemsBuilt(built, previousItems, origin) {
+                const merged = [];
+                const keys = new Set();
+                const builtArr = Array.isArray(built) ? built : [];
+                const prevArr = Array.isArray(previousItems) ? previousItems : [];
+                const builtByKey = new Map();
+                builtArr.forEach((item) => {
+                    if (!item || !deckItemKeyUsable(item.key)) return;
+                    builtByKey.set(item.key, item);
+                });
+                builtArr.forEach((item) => {
+                    if (!item || !deckItemKeyUsable(item.key) || keys.has(item.key)) return;
+                    merged.push(item);
+                    keys.add(item.key);
+                });
+                prevArr.forEach((item) => {
+                    if (!item || !deckItemKeyUsable(item.key) || keys.has(item.key)) return;
+                    const replacement = builtByKey.get(item.key);
+                    if (replacement) {
+                        return;
+                    }
+                    if (!canPreserveDeckItemFromPrevious(item, origin)) return;
+                    merged.push(item);
+                    keys.add(item.key);
+                });
+                if (origin && origin.isConnected && origin.querySelectorAll) {
+                    try {
+                        buildSourceWidgetList(origin).forEach((w) => {
+                            if (!w || !deckItemKeyUsable(w.key) || keys.has(w.key)) return;
+                            merged.push(w);
+                            keys.add(w.key);
+                        });
+                    } catch (_) {
+                        /* Keep merged list from built + preserved widgets. */
+                    }
+                }
+                /* Empty rebuild would clear deckItems → getDeckSelectedItem null → deck hides when current is null. */
+                if (!merged.length && prevArr.length) {
+                    return prevArr.filter((item) => item && deckItemKeyUsable(item.key));
+                }
+                return merged;
+            }
+
+            function buildSourceDeckItems(sourceEl, activeEl) {
+                const mediaItems = buildRelatedMediaList(sourceEl, activeEl).map((item) => ({
+                    ...item,
+                    sourceEl: sourceEl || sourceContainer(item.el),
+                }));
+                let widgetItems = [];
+                try {
+                    widgetItems = buildSourceWidgetList(sourceEl);
+                } catch (_) {
+                    widgetItems = [];
+                }
+                return mediaItems.concat(widgetItems);
+            }
+
+            function getActiveMediaForSource(sourceEl) {
+                if (!sourceEl || !sourceEl.isConnected || !state.current || !state.current.el) return null;
+                return state.current.sourceEl === sourceEl ? state.current.el : null;
+            }
+
             function getSourceMediaDeckItems(sourceEl) {
                 if (!sourceEl || !sourceEl.isConnected) return [];
-                return buildRelatedMediaList(sourceEl, null);
+                return buildRelatedMediaList(sourceEl, getActiveMediaForSource(sourceEl));
+            }
+
+            function getSourceDeckItems(sourceEl) {
+                if (!sourceEl || !sourceEl.isConnected) return [];
+                return buildSourceDeckItems(sourceEl, getActiveMediaForSource(sourceEl));
             }
 
             function getDeckSelectedItem() {
@@ -5541,6 +6901,14 @@
                     const next = sourceContainer(state.current.el);
                     if (next && next.isConnected) {
                         state.current.sourceEl = next;
+                    } else if (state.deckOpen) {
+                        const pinned = firstConnectedDeckAnchor(
+                            state.deckOriginSourceEl,
+                            state.deckSourceEl
+                        );
+                        if (pinned) {
+                            state.current.sourceEl = pinned;
+                        }
                     }
                 }
             }
@@ -5560,7 +6928,7 @@
                 if (!cur.sourceEl || !cur.sourceEl.isConnected) {
                     return false;
                 }
-                const items = getSourceMediaDeckItems(cur.sourceEl);
+                const items = getSourceDeckItems(cur.sourceEl);
                 if (!items.length) {
                     return false;
                 }
@@ -5570,13 +6938,18 @@
                 }
                 state.deckItems = items;
                 state.deckQueueSignature = '';
-                state.current = {
-                    el: pref.el,
-                    type: pref.type,
-                    sourceEl: cur.sourceEl,
-                    activatedAt: Date.now(),
-                };
-                state.deckSelectedKey = ensureMediaIdentity(pref.el);
+                if (isDeckMediaItem(pref)) {
+                    state.current = {
+                        el: pref.el,
+                        type: pref.type,
+                        sourceEl: cur.sourceEl,
+                        activatedAt: Date.now(),
+                    };
+                    state.deckSelectedKey = pref.key || '';
+                } else {
+                    state.current = null;
+                    state.deckSelectedKey = pref.key || '';
+                }
                 state.dismissedEl = null;
                 return true;
             }
@@ -5609,17 +6982,28 @@
                 if (!item) return;
                 const shouldPlay = options.play === true;
                 state.dismissedEl = null;
-                const deferYt = !shouldPlay && item.type === 'youtube';
-                setCurrent(item.el, item.type, deferYt ? { deferYouTubeMaterialize: true } : undefined);
-                state.deckSelectedKey = (state.current && state.current.el)
-                    ? ensureMediaIdentity(state.current.el)
-                    : (item.key || '');
-                if (state.current && state.current.el) {
-                    if (shouldPlay) {
-                        playMediaElement(state.current.el, state.current.type);
-                    } else {
-                        pauseMediaElement(state.current.el, state.current.type);
+                state.deckSourceEl = firstConnectedDeckAnchor(
+                    deckItemSourceEl(item),
+                    state.deckOriginSourceEl,
+                    state.deckSourceEl
+                );
+                if (isDeckMediaItem(item)) {
+                    const deferYt = !shouldPlay && item.type === 'youtube';
+                    setCurrent(item.el, item.type, deferYt ? { deferYouTubeMaterialize: true } : undefined);
+                    state.deckSelectedKey = item.key || '';
+                    if (state.current && state.current.el) {
+                        if (shouldPlay) {
+                            playMediaElement(state.current.el, state.current.type);
+                        } else {
+                            pauseMediaElement(state.current.el, state.current.type);
+                        }
                     }
+                } else {
+                    if (state.current && state.current.el) {
+                        deactivateMediaEntry(state.current);
+                    }
+                    state.current = null;
+                    state.deckSelectedKey = item.key || '';
                 }
                 updateDeckPanel();
                 updateSourceDeckLauncherActiveStates();
@@ -5670,68 +7054,157 @@
             }
 
             function getPreferredDeckItemForSource(sourceEl, items) {
-                const playableItems = Array.isArray(items) ? items : getSourceMediaDeckItems(sourceEl);
-                if (!playableItems.length) return null;
+                const deckItems = Array.isArray(items) ? items : getSourceDeckItems(sourceEl);
+                if (!deckItems.length) return null;
                 if (state.current && state.current.el && state.current.sourceEl === sourceEl) {
-                    const currentMatch = playableItems.find((item) => isSameDeckMediaItem(
+                    const currentMatch = deckItems.find((item) => isDeckMediaItem(item) && isSameDeckMediaItem(
                         state.current.el,
                         state.current.type,
                         item
                     ));
                     if (currentMatch) return currentMatch;
                 }
-                const playingMatch = playableItems.find((item) => isElementPlaying(item.el, item.type));
+                const defaultRef = getSourceLayoutDefaultRef(sourceEl);
+                if (defaultRef) {
+                    const defaultMatch = deckItems.find((item) => {
+                        const manifestKey = item && item.manifest && item.manifest.key
+                            ? `widget:${String(item.manifest.key || '').trim()}`
+                            : '';
+                        if (manifestKey && manifestKey === defaultRef) return true;
+                        const host = item && item.el && item.el.closest ? item.el.closest('[data-canopy-source-ref]') : null;
+                        return !!(host && String(host.getAttribute('data-canopy-source-ref') || '').trim() === defaultRef);
+                    });
+                    if (defaultMatch) return defaultMatch;
+                }
+                const playingMatch = deckItems.find((item) => isDeckMediaItem(item) && isElementPlaying(item.el, item.type));
                 if (playingMatch) return playingMatch;
-                return playableItems[0] || null;
+                return deckItems[0] || null;
             }
 
             function updateSourceDeckLauncherActiveStates() {
-                const activeSource = (state.current && state.current.sourceEl && state.dismissedEl !== state.current.el)
-                    ? ensureMediaIdentity(state.current.sourceEl)
-                    : '';
-                document.querySelectorAll('[data-open-media-deck]').forEach((btn) => {
+                const activeSourceEl = state.deckOpen
+                    ? firstConnectedDeckAnchor(
+                        state.deckSourceEl,
+                        state.deckOriginSourceEl,
+                        state.current && state.current.sourceEl
+                    )
+                    : ((state.current && state.current.sourceEl && state.dismissedEl !== state.current.el) ? state.current.sourceEl : null);
+                const activeSource = activeSourceEl ? ensureMediaIdentity(activeSourceEl) : '';
+                document.querySelectorAll('[data-open-media-deck], [data-open-mini-player]').forEach((btn) => {
+                    const isDeck = btn.hasAttribute('data-open-media-deck');
                     const sourceId = String(btn.getAttribute('data-source-media-id') || '');
-                    const isActive = !!sourceId && !!activeSource && sourceId === activeSource;
+                    const isActive = !!sourceId && !!activeSource && sourceId === activeSource && (isDeck ? state.deckOpen : !state.deckOpen);
                     btn.classList.toggle('is-active', isActive);
                     btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-                    btn.setAttribute('aria-expanded', isActive && state.deckOpen ? 'true' : 'false');
-                });
-                document.querySelectorAll('[data-open-mini-player]').forEach((btn) => {
-                    const sourceId = String(btn.getAttribute('data-source-media-id') || '');
-                    const isActive = !!sourceId && !!activeSource && sourceId === activeSource;
-                    btn.classList.toggle('is-active', isActive);
-                    btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+                    if (isDeck) btn.setAttribute('aria-expanded', isActive ? 'true' : 'false');
                 });
             }
 
-            function openMediaDeckForSource(sourceEl) {
+            function openMediaDeckForSource(sourceEl, options = {}) {
                 if (!sourceEl || !sourceEl.isConnected) return;
-                const items = getSourceMediaDeckItems(sourceEl);
-                const preferred = getPreferredDeckItemForSource(sourceEl, items);
+                const explicitItem = options.explicitItem || null;
+                let items = mergeExplicitDeckItem(getSourceDeckItems(sourceEl), explicitItem);
+                const previousDeckItems = Array.isArray(state.deckItems) ? state.deckItems : [];
+                items = reconcileDeckQueueItemsBuilt(items, previousDeckItems, sourceEl);
+                const preferredKey = String(options.preferredKey || '').trim();
+                let preferred = preferredKey
+                    ? items.find((item) => String(item.key || '').trim() === preferredKey)
+                    : null;
+                if (!preferred && explicitItem && explicitItem.key) {
+                    preferred = items.find((item) => String(item.key || '').trim() === String(explicitItem.key || '').trim()) || explicitItem;
+                }
+                if (!preferred) {
+                    preferred = getPreferredDeckItemForSource(sourceEl, items);
+                }
                 if (!preferred) return;
+                try {
+                    items = mergeDeckWidgetUnionIntoDeckItems(sourceEl, items);
+                } catch (_) {
+                    /* Keep pre-union list so deck still opens. */
+                }
                 state.deckItems = items;
+                state.deckQueueSignature = '';
+                state.deckQueueNeedsRefresh = false;
+                state.deckSourceEl = sourceEl;
+                state.deckOriginSourceEl = sourceEl;
+                pinDeckOriginIdsFromSourceEl(sourceEl);
                 state.deckSelectedKey = preferred.key;
                 state.dismissedEl = null;
                 state.returnUrl = null;
                 state.dockedSubtitle = null;
                 state.deckOpen = true;
-                selectDeckItem(preferred, { play: false });
+                selectDeckItem(preferred, { play: options.play === true });
                 updateSourceDeckLauncherActiveStates();
                 scheduleMiniUpdate(20);
+            }
+
+            function openMediaDeckForManifestNode(node) {
+                if (!(node instanceof Element)) return false;
+                const manifestHost = resolveCanopyModuleDeckManifestHost(node);
+                if (!manifestHost || !manifestHost.isConnected) return false;
+                let manifest = parseDeckWidgetManifest(manifestHost);
+                if (!manifest) {
+                    const fid = extractCanopyModuleBundleFileIdFromHost(manifestHost);
+                    if (fid) {
+                        let rawName = manifestHost.getAttribute('data-canopy-module-bundle-name') || '';
+                        if (!rawName) {
+                            const titleEl = manifestHost.querySelector('.stream-card-title, .fw-semibold');
+                            if (titleEl && titleEl.textContent) rawName = titleEl.textContent.trim();
+                        }
+                        const rawBuilt = buildCanopyModuleSurfaceManifestFromBundleId(fid, rawName);
+                        manifest = rawBuilt ? sanitizeDeckWidgetManifest(rawBuilt) : null;
+                    }
+                }
+                if (!manifest) {
+                    if (typeof showAlert === 'function') {
+                        showAlert('Could not open module — attachment metadata is incomplete or invalid.', 'warning');
+                    }
+                    return false;
+                }
+                const sourceEl = deckItemSourceEl({ el: manifestHost }) || sourceContainer(manifestHost);
+                if (!sourceEl || !sourceEl.isConnected) {
+                    if (typeof showAlert === 'function') {
+                        showAlert('Could not open module — source message/post container was not found.', 'warning');
+                    }
+                    return false;
+                }
+                const explicitItem = buildDeckWidgetItem(manifestHost, manifest, sourceEl);
+                if (!explicitItem) {
+                    if (typeof showAlert === 'function') {
+                        showAlert('Could not open module — deck item could not be built.', 'warning');
+                    }
+                    return false;
+                }
+                openMediaDeckForSource(sourceEl, {
+                    preferredKey: manifest.key || String(manifestHost.getAttribute('data-canopy-widget-key') || '').trim(),
+                    explicitItem,
+                });
+                return true;
             }
 
             /** Open the sidebar mini player for this post/message (no deck); keeps YouTube as facade until Play. */
             function openMiniPlayerForSource(sourceEl) {
                 if (!sourceEl || !sourceEl.isConnected || !miniVideoHost) return;
+                const previousDeckItems = Array.isArray(state.deckItems) ? state.deckItems : [];
+                const fullDeckItems = reconcileDeckQueueItemsBuilt(
+                    mergeDeckWidgetUnionIntoDeckItems(sourceEl, getSourceDeckItems(sourceEl)),
+                    previousDeckItems,
+                    sourceEl
+                );
                 const items = getSourceMediaDeckItems(sourceEl);
                 const preferred = getPreferredDeckItemForSource(sourceEl, items);
                 if (!preferred) return;
                 state.deckOpen = false;
+                state.deckSourceEl = sourceEl;
+                state.deckOriginSourceEl = sourceEl;
+                pinDeckOriginIdsFromSourceEl(sourceEl);
                 if (expandBtn) {
                     expandBtn.innerHTML = '<i class="bi bi-arrows-angle-expand"></i>';
-                    expandBtn.title = 'Open media deck';
+                    expandBtn.title = 'Open Canopy deck';
                 }
-                state.deckItems = items;
+                state.deckItems = fullDeckItems;
+                state.deckQueueSignature = '';
+                state.deckQueueNeedsRefresh = false;
                 state.deckSelectedKey = preferred.key;
                 state.dismissedEl = null;
                 state.returnUrl = null;
@@ -5750,11 +7223,15 @@
             }
 
             function switchDeckToMiniPlayer() {
-                if (!state.current || !state.current.el || !miniVideoHost) return;
+                const selectedItem = getDeckSelectedItem();
+                if (!selectedItem || !isDeckMediaItem(selectedItem) || !state.current || !state.current.el || !miniVideoHost) {
+                    closeMediaDeck({ forceClose: true });
+                    return;
+                }
                 state.deckOpen = false;
                 if (expandBtn) {
                     expandBtn.innerHTML = '<i class="bi bi-arrows-angle-expand"></i>';
-                    expandBtn.title = 'Open media deck';
+                    expandBtn.title = 'Open Canopy deck';
                 }
                 const { el, type } = state.current;
                 if (type === 'youtube' || type === 'video') {
@@ -5793,12 +7270,21 @@
 
             function syncSourceMediaDeckLauncher(sourceEl) {
                 if (!sourceEl || !sourceEl.isConnected) return;
-                const items = getSourceMediaDeckItems(sourceEl);
-                let btnDeck = sourceEl.querySelector('[data-open-media-deck]');
-                let btnMini = sourceEl.querySelector('[data-open-mini-player]');
+                const items = getSourceDeckItems(sourceEl);
+                const mediaItems = items.filter(isDeckMediaItem);
+
+                function removeLegacyStandaloneLaunchers() {
+                    sourceEl.querySelectorAll('[data-open-media-deck], [data-open-mini-player]').forEach((btn) => {
+                        if (!btn.closest('[data-canopy-playback-launcher]')) {
+                            btn.remove();
+                        }
+                    });
+                }
+
                 if (!items.length) {
-                    if (btnDeck) btnDeck.remove();
-                    if (btnMini) btnMini.remove();
+                    const wrap = sourceEl.querySelector('[data-canopy-playback-launcher]');
+                    if (wrap) wrap.remove();
+                    removeLegacyStandaloneLaunchers();
                     if (sourceEl.__canopyMediaDeckSlot && sourceEl.__canopyMediaDeckSlot.isConnected && !sourceEl.__canopyMediaDeckSlot.childElementCount) {
                         sourceEl.__canopyMediaDeckSlot.remove();
                     }
@@ -5806,57 +7292,96 @@
                     return;
                 }
 
+                removeLegacyStandaloneLaunchers();
+
                 const hostInfo = resolveSourceMediaDeckLauncherHost(sourceEl);
                 const host = hostInfo.host;
                 if (!host) return;
                 const currentSourceId = ensureMediaIdentity(sourceEl);
                 const mqCoarseOrNarrow = window.matchMedia('(max-width: 640px), (pointer: coarse)');
-                if (!btnDeck) {
+
+                let wrap = sourceEl.querySelector('[data-canopy-playback-launcher]');
+                let btnDeck;
+                let btnMini;
+                let divider;
+
+                if (!wrap) {
+                    wrap = document.createElement('div');
+                    wrap.className = 'canopy-media-playback-launcher';
+                    wrap.setAttribute('data-canopy-playback-launcher', '1');
+                    wrap.setAttribute('role', 'group');
+                    wrap.setAttribute('aria-label', 'Open Canopy deck or mini player');
+
                     btnDeck = document.createElement('button');
                     btnDeck.type = 'button';
-                    btnDeck.className = 'canopy-media-deck-launcher';
+                    btnDeck.className = 'canopy-media-playback-seg canopy-media-playback-seg--deck';
                     btnDeck.setAttribute('data-open-media-deck', '1');
                     attachMediaLauncherButton(btnDeck, mqCoarseOrNarrow, () => openMediaDeckForSource(sourceEl));
-                }
-                if (!btnMini) {
+
+                    divider = document.createElement('span');
+                    divider.className = 'canopy-media-playback-seg-divider';
+                    divider.setAttribute('aria-hidden', 'true');
+
                     btnMini = document.createElement('button');
                     btnMini.type = 'button';
-                    btnMini.className = 'canopy-media-mini-launcher';
+                    btnMini.className = 'canopy-media-playback-seg canopy-media-playback-seg--mini';
                     btnMini.setAttribute('data-open-mini-player', '1');
                     attachMediaLauncherButton(btnMini, mqCoarseOrNarrow, () => openMiniPlayerForSource(sourceEl));
+
+                    wrap.appendChild(btnDeck);
+                    wrap.appendChild(divider);
+                    wrap.appendChild(btnMini);
+                } else {
+                    btnDeck = wrap.querySelector('[data-open-media-deck]');
+                    btnMini = wrap.querySelector('[data-open-mini-player]');
+                    divider = wrap.querySelector('.canopy-media-playback-seg-divider');
                 }
 
-                if (btnDeck.parentNode !== host) {
-                    host.appendChild(btnDeck);
-                }
-                if (btnMini.parentNode !== host) {
-                    host.appendChild(btnMini);
+                if (wrap.parentNode !== host) {
+                    host.appendChild(wrap);
                 }
 
                 const countLabel = items.length === 1 ? '1' : String(items.length);
-                const launcherSignature = `${currentSourceId}|${countLabel}`;
+                const miniCountLabel = mediaItems.length === 1 ? '1' : String(mediaItems.length);
+                const deckOnly = mediaItems.length === 0;
+                const renderSig = `${currentSourceId}|${countLabel}|${miniCountLabel}|${deckOnly ? '1' : '0'}`;
+
+                wrap.classList.toggle('canopy-media-playback-launcher--deck-only', deckOnly);
+                wrap.classList.toggle('is-in-source-slot', !!hostInfo.owned);
+                if (divider) {
+                    divider.hidden = deckOnly;
+                    divider.style.display = deckOnly ? 'none' : '';
+                }
+                if (btnMini) {
+                    btnMini.hidden = deckOnly;
+                    btnMini.style.display = deckOnly ? 'none' : '';
+                }
+
                 btnDeck.setAttribute('data-source-media-id', currentSourceId);
-                btnDeck.setAttribute('data-launcher-signature', launcherSignature);
                 btnMini.setAttribute('data-source-media-id', currentSourceId);
-                btnMini.setAttribute('data-launcher-signature', launcherSignature);
-                btnDeck.classList.toggle('is-in-source-slot', !!hostInfo.owned);
-                btnMini.classList.toggle('is-in-source-slot', !!hostInfo.owned);
-                btnDeck.setAttribute('aria-label', items.length > 1 ? `Open media deck with ${items.length} items` : 'Open media deck');
-                btnDeck.title = items.length > 1 ? `Open media deck (${items.length} items)` : 'Open media deck';
-                btnMini.setAttribute('aria-label', items.length > 1 ? `Open mini player with ${items.length} items` : 'Open mini player');
-                btnMini.title = items.length > 1 ? `Mini player (${items.length} items)` : 'Mini player';
-                if (btnDeck.getAttribute('data-rendered-signature') !== launcherSignature) {
-                    btnDeck.innerHTML = `<i class="bi bi-collection-play"></i><span class="canopy-media-deck-launcher-label">Media deck</span><span class="canopy-media-deck-launcher-count">${countLabel}</span>`;
-                    btnDeck.setAttribute('data-rendered-signature', launcherSignature);
+                btnDeck.setAttribute('data-launcher-signature', `${currentSourceId}|${countLabel}`);
+                btnMini.setAttribute('data-launcher-signature', `${currentSourceId}|${miniCountLabel}`);
+                btnDeck.setAttribute('aria-label', items.length > 1 ? `Open deck with ${items.length} items` : 'Open deck');
+                btnDeck.title = items.length > 1 ? `Open deck (${items.length} items)` : 'Open deck';
+                btnMini.setAttribute(
+                    'aria-label',
+                    mediaItems.length > 1 ? `Open mini player (${mediaItems.length} playable)` : 'Open mini player'
+                );
+                btnMini.title = mediaItems.length > 1 ? `Mini player · ${mediaItems.length} playable` : 'Mini player';
+
+                if (wrap.getAttribute('data-rendered-signature') !== renderSig) {
+                    btnDeck.innerHTML =
+                        `<i class="bi bi-grid-1x2" aria-hidden="true"></i>` +
+                        `<span class="canopy-media-deck-launcher-label">Deck</span>` +
+                        `<span class="canopy-media-deck-launcher-count">${countLabel}</span>`;
+                    if (!deckOnly) {
+                        btnMini.innerHTML =
+                            `<i class="bi bi-pip" aria-hidden="true"></i>` +
+                            `<span class="canopy-media-deck-launcher-label">Mini</span>` +
+                            `<span class="canopy-media-deck-launcher-count">${miniCountLabel}</span>`;
+                    }
+                    wrap.setAttribute('data-rendered-signature', renderSig);
                 }
-                if (btnMini.getAttribute('data-rendered-signature') !== launcherSignature) {
-                    btnMini.innerHTML = `<i class="bi bi-pip"></i><span class="canopy-media-deck-launcher-label">Mini player</span><span class="canopy-media-deck-launcher-count">${countLabel}</span>`;
-                    btnMini.setAttribute('data-rendered-signature', launcherSignature);
-                }
-                const srcActive = !!(state.current && state.current.sourceEl === sourceEl);
-                btnDeck.setAttribute('aria-pressed', srcActive ? 'true' : 'false');
-                btnDeck.setAttribute('aria-expanded', srcActive && state.deckOpen ? 'true' : 'false');
-                btnMini.setAttribute('aria-pressed', srcActive ? 'true' : 'false');
             }
 
             function syncSourceMediaDeckLaunchersInScope(scope) {
@@ -5894,23 +7419,849 @@
                     : 'none';
             }
 
+            function setDeckWidgetSummaryHidden(hidden) {
+                if (!deckWidgetSummary) return;
+                deckWidgetSummary.hidden = !!hidden;
+            }
+
+            function clearDeckWidgetSummary() {
+                setDeckWidgetSummaryHidden(true);
+                if (deckWidgetBadges) deckWidgetBadges.innerHTML = '';
+                if (deckWidgetDetails) deckWidgetDetails.innerHTML = '';
+                if (deckWidgetActions) deckWidgetActions.innerHTML = '';
+            }
+
+            function setDeckStationSummaryHidden(hidden) {
+                if (!deckStationSummary) return;
+                deckStationSummary.hidden = !!hidden;
+            }
+
+            function clearDeckStationSummary() {
+                setDeckStationSummaryHidden(true);
+                if (deckStationPolicy) deckStationPolicy.textContent = 'Bounded actions';
+                if (deckStationTitle) deckStationTitle.textContent = 'Source-bound surface';
+                if (deckStationSubtitle) deckStationSubtitle.textContent = 'Typed operational context stays attached to the source while actions remain bounded.';
+                if (deckStationBadges) deckStationBadges.innerHTML = '';
+            }
+
+            function isDeckModuleItem(item) {
+                return !!(item && item.manifest && item.manifest.render_mode === 'module_runtime');
+            }
+
+            function setDeckQueueCollapsed(collapsed) {
+                const next = !!collapsed;
+                state.deckQueueCollapsed = next;
+                if (deckQueueShell) {
+                    deckQueueShell.classList.toggle('is-collapsed', next);
+                }
+                if (deckQueueToggle) {
+                    deckQueueToggle.setAttribute('aria-expanded', next ? 'false' : 'true');
+                    deckQueueToggle.innerHTML = next
+                        ? '<i class="bi bi-chevron-down"></i><span>Show list</span>'
+                        : '<i class="bi bi-chevron-up"></i><span>Collapse list</span>';
+                }
+            }
+
+            function setDeckDetailCollapsed(collapsed) {
+                const next = !!collapsed;
+                state.deckDetailCollapsed = next;
+                if (deckDetail) {
+                    deckDetail.classList.toggle('is-collapsed', next);
+                }
+                if (deckDetailToggle) {
+                    deckDetailToggle.setAttribute('aria-expanded', next ? 'false' : 'true');
+                    deckDetailToggle.innerHTML = next
+                        ? '<i class="bi bi-layout-text-window"></i><span>Show details</span>'
+                        : '<i class="bi bi-layout-text-window-reverse"></i><span>Hide details</span>';
+                }
+            }
+
+            function syncDeckLayoutMode(selectedItem) {
+                const moduleActive = isDeckModuleItem(selectedItem);
+                if (deck) {
+                    deck.classList.toggle('is-module-active', moduleActive);
+                }
+                if (moduleActive) {
+                    const itemCount = Array.isArray(state.deckItems) ? state.deckItems.length : 0;
+                    const multi = itemCount > 1;
+                    const keyStr = String(selectedItem.key || '');
+                    const layoutBump = state.deckLayoutMode !== 'module'
+                        || state.deckLayoutPrimedKey !== keyStr
+                        || state.deckLayoutLastQueueCount !== itemCount;
+                    if (layoutBump) {
+                        setDeckQueueCollapsed(!multi);
+                        setDeckDetailCollapsed(true);
+                        state.deckLayoutPrimedKey = keyStr;
+                        state.deckLayoutLastQueueCount = itemCount;
+                    }
+                    state.deckLayoutMode = 'module';
+                    return;
+                }
+                if (state.deckLayoutMode === 'module') {
+                    setDeckQueueCollapsed(false);
+                    setDeckDetailCollapsed(false);
+                }
+                state.deckLayoutMode = 'default';
+                state.deckLayoutPrimedKey = '';
+                state.deckLayoutLastQueueCount = -1;
+            }
+
+            function resetDeckLayoutMode() {
+                if (deck) {
+                    deck.classList.remove('is-module-active');
+                }
+                setDeckQueueCollapsed(false);
+                setDeckDetailCollapsed(false);
+                state.deckLayoutMode = 'default';
+                state.deckLayoutPrimedKey = '';
+                state.deckLayoutLastQueueCount = -1;
+            }
+
+            function getGrantedDeckModuleCapabilities(manifest) {
+                const runtime = manifest && manifest.module_runtime && typeof manifest.module_runtime === 'object'
+                    ? manifest.module_runtime
+                    : {};
+                const required = Array.isArray(runtime.capabilities && runtime.capabilities.required)
+                    ? runtime.capabilities.required
+                    : [];
+                const optional = Array.isArray(runtime.capabilities && runtime.capabilities.optional)
+                    ? runtime.capabilities.optional
+                    : [];
+                return Array.from(new Set(required.concat(optional)));
+            }
+
+            function deckModuleHasCapability(manifest, capability) {
+                return getGrantedDeckModuleCapabilities(manifest).includes(String(capability || '').trim().toLowerCase());
+            }
+
+            function serializeDeckModuleInlineJson(value) {
+                return JSON.stringify(value || {}).replace(/</g, '\\u003c');
+            }
+
+            function deckModuleSessionStorageKey(session, payloadKey) {
+                if (!session || !session.item || !session.item.manifest) return '';
+                const key = normalizeDeckWidgetText(payloadKey, 64);
+                if (!key) return '';
+                const sourceEl = deckItemSourceEl(session.item);
+                const sourceId = sourceEl
+                    ? String(sourceEl.getAttribute('data-post-id') || sourceEl.getAttribute('data-message-id') || 'source')
+                    : 'source';
+                return `canopy-module:${session.item.manifest.key}:${sourceId}:${key}`;
+            }
+
+            function buildDeckModuleSourceSnapshot(sourceEl) {
+                if (!sourceEl) {
+                    return {
+                        kind: 'source',
+                        source_id: '',
+                        subtitle: 'Canopy source',
+                        text: '',
+                        deck_items: [],
+                    };
+                }
+                const contentNode =
+                    sourceEl.querySelector('.message-content, .card-text, .feed-post-content, [data-message-body], .dm-bubble-body')
+                    || sourceEl;
+                const text = normalizeDeckWidgetText((contentNode && contentNode.textContent) || '', 1800);
+                const kind = sourceEl.matches('.post-card[data-post-id]') ? 'post' : 'message';
+                const sourceId = String(sourceEl.getAttribute('data-post-id') || sourceEl.getAttribute('data-message-id') || '').trim();
+                const deckItems = buildSourceDeckItems(sourceEl, null).map((entry) => ({
+                    key: entry.key,
+                    type: entry.type,
+                    title: entry.title,
+                    provider_label: entry.providerLabel || mediaProviderLabel(entry.type),
+                })).slice(0, 12);
+                return {
+                    kind,
+                    source_id: sourceId,
+                    subtitle: sourceSubtitle(sourceEl),
+                    text,
+                    deck_items: deckItems,
+                };
+            }
+
+            function buildDeckModuleMediaSnapshot() {
+                if (!(state.current && state.current.el && isDeckMediaItem(state.current))) return null;
+                return {
+                    type: state.current.type,
+                    title: state.current.title || titleFromMedia(state.current.el, state.current.type),
+                    subtitle: state.current.subtitle || subtitleFromMedia(state.current.el, state.current.type),
+                    is_playing: isElementPlaying(state.current.el, state.current.type),
+                };
+            }
+
+            function buildDeckModuleContext(item) {
+                const manifest = item && item.manifest ? item.manifest : null;
+                const sourceEl = firstConnectedDeckAnchor(
+                    deckItemSourceEl(item),
+                    state.deckOriginSourceEl,
+                    state.deckSourceEl
+                );
+                return {
+                    version: 1,
+                    title: manifest ? manifest.title : '',
+                    subtitle: manifest ? (manifest.subtitle || '') : '',
+                    provider_label: manifest ? (manifest.provider_label || '') : '',
+                    station_surface: manifest ? (manifest.station_surface || null) : null,
+                    source_binding: manifest ? (manifest.source_binding || null) : null,
+                    capabilities: getGrantedDeckModuleCapabilities(manifest),
+                    source: buildDeckModuleSourceSnapshot(sourceEl),
+                    media: buildDeckModuleMediaSnapshot(),
+                };
+            }
+
+            function moduleRuntimeCacheKey(runtime) {
+                if (!runtime) return '';
+                return `${runtime.bundle_url || ''}:${runtime.bundle_file_id || ''}:${runtime.format || ''}`;
+            }
+
+            function fetchDeckModuleBundle(runtime) {
+                const cacheKey = moduleRuntimeCacheKey(runtime);
+                if (!cacheKey) return Promise.reject(new Error('Module bundle not configured'));
+                if (state.moduleBundleCache.has(cacheKey)) {
+                    return state.moduleBundleCache.get(cacheKey);
+                }
+                const pending = fetch(runtime.bundle_url, {
+                    credentials: 'same-origin',
+                    headers: { 'Accept': 'text/html, text/plain;q=0.9' },
+                }).then(async (response) => {
+                    if (!response.ok) {
+                        throw new Error(`Bundle request failed (${response.status})`);
+                    }
+                    const text = await response.text();
+                    if (!text || !String(text).trim()) {
+                        throw new Error('Module bundle is empty');
+                    }
+                    if (text.length > 300000) {
+                        throw new Error('Module bundle exceeds the v1 size budget');
+                    }
+                    return text;
+                }).catch((error) => {
+                    state.moduleBundleCache.delete(cacheKey);
+                    throw error;
+                });
+                state.moduleBundleCache.set(cacheKey, pending);
+                return pending;
+            }
+
+            function buildDeckModuleBootstrapScript(sessionId, item) {
+                const manifest = item && item.manifest ? item.manifest : {};
+                const capabilities = getGrantedDeckModuleCapabilities(manifest);
+                return `
+(function () {
+  const sessionId = ${serializeDeckModuleInlineJson(sessionId)};
+  const grantedCapabilities = ${serializeDeckModuleInlineJson(capabilities)};
+  const pending = new Map();
+  const listeners = new Set();
+  let counter = 0;
+
+  function emit(type, payload) {
+    parent.postMessage({ canopyModule: true, sessionId, type, payload: payload || {} }, '*');
+  }
+
+  function request(method, payload) {
+    return new Promise((resolve, reject) => {
+      const id = 'req-' + (++counter);
+      pending.set(id, { resolve, reject });
+      emit('request', { id, method, payload: payload || {} });
+      window.setTimeout(() => {
+        if (!pending.has(id)) return;
+        pending.delete(id);
+        reject(new Error('Module request timed out'));
+      }, 8000);
+    });
+  }
+
+  window.addEventListener('message', (event) => {
+    const msg = event && event.data ? event.data : {};
+    if (!msg || msg.canopyModule !== true || msg.sessionId !== sessionId) return;
+    if (msg.type === 'response' && msg.payload && msg.payload.id) {
+      const entry = pending.get(msg.payload.id);
+      if (!entry) return;
+      pending.delete(msg.payload.id);
+      if (msg.payload.ok === false) {
+        entry.reject(new Error((msg.payload.error && msg.payload.error.message) || 'Module request failed'));
+      } else {
+        entry.resolve(msg.payload.result);
+      }
+      return;
+    }
+    if (msg.type === 'context') {
+      listeners.forEach((listener) => {
+        try { listener(msg.payload || null); } catch (_) {}
+      });
+    }
+  });
+
+  window.CanopyModule = Object.freeze({
+    version: 1,
+    sessionId,
+    capabilities: grantedCapabilities.slice(),
+    request(method, payload) {
+      return request(method, payload);
+    },
+    perform(method, payload) {
+      return request(method, payload);
+    },
+    getContext() {
+      return request('context.get', {});
+    },
+    onContext(listener) {
+      if (typeof listener !== 'function') return () => {};
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }
+  });
+
+  emit('runtime.ready', {
+    href: String(window.location.href || ''),
+    title: String(document.title || '')
+  });
+})();`;
+            }
+
+            function injectDeckModuleRuntime(bundleHtml, bootstrapJs, manifest) {
+                const shellTitle = escapeEmbedHtml((manifest && manifest.title) || 'Canopy Module');
+                const csp = "default-src 'none'; img-src data: blob:; media-src data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; font-src data:; frame-src 'none'; worker-src 'none'; child-src 'none'; form-action 'none'; base-uri 'none';";
+                const bootstrapTag = `<script>${bootstrapJs.replace(/<\/script/gi, '<\\\\/script')}<\/script>`;
+                /* Let module UIs use height:100% / flex-fill inside the deck iframe (avoids a short document box). */
+                const moduleShellBaseStyle =
+                    '<style data-canopy-module-shell="1">' +
+                    'html,body{min-height:100%;height:100%;margin:0;box-sizing:border-box}' +
+                    '</style>';
+                const headInjection =
+                    `<meta charset="utf-8">` +
+                    `<meta name="viewport" content="width=device-width, initial-scale=1">` +
+                    `<meta http-equiv="Content-Security-Policy" content="${escapeEmbedAttr(csp)}">` +
+                    `<title>${shellTitle}</title>` +
+                    moduleShellBaseStyle +
+                    bootstrapTag;
+                const rawHtml = String(bundleHtml || '');
+                if (/<head[\s>]/i.test(rawHtml)) {
+                    return rawHtml.replace(/<head([^>]*)>/i, `<head$1>${headInjection}`);
+                }
+                if (/<html[\s>]/i.test(rawHtml)) {
+                    return rawHtml.replace(/<html([^>]*)>/i, `<html$1><head>${headInjection}</head>`);
+                }
+                return `<!doctype html><html><head>${headInjection}</head><body>${rawHtml}</body></html>`;
+            }
+
+            function teardownDeckModuleSessionsInNode(node) {
+                if (!node || !node.querySelectorAll) return;
+                node.querySelectorAll('[data-canopy-module-session-id]').forEach((frame) => {
+                    const sessionId = String(frame.getAttribute('data-canopy-module-session-id') || '').trim();
+                    if (sessionId) {
+                        state.moduleSessions.delete(sessionId);
+                    }
+                });
+            }
+
+            function postDeckModuleSessionMessage(session, type, payload) {
+                if (!(session && session.frame && session.frame.contentWindow)) return;
+                session.frame.contentWindow.postMessage({
+                    canopyModule: true,
+                    sessionId: session.id,
+                    type,
+                    payload: payload || {},
+                }, '*');
+            }
+
+            function postDeckModuleContext(session) {
+                postDeckModuleSessionMessage(session, 'context', buildDeckModuleContext(session.item));
+            }
+
+            async function respondDeckModuleRequest(session, payload) {
+                const id = payload && payload.id ? String(payload.id) : '';
+                const method = String(payload && payload.method || '').trim().toLowerCase();
+                const params = payload && payload.payload && typeof payload.payload === 'object' ? payload.payload : {};
+                const manifest = session && session.item ? session.item.manifest : null;
+                const respond = (ok, result, errorMessage) => {
+                    postDeckModuleSessionMessage(session, 'response', {
+                        id,
+                        ok,
+                        result: ok ? (result == null ? null : result) : null,
+                        error: ok ? null : { message: errorMessage || 'Module request failed' },
+                    });
+                };
+                if (!id || !method || !manifest) {
+                    respond(false, null, 'Invalid module request');
+                    return;
+                }
+                try {
+                    if (method === 'context.get') {
+                        respond(true, buildDeckModuleContext(session.item), '');
+                        return;
+                    }
+                    if (method === 'source.snapshot') {
+                        if (!deckModuleHasCapability(manifest, 'source.read') && !deckModuleHasCapability(manifest, 'source.snapshot')) {
+                            respond(false, null, 'source.snapshot not granted');
+                            return;
+                        }
+                        respond(true, buildDeckModuleContext(session.item).source, '');
+                        return;
+                    }
+                    if (method === 'deck.media.get_state') {
+                        if (!deckModuleHasCapability(manifest, 'deck.media.observe')) {
+                            respond(false, null, 'deck.media.observe not granted');
+                            return;
+                        }
+                        respond(true, buildDeckModuleMediaSnapshot(), '');
+                        return;
+                    }
+                    if (method === 'deck.return') {
+                        if (!deckModuleHasCapability(manifest, 'deck.return')) {
+                            respond(false, null, 'deck.return not granted');
+                            return;
+                        }
+                        jumpToDeckItemSource(session.item, { forceClose: true });
+                        respond(true, { returned: true }, '');
+                        return;
+                    }
+                    if (method === 'deck.close') {
+                        if (!deckModuleHasCapability(manifest, 'deck.close')) {
+                            respond(false, null, 'deck.close not granted');
+                            return;
+                        }
+                        closeMediaDeck({ forceClose: true });
+                        respond(true, { closed: true }, '');
+                        return;
+                    }
+                    if (method === 'clipboard.write') {
+                        if (!deckModuleHasCapability(manifest, 'clipboard.write')) {
+                            respond(false, null, 'clipboard.write not granted');
+                            return;
+                        }
+                        const text = normalizeDeckWidgetText(params.text, 2000);
+                        if (!text) {
+                            respond(false, null, 'No clipboard text provided');
+                            return;
+                        }
+                        await navigator.clipboard.writeText(text);
+                        respond(true, { written: true }, '');
+                        return;
+                    }
+                    if (method === 'module.storage.get') {
+                        if (!deckModuleHasCapability(manifest, 'module.storage.local')) {
+                            respond(false, null, 'module.storage.local not granted');
+                            return;
+                        }
+                        const storageKey = deckModuleSessionStorageKey(session, params.key);
+                        respond(true, { value: storageKey ? window.localStorage.getItem(storageKey) : null }, '');
+                        return;
+                    }
+                    if (method === 'module.storage.set') {
+                        if (!deckModuleHasCapability(manifest, 'module.storage.local')) {
+                            respond(false, null, 'module.storage.local not granted');
+                            return;
+                        }
+                        const storageKey = deckModuleSessionStorageKey(session, params.key);
+                        if (!storageKey) {
+                            respond(false, null, 'Invalid storage key');
+                            return;
+                        }
+                        const value = normalizeDeckWidgetText(params.value, 4000);
+                        window.localStorage.setItem(storageKey, value);
+                        respond(true, { stored: true }, '');
+                        return;
+                    }
+                    respond(false, null, `Unsupported module method: ${method}`);
+                } catch (error) {
+                    respond(false, null, error && error.message ? error.message : 'Module request failed');
+                }
+            }
+
+            window.addEventListener('message', (event) => {
+                const msg = event && event.data ? event.data : {};
+                if (!msg || msg.canopyModule !== true) return;
+                const sessionId = String(msg.sessionId || '').trim();
+                if (!sessionId || !state.moduleSessions.has(sessionId)) return;
+                const session = state.moduleSessions.get(sessionId);
+                if (!session || !session.frame || event.source !== session.frame.contentWindow) return;
+                if (msg.type === 'runtime.ready') {
+                    postDeckModuleContext(session);
+                    return;
+                }
+                if (msg.type === 'request') {
+                    respondDeckModuleRequest(session, msg.payload || {});
+                }
+            });
+
+            function deckItemContextSubtitle(item) {
+                const sourceEl = firstConnectedDeckAnchor(
+                    deckItemSourceEl(item),
+                    state.deckOriginSourceEl,
+                    state.deckSourceEl
+                );
+                return sourceEl ? sourceSubtitle(sourceEl) : 'Canopy source';
+            }
+
+            function widgetIframeAllow(manifest) {
+                const widgetType = String((manifest && manifest.widget_type) || '').toLowerCase();
+                if (widgetType === 'map') return 'geolocation';
+                if (widgetType === 'chart') return 'clipboard-write';
+                return 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
+            }
+
+            /** Spotify/SoundCloud deck iframes match in-feed previews (no sandbox) so embeds can initialize. */
+            function deckWidgetIframeSandboxValue(embedUrl) {
+                try {
+                    const u = new URL(String(embedUrl || ''), window.location.origin);
+                    const host = u.hostname.toLowerCase();
+                    if (host === 'open.spotify.com' || host === 'w.soundcloud.com') {
+                        return '';
+                    }
+                } catch (_) {
+                    /* fall through */
+                }
+                return 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation';
+            }
+
+            function deckWidgetStageSignature(item) {
+                if (!item || !item.manifest) return '';
+                const m = item.manifest;
+                if (m.render_mode === 'module_runtime' && m.module_runtime) {
+                    return `module:${String(m.module_runtime.bundle_url || '')}:${String(m.key || '')}`;
+                }
+                if (m.render_mode === 'iframe' && m.embed_url) {
+                    return `iframe:${String(m.embed_url)}`;
+                }
+                const body = String(m.body_text || m.subtitle || '');
+                return `panel:${String(item.key || '')}:${String(m.title || '')}:${body.slice(0, 200)}`;
+            }
+
+            function jumpToDeckItemSource(item, options = {}) {
+                const forceClose = options.forceClose === true;
+                const sourceEl = firstConnectedDeckAnchor(
+                    deckItemSourceEl(item),
+                    state.deckOriginSourceEl,
+                    state.deckSourceEl
+                );
+                if (forceClose && state.deckOpen) {
+                    closeMediaDeck({ forceClose: true });
+                }
+                if (sourceEl && sourceEl.isConnected) {
+                    sourceEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+                    applyFocusFlash(sourceEl);
+                }
+            }
+
+            function canRunDeckWidgetAction(action, manifest) {
+                if (!action || !manifest) return false;
+                const policy = manifest.action_policy || {};
+                const maxRisk = String(policy.max_risk || 'view').toLowerCase();
+                if (maxRisk === 'view' && action.risk !== 'view') return false;
+                return true;
+            }
+
+            async function runDeckWidgetAction(action, item) {
+                if (!action || !item) return;
+                const manifest = item.manifest || {};
+                if (!canRunDeckWidgetAction(action, manifest)) {
+                    if (typeof showAlert === 'function') showAlert('This action is outside the bounded policy for this deck item.', 'warning');
+                    return;
+                }
+                if (action.requires_confirmation === true) {
+                    const confirmed = window.confirm(`Run "${action.label}" from this deck item?`);
+                    if (!confirmed) return;
+                }
+                if (action.kind === 'external_link' && action.url) {
+                    window.open(action.url, '_blank', 'noopener');
+                    return;
+                }
+                if (action.kind === 'clipboard' && action.text) {
+                    try {
+                        await navigator.clipboard.writeText(action.text);
+                        if (typeof showAlert === 'function') showAlert('Copied to clipboard', 'success');
+                    } catch (_) {
+                        if (typeof showAlert === 'function') showAlert('Clipboard write failed', 'warning');
+                    }
+                    return;
+                }
+                if (action.kind === 'callback' && action.handler === 'open_stream_workspace') {
+                    const args = action.args || {};
+                    if (typeof window.openStreamAttachmentPlayer !== 'function') {
+                        if (typeof showAlert === 'function') showAlert('Stream workspace is not available on this surface.', 'info');
+                        return;
+                    }
+                    try {
+                        await window.openStreamAttachmentPlayer(args.streamId, args.mediaKind, args.slotId, args.streamKind || 'media');
+                        jumpToDeckItemSource(item, { forceClose: true });
+                    } catch (_) {
+                        if (typeof showAlert === 'function') showAlert('Could not open the stream workspace.', 'warning');
+                    }
+                }
+            }
+
+            function renderDeckStationSummary(manifest) {
+                clearDeckStationSummary();
+                if (!manifest) return;
+                const station = manifest.station_surface || null;
+                if (!station) return;
+                const policy = manifest.action_policy || {};
+                const maxRisk = String(policy.max_risk || 'view').toLowerCase();
+                const humanGate = String(policy.human_gate || 'none').toLowerCase();
+                const isSimpleReferenceSurface =
+                    station.kind === 'reference_surface'
+                    && station.recurring !== true
+                    && station.scope !== 'station'
+                    && maxRisk === 'view'
+                    && humanGate === 'none';
+                if (isSimpleReferenceSurface) return;
+                setDeckStationSummaryHidden(false);
+                if (deckStationPolicy) {
+                    deckStationPolicy.textContent = (policy.audit_label || 'Bounded actions');
+                }
+                if (deckStationTitle) {
+                    deckStationTitle.textContent = station.label || manifest.provider_label || manifest.title || 'Station surface';
+                }
+                if (deckStationSubtitle) {
+                    deckStationSubtitle.textContent = station.summary || deckItemContextSubtitle({ manifest });
+                }
+                if (deckStationBadges) {
+                    deckStationBadges.innerHTML = '';
+                    [
+                        station.domain || '',
+                        station.recurring ? 'Recurring station' : 'Source-bound',
+                        station.scope === 'station' ? 'Station-scoped' : 'Source-scoped',
+                        maxRisk === 'low' ? 'Low-risk actions' : 'View-only',
+                        humanGate !== 'none' ? `Human gate: ${humanGate}` : '',
+                    ].filter(Boolean).forEach((label) => {
+                        const badge = document.createElement('span');
+                        badge.className = 'sidebar-media-deck-station-badge';
+                        badge.textContent = label;
+                        deckStationBadges.appendChild(badge);
+                    });
+                }
+            }
+
+            function renderDeckWidgetSummary(item) {
+                clearDeckStationSummary();
+                clearDeckWidgetSummary();
+                if (!item || isDeckMediaItem(item) || !item.manifest) return;
+                const manifest = item.manifest;
+                renderDeckStationSummary(manifest);
+                setDeckWidgetSummaryHidden(false);
+
+                if (deckWidgetBadges) {
+                    const badges = manifest.badges || [];
+                    deckWidgetBadges.innerHTML = '';
+                    badges.forEach((badgeText) => {
+                        const badge = document.createElement('span');
+                        badge.className = 'sidebar-media-deck-widget-badge';
+                        badge.textContent = badgeText;
+                        deckWidgetBadges.appendChild(badge);
+                    });
+                    if (!deckWidgetBadges.childElementCount) {
+                        const badge = document.createElement('span');
+                        badge.className = 'sidebar-media-deck-widget-badge';
+                        badge.textContent = manifest.provider_label || 'Widget';
+                        deckWidgetBadges.appendChild(badge);
+                    }
+                }
+
+                if (deckWidgetDetails) {
+                    const detailEntries = Array.isArray(manifest.details) ? [...manifest.details] : [];
+                    if (manifest.render_mode === 'module_runtime' && manifest.module_runtime) {
+                        const caps = getGrantedDeckModuleCapabilities(manifest);
+                        if (caps.length) {
+                            detailEntries.unshift({
+                                label: 'Capabilities',
+                                value: caps.join(', '),
+                            });
+                        }
+                        detailEntries.push({
+                            label: 'Runtime',
+                            value: manifest.module_runtime.runtime_label || 'Canopy Module',
+                        });
+                        detailEntries.push({
+                            label: 'Bundle',
+                            value: manifest.module_runtime.format === 'single_html' ? 'Single HTML bundle' : manifest.module_runtime.format,
+                        });
+                    }
+                    deckWidgetDetails.innerHTML = '';
+                    detailEntries.slice(0, 8).forEach((entry) => {
+                        const block = document.createElement('div');
+                        block.className = 'sidebar-media-deck-widget-kv';
+                        block.innerHTML =
+                            `<div class="sidebar-media-deck-widget-kv-label">${escapeEmbedHtml(entry.label)}</div>` +
+                            `<div class="sidebar-media-deck-widget-kv-value">${escapeEmbedHtml(entry.value)}</div>`;
+                        deckWidgetDetails.appendChild(block);
+                    });
+                }
+
+                if (deckWidgetActions) {
+                    deckWidgetActions.innerHTML = '';
+                    const actions = Array.isArray(manifest.actions) ? manifest.actions : [];
+                    actions.forEach((action) => {
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'sidebar-media-deck-btn';
+                        btn.innerHTML = `${action.icon ? `<i class="bi ${escapeEmbedAttr(action.icon)}"></i>` : ''}<span>${escapeEmbedHtml(action.label)}</span>`;
+                        btn.title = `${action.scope === 'station' ? 'Station' : 'Source'} action · ${action.risk === 'low' ? 'low risk' : 'view only'}`;
+                        btn.addEventListener('click', () => { runDeckWidgetAction(action, item); });
+                        deckWidgetActions.appendChild(btn);
+                    });
+                }
+            }
+
+            function renderDeckWidgetStage(item) {
+                if (!deckStage || !item || !item.manifest) return;
+                const manifest = item.manifest;
+                const nextSig = deckWidgetStageSignature(item);
+                const existingHost = deckStage.querySelector(':scope > .sidebar-media-deck-widget-stage');
+                if (existingHost && nextSig && existingHost.dataset.canopyDeckWidgetSig === nextSig) {
+                    deckStage.classList.remove('is-empty');
+                    if (deckVisual) deckVisual.hidden = true;
+                    return;
+                }
+
+                clearDeckStageDockedNodes();
+                deckStage.classList.remove('is-empty');
+                if (deckVisual) deckVisual.hidden = true;
+
+                const host = document.createElement('div');
+                host.className = 'sidebar-media-deck-widget-stage';
+                host.dataset.canopyDeckWidgetSig = nextSig;
+
+                if (manifest.render_mode === 'module_runtime' && manifest.module_runtime) {
+                    host.innerHTML = `
+                        <div class="sidebar-media-deck-widget-panel sidebar-media-deck-module-panel">
+                            <div class="sidebar-media-deck-widget-panel-title">Loading module</div>
+                            <div class="sidebar-media-deck-widget-panel-copy">Preparing the sandboxed runtime for this source-bound module.</div>
+                        </div>
+                    `;
+                    deckStage.appendChild(host);
+                    fetchDeckModuleBundle(manifest.module_runtime).then((bundleHtml) => {
+                        if (!host.isConnected || host.dataset.canopyDeckWidgetSig !== nextSig) return;
+                        state.moduleSessionCounter += 1;
+                        const sessionId = `canopy-module-session-${state.moduleSessionCounter}`;
+                        const iframe = document.createElement('iframe');
+                        iframe.className = 'sidebar-media-deck-widget-frame sidebar-media-deck-module-frame';
+                        iframe.title = manifest.title || 'Canopy Module';
+                        iframe.loading = 'lazy';
+                        iframe.setAttribute('sandbox', 'allow-scripts');
+                        iframe.setAttribute('data-canopy-module-session-id', sessionId);
+                        iframe.srcdoc = injectDeckModuleRuntime(
+                            bundleHtml,
+                            buildDeckModuleBootstrapScript(sessionId, item),
+                            manifest
+                        );
+                        state.moduleSessions.set(sessionId, {
+                            id: sessionId,
+                            item,
+                            frame: iframe,
+                        });
+                        host.innerHTML = '';
+                        host.appendChild(iframe);
+                    }).catch((error) => {
+                        if (!host.isConnected || host.dataset.canopyDeckWidgetSig !== nextSig) return;
+                        host.innerHTML = `
+                            <div class="sidebar-media-deck-widget-panel sidebar-media-deck-module-panel">
+                                <div class="sidebar-media-deck-widget-panel-title">Module unavailable</div>
+                                <div class="sidebar-media-deck-widget-panel-copy">${escapeEmbedHtml((error && error.message) || 'Could not load the module bundle.')}</div>
+                            </div>
+                        `;
+                    });
+                } else if (manifest.render_mode === 'iframe' && manifest.embed_url) {
+                    const iframe = document.createElement('iframe');
+                    iframe.className = 'sidebar-media-deck-widget-frame';
+                    iframe.src = manifest.embed_url;
+                    iframe.title = manifest.title || 'Deck widget';
+                    iframe.loading = 'lazy';
+                    iframe.referrerPolicy = 'strict-origin-when-cross-origin';
+                    iframe.allow = widgetIframeAllow(manifest);
+                    const sandboxVal = deckWidgetIframeSandboxValue(manifest.embed_url);
+                    if (sandboxVal) {
+                        iframe.setAttribute('sandbox', sandboxVal);
+                    }
+                    host.appendChild(iframe);
+                } else {
+                    const panel = document.createElement('div');
+                    panel.className = 'sidebar-media-deck-widget-panel';
+                    panel.innerHTML =
+                        `<div class="sidebar-media-deck-widget-panel-title">${escapeEmbedHtml(manifest.title)}</div>` +
+                        `<div class="sidebar-media-deck-widget-panel-copy">${escapeEmbedHtml(manifest.subtitle || manifest.body_text || deckItemContextSubtitle(item))}</div>`;
+                    if (manifest.body_text && manifest.body_text !== manifest.subtitle) {
+                        const copy = document.createElement('div');
+                        copy.className = 'sidebar-media-deck-widget-panel-copy';
+                        copy.textContent = manifest.body_text;
+                        panel.appendChild(copy);
+                    }
+                    host.appendChild(panel);
+                }
+                deckStage.appendChild(host);
+            }
+
             function renderDeckQueue() {
                 if (!deckQueue || !deckQueueCount || !deckCount || !deckCountChip || !deckSource) return;
-                const current = state.current;
-                const sourceEl = current && current.sourceEl ? current.sourceEl : null;
-                state.deckItems = buildRelatedMediaList(sourceEl, current ? current.el : null);
+                refreshDeckOriginSourceElIfStale();
+                const previousDeckItems = Array.isArray(state.deckItems) ? state.deckItems : [];
+                if (!previousDeckItems.length || state.deckQueueNeedsRefresh) {
+                    const current = state.current;
+                    const selectedNow = getDeckSelectedItem();
+                    const sourceEl = firstConnectedDeckAnchor(
+                        state.deckOriginSourceEl,
+                        selectedNow && deckItemSourceEl(selectedNow),
+                        state.deckSourceEl,
+                        current && current.sourceEl
+                    );
+                    state.deckSourceEl = sourceEl || (state.deckSourceEl && state.deckSourceEl.isConnected ? state.deckSourceEl : null);
+                    const anchorForExplicit = sourceEl || state.deckOriginSourceEl || state.deckSourceEl;
+                    const explicitSelectedWidget = (
+                        selectedNow
+                        && !isDeckMediaItem(selectedNow)
+                        && selectedNow.manifest
+                        && selectedNow.el
+                        && selectedNow.el.isConnected
+                        && widgetDeckOriginContainsEl(anchorForExplicit, selectedNow.el)
+                    ) ? buildDeckWidgetItem(selectedNow.el, selectedNow.manifest, anchorForExplicit) : null;
+                    const built = mergeExplicitDeckItem(
+                        buildSourceDeckItems(sourceEl, current ? current.el : null),
+                        explicitSelectedWidget
+                    );
+                    const originForReconcile = firstConnectedDeckAnchor(
+                        state.deckOriginSourceEl,
+                        sourceEl,
+                        state.deckSourceEl
+                    );
+                    state.deckItems = reconcileDeckQueueItemsBuilt(built, previousDeckItems, originForReconcile);
+                    state.deckQueueNeedsRefresh = false;
+                }
                 const items = state.deckItems;
                 const selectedItem = getDeckSelectedItem();
+                if (selectedItem && state.deckSelectedKey && selectedItem.key !== state.deckSelectedKey) {
+                    state.deckSelectedKey = selectedItem.key;
+                }
                 const total = items.length;
                 const label = total === 1 ? '1 item' : `${total} items`;
                 const activeKey = selectedItem ? selectedItem.key : '';
                 const nextSignature = `${activeKey}::${items.map((item) => `${item.key}:${item.type}`).join('|')}`;
                 deckQueueCount.textContent = label;
-                deckCount.textContent = total === 1 ? '1 playable item' : `${total} playable items`;
                 deckCountChip.textContent = label;
-                deckSource.textContent = selectedItem ? sourceSubtitle(selectedItem.el) : 'Now playing from Canopy';
+                if (deckChipLabel) {
+                    deckChipLabel.textContent = `Canopy Deck · ${label}`;
+                }
+                if (deckCountChip) {
+                    deckCountChip.hidden = true;
+                }
+                if (deckQueueCount) {
+                    deckQueueCount.hidden = true;
+                }
+                if (deckQueueToggle) {
+                    deckQueueToggle.hidden = total <= 1;
+                }
+                if (total <= 1) {
+                    deckCount.textContent = '';
+                    deckCount.hidden = true;
+                } else {
+                    deckCount.hidden = false;
+                    const idx = items.findIndex((row) => selectedItem && row.key === selectedItem.key);
+                    deckCount.textContent = idx >= 0 ? `Item ${idx + 1} of ${total}` : `${total} in queue`;
+                }
+                deckSource.textContent = selectedItem ? deckItemContextSubtitle(selectedItem) : 'Now playing from Canopy';
 
-                if (state.deckQueueSignature === nextSignature && deckQueue.childElementCount) {
+                const renderedQueueItems = deckQueue.querySelectorAll('.sidebar-media-deck-item').length;
+                if (state.deckQueueSignature === nextSignature && deckQueue.childElementCount && renderedQueueItems === items.length) {
                     return;
                 }
                 state.deckQueueSignature = nextSignature;
@@ -5952,7 +8303,7 @@
 
                     const meta = document.createElement('div');
                     meta.className = 'sidebar-media-deck-item-meta';
-                    meta.textContent = mediaProviderLabel(item.type);
+                    meta.textContent = item.providerLabel || mediaProviderLabel(item.type);
 
                     labelWrap.appendChild(title);
                     labelWrap.appendChild(meta);
@@ -5965,17 +8316,30 @@
 
             function updateDeckVisibility() {
                 if (!deck || !deckBackdrop) return;
-                const visible = state.deckOpen && !!state.current;
-                const mobileDeckMode = window.matchMedia('(max-width: 640px), (max-height: 540px) and (orientation: landscape)').matches;
+                const visible = state.deckOpen && !!(state.current || getDeckSelectedItem());
+                const mobileDeckMode = isMobileDeckModalMode();
                 deck.hidden = !visible;
                 deck.setAttribute('aria-hidden', visible ? 'false' : 'true');
+                deck.inert = !visible;
                 deck.classList.toggle('is-visible', visible);
                 deckBackdrop.hidden = !visible;
+                deckBackdrop.inert = !visible;
                 deckBackdrop.classList.toggle('is-visible', visible);
                 document.body.classList.toggle('canopy-media-deck-open', visible);
                 document.body.classList.toggle('canopy-media-deck-modal', visible && mobileDeckMode);
                 if (deckShell) {
                     deckShell.setAttribute('aria-modal', visible && mobileDeckMode ? 'true' : 'false');
+                }
+            }
+
+            function isMobileDeckModalMode() {
+                return window.matchMedia('(max-width: 640px), (max-height: 540px) and (orientation: landscape)').matches;
+            }
+
+            function scrollDeckStageIntoView(behavior = 'smooth') {
+                if (!state.deckOpen || !deckStageShell || !isMobileDeckModalMode()) return;
+                if (typeof deckStageShell.scrollIntoView === 'function') {
+                    deckStageShell.scrollIntoView({ behavior, block: 'start', inline: 'nearest' });
                 }
             }
 
@@ -5986,6 +8350,11 @@
                     clearDeckStageDockedNodes();
                     deckStage.classList.add('is-empty');
                     setDeckVisualState(null);
+                    return;
+                }
+
+                if (!isDeckMediaItem(selectedItem)) {
+                    renderDeckWidgetStage(selectedItem);
                     return;
                 }
 
@@ -6011,8 +8380,25 @@
                 });
             }
 
-            function updateDeckControls(el, type) {
+            function updateDeckControls(selectedItem) {
                 if (!deckPlayBtn || !deckSeek || !deckCurrentTime || !deckDuration || !deckPipBtn) return;
+                const isMedia = isDeckMediaItem(selectedItem);
+                const el = selectedItem ? selectedItem.el : null;
+                const type = selectedItem ? selectedItem.type : '';
+
+                if (deckProgressRow) deckProgressRow.hidden = !isMedia;
+                if (deckPlayBtn) deckPlayBtn.hidden = !isMedia;
+                if (deckMiniPlayerBtn) deckMiniPlayerBtn.hidden = !isMedia;
+                if (deckMiniFooterBtn) deckMiniFooterBtn.hidden = !isMedia;
+
+                if (!isMedia) {
+                    deckCurrentTime.textContent = '--:--';
+                    deckDuration.textContent = '--:--';
+                    deckSeek.value = '0';
+                    deckSeek.disabled = true;
+                    if (deckPipBtn) deckPipBtn.style.display = 'none';
+                    return;
+                }
 
                 let currentTime = 0;
                 let duration = 0;
@@ -6060,70 +8446,113 @@
 
             function updateDeckPanel() {
                 updateDeckVisibility();
-                if (!state.deckOpen || !state.current) return;
-                if (state.current.el && !state.current.el.isConnected) {
-                    repairMediaCurrentReference();
-                } else {
-                    ensureMediaSourceLinked();
-                }
-                if (!state.current || !state.current.el || !state.current.el.isConnected) {
-                    closeMediaDeck({ forceClose: true });
-                    scheduleMiniUpdate(30);
-                    return;
-                }
-                reconcileDeckStageMediaPlacement();
-                renderDeckQueue();
-
                 const selectedItem = getDeckSelectedItem();
-                if (!selectedItem) {
-                    syncDeckStage();
-                    return;
-                }
-                const type = selectedItem.type;
-                const mediaTitle = titleFromMedia(selectedItem.el, type);
-                const subtitle = sourceSubtitle(selectedItem.el);
+                if (!state.deckOpen || !selectedItem) return;
+                syncDeckLayoutMode(selectedItem);
+                refreshDeckOriginSourceElIfStale();
+                const anchorUpdate = firstConnectedDeckAnchor(
+                    state.deckOriginSourceEl,
+                    deckItemSourceEl(selectedItem),
+                    state.deckSourceEl,
+                    state.current && state.current.sourceEl
+                );
+                state.deckSourceEl = anchorUpdate || (state.deckSourceEl && state.deckSourceEl.isConnected ? state.deckSourceEl : null);
 
-                if (deckChipLabel) deckChipLabel.textContent = 'Media Deck';
+                if (isDeckMediaItem(selectedItem)) {
+                    if (state.current && state.current.el && !state.current.el.isConnected) {
+                        repairMediaCurrentReference();
+                    } else {
+                        ensureMediaSourceLinked();
+                    }
+                    if (!state.current || !state.current.el || !state.current.el.isConnected) {
+                        closeMediaDeck({ forceClose: true });
+                        scheduleMiniUpdate(30);
+                        return;
+                    }
+                    reconcileDeckStageMediaPlacement();
+                }
+                renderDeckQueue();
+                syncDeckLayoutMode(getDeckSelectedItem() || selectedItem);
+
+                const type = selectedItem.type;
+                const mediaTitle = selectedItem.title || titleFromMedia(selectedItem.el, type);
+                const subtitle = deckItemContextSubtitle(selectedItem);
+
                 if (deckTitle) deckTitle.textContent = mediaTitle;
                 if (deckSubtitle) {
-                    deckSubtitle.textContent = state.deckItems.length > 1
-                        ? `${subtitle} • ${state.deckItems.length} playable items in this source`
-                        : subtitle;
+                    deckSubtitle.textContent = subtitle;
                 }
                 if (deckProvider) {
                     const iconNode = deckProvider.querySelector('i');
                     if (iconNode) {
-                        iconNode.className = `bi ${mediaIcon(type)}`;
+                        iconNode.className = `bi ${selectedItem.icon || mediaIcon(type)}`;
                     }
                 }
                 if (deckProviderLabel) {
-                    deckProviderLabel.textContent = mediaProviderLabel(type);
+                    deckProviderLabel.textContent = selectedItem.providerLabel || mediaProviderLabel(type);
+                }
+                if (deckReturnBtn) {
+                    const returnLabel = selectedItem && selectedItem.manifest && selectedItem.manifest.source_binding
+                        ? selectedItem.manifest.source_binding.return_label
+                        : 'Return to source';
+                    deckReturnBtn.innerHTML = `<i class="bi bi-arrow-up-right-square"></i><span>${escapeEmbedHtml(returnLabel)}</span>`;
                 }
 
                 syncDeckStage();
-                updateDeckControls(selectedItem.el, type);
+                renderDeckWidgetSummary(selectedItem);
+                updateDeckControls(selectedItem);
             }
 
             function openMediaDeck() {
+                if (!state.deckOriginSourceEl || !state.deckOriginSourceEl.isConnected) {
+                    state.deckOriginSourceEl = firstConnectedDeckAnchor(
+                        state.deckSourceEl,
+                        state.current && state.current.sourceEl
+                    );
+                }
+                if (state.deckOriginSourceEl && state.deckOriginSourceEl.isConnected) {
+                    if (!String(state.deckOriginMessageId || '').trim()) {
+                        state.deckOriginMessageId = String(state.deckOriginSourceEl.getAttribute('data-message-id') || '').trim();
+                    }
+                    if (!String(state.deckOriginPostId || '').trim()) {
+                        state.deckOriginPostId = String(state.deckOriginSourceEl.getAttribute('data-post-id') || '').trim();
+                    }
+                }
+                const mobileDeckMode = isMobileDeckModalMode();
+                setDeckQueueCollapsed(mobileDeckMode);
+                setDeckDetailCollapsed(mobileDeckMode);
+                state.deckQueueNeedsRefresh = true;
                 state.deckOpen = true;
-                if (state.current) updateDeckPanel();
+                if (state.current || getDeckSelectedItem()) updateDeckPanel();
                 else updateDeckVisibility();
                 updateSourceDeckLauncherActiveStates();
+                if (mobileDeckMode) {
+                    scrollDeckStageIntoView('auto');
+                }
                 if (expandBtn) {
                     expandBtn.innerHTML = '<i class="bi bi-arrows-angle-contract"></i>';
-                    expandBtn.title = 'Collapse media deck';
+                    expandBtn.title = 'Collapse Canopy deck';
                 }
             }
 
             function closeMediaDeck(options = {}) {
                 const preserveMini = !(options && options.forceClose === true);
+                moveFocusOutOfDeck();
+                if (state.current && state.current.type === 'youtube') {
+                    releaseFocusedYouTubeFrame(state.current.el);
+                }
                 state.deckOpen = false;
                 state.deckSelectedKey = '';
+                state.deckSourceEl = null;
+                state.deckOriginSourceEl = null;
+                state.deckOriginMessageId = '';
+                state.deckOriginPostId = '';
+                state.deckQueueNeedsRefresh = false;
                 if (expandBtn) {
                     expandBtn.innerHTML = '<i class="bi bi-arrows-angle-expand"></i>';
-                    expandBtn.title = 'Open media deck';
+                    expandBtn.title = 'Open Canopy deck';
                 }
-                if (state.current && state.current.el) {
+                if (state.current && state.current.el && isDeckMediaItem(state.current)) {
                     restoreDockedMedia(state.current.el, {
                         preferMini: preserveMini,
                         forceDockMini: preserveMini,
@@ -6133,19 +8562,71 @@
                     clearDeckStageDockedNodes();
                     deckStage.classList.add('is-empty');
                 }
+                resetDeckLayoutMode();
+                clearDeckStationSummary();
+                clearDeckWidgetSummary();
                 updateDeckVisibility();
                 updateSourceDeckLauncherActiveStates();
                 scheduleMiniUpdate(40);
             }
 
+            function stopActiveMediaPlayback(options = {}) {
+                const clearDismissed = options.clearDismissed === true;
+                const activeEntry = state.current && state.current.el ? state.current : null;
+                if (activeEntry) {
+                    const el = activeEntry.el;
+                    const type = activeEntry.type;
+                    if (type === 'youtube') {
+                        clearYouTubeDockResumeState(el);
+                    }
+                    pauseMediaElement(el, type);
+                    deactivateMediaEntry(activeEntry);
+                    if (type === 'video' || type === 'youtube') {
+                        clearOrphanedDockedMedia(el, type, activeEntry.sourceEl || sourceContainer(el));
+                    }
+                    state.dismissedEl = clearDismissed ? null : el;
+                } else if (clearDismissed) {
+                    state.dismissedEl = null;
+                }
+
+                state.current = null;
+                state.returnUrl = null;
+                state.dockedSubtitle = null;
+                state.deckSelectedKey = '';
+                state.deckItems = [];
+                state.deckQueueSignature = '';
+                state.deckSourceEl = null;
+                state.deckOriginSourceEl = null;
+                state.deckOriginMessageId = '';
+                state.deckOriginPostId = '';
+                state.deckQueueNeedsRefresh = false;
+                state.deckOpen = false;
+
+                if (miniVideoHost) {
+                    miniVideoHost.style.display = 'none';
+                    miniVideoHost.innerHTML = '';
+                }
+                if (deckStage) {
+                    clearDeckStageDockedNodes();
+                    deckStage.classList.add('is-empty');
+                }
+                resetDeckLayoutMode();
+                clearDeckStationSummary();
+                clearDeckWidgetSummary();
+                updateDeckVisibility();
+                updateSourceDeckLauncherActiveStates();
+                hideMini();
+            }
+
             function playDeckRelative(delta) {
-                if (!state.deckItems.length || !state.current) return;
+                if (!state.deckItems.length) return;
                 const selectedItem = getDeckSelectedItem();
                 const currentIndex = Math.max(0, state.deckItems.findIndex((item) => selectedItem && item.key === selectedItem.key));
                 const nextIndex = (currentIndex + delta + state.deckItems.length) % state.deckItems.length;
                 const nextItem = state.deckItems[nextIndex];
                 if (!nextItem) return;
-                selectDeckItem(nextItem, { play: false });
+                selectDeckItem(nextItem, { play: true });
+                scrollDeckStageIntoView();
                 scheduleMiniUpdate(20);
             }
 
@@ -6337,6 +8818,7 @@
                 const options = opts && typeof opts === 'object' ? opts : {};
                 const iframe = resolveYouTubeMediaElement(el, { activate: false });
                 if (!iframe || iframe.tagName.toLowerCase() !== 'iframe') return;
+                releaseFocusedYouTubeFrame(iframe);
                 const t = getYouTubeCurrentTimeSafe(iframe);
                 let playing = isYouTubePlayingState(Number(iframe.__canopyMiniYTState));
                 try {
@@ -6410,6 +8892,35 @@
                 }, 350);
             }
 
+            function releaseFocusedYouTubeFrame(el) {
+                const iframe = resolveYouTubeMediaElement(el, { activate: false });
+                if (!iframe || iframe.tagName.toLowerCase() !== 'iframe') return;
+                try {
+                    if (document.activeElement === iframe && typeof iframe.blur === 'function') {
+                        iframe.blur();
+                    }
+                } catch (_) {}
+            }
+
+            function moveFocusOutOfDeck() {
+                if (!deck || !document || !document.activeElement) return;
+                const active = document.activeElement;
+                if (!deck.contains(active)) return;
+                const sourceEl = firstConnectedDeckAnchor(state.deckSourceEl, state.deckOriginSourceEl);
+                const sourceLauncher = sourceEl && sourceEl.querySelector
+                    ? sourceEl.querySelector('[data-open-media-deck], [data-open-mini-player]')
+                    : null;
+                const focusTarget = sourceLauncher || expandBtn || document.body;
+                try {
+                    if (typeof active.blur === 'function') active.blur();
+                } catch (_) {}
+                try {
+                    if (focusTarget && typeof focusTarget.focus === 'function') {
+                        focusTarget.focus({ preventScroll: true });
+                    }
+                } catch (_) {}
+            }
+
             function updatePiPButton(el, type) {
                 if (!pipBtn) return;
                 if (type !== 'video' || !supportsPictureInPicture(el)) {
@@ -6437,14 +8948,32 @@
                     return;
                 }
 
+                if (type === 'youtube' && state.current && state.current.type === 'youtube') {
+                    const curWrapper = getMediaDockWrapper(state.current.el, 'youtube');
+                    const newWrapper = getMediaDockWrapper(el, 'youtube');
+                    if (curWrapper && newWrapper && curWrapper === newWrapper) {
+                        state.current.el = el;
+                        scheduleMiniUpdate();
+                        return;
+                    }
+                }
+
                 if (state.current && state.current.el && state.current.el !== el) {
                     deactivateMediaEntry(state.current);
                 }
 
+                let nextSourceEl = sourceContainer(el);
+                if (!nextSourceEl && state.deckOpen) {
+                    nextSourceEl = firstConnectedDeckAnchor(
+                        state.deckOriginSourceEl,
+                        state.deckSourceEl,
+                        state.current && state.current.sourceEl
+                    );
+                }
                 state.current = {
                     el: el,
                     type: type,
-                    sourceEl: sourceContainer(el),
+                    sourceEl: nextSourceEl,
                     activatedAt: Date.now()
                 };
                 state.dismissedEl = null;
@@ -6507,6 +9036,11 @@
 
             function updateMini() {
                 if (!state.current) {
+                    if (state.deckOpen && getDeckSelectedItem()) {
+                        updateDeckPanel();
+                        hideMini();
+                        return;
+                    }
                     const fallback = findPlayingElement();
                     if (fallback) {
                         setCurrent(fallback);
@@ -6663,7 +9197,7 @@
                     expandBtn.innerHTML = state.deckOpen
                         ? '<i class="bi bi-arrows-angle-contract"></i>'
                         : '<i class="bi bi-arrows-angle-expand"></i>';
-                    expandBtn.title = state.deckOpen ? 'Collapse media deck' : 'Open media deck';
+                    expandBtn.title = state.deckOpen ? 'Collapse Canopy deck' : 'Open Canopy deck';
                 }
 
                 showMini();
@@ -6708,6 +9242,10 @@
                 }
             }
 
+            if (typeof window !== 'undefined') {
+                window.canopyRegisterMediaNode = registerMediaNode;
+            }
+
             function scanForMedia(scope) {
                 const root = scope || document;
                 root.querySelectorAll('audio, video, .youtube-embed iframe').forEach(registerMediaNode);
@@ -6715,7 +9253,14 @@
             }
 
             function jumpToCurrentSource() {
-                if (!state.current || !state.current.el) return;
+                const selectedItem = getDeckSelectedItem();
+                const deckJumpAnchor = firstConnectedDeckAnchor(state.deckSourceEl, state.deckOriginSourceEl);
+                if (!state.current && !selectedItem && !deckJumpAnchor) return;
+                if (!state.current || !state.current.el || !isDeckMediaItem(selectedItem)) {
+                    jumpToDeckItemSource(selectedItem || { sourceEl: deckJumpAnchor }, { forceClose: true });
+                    hideMini();
+                    return;
+                }
                 const el = state.current.el;
 
                 if (state.deckOpen) {
@@ -6749,6 +9294,227 @@
                     applyFocusFlash(target);
                 }
                 hideMini();
+            }
+
+            /**
+             * Open the Canopy media deck for a feed post by id (e.g. antecedent of a repost/variant).
+             * Open first (same as inline posts). If empty queue, run layout compositor and retry once + rAF.
+             * No full-page navigation when the card is already in the DOM.
+             */
+            function openDeckForFeedAntecedentPost(sourcePostId) {
+                const pid = String(sourcePostId || '').trim();
+                if (!pid) return false;
+                const esc = window.CSS && typeof window.CSS.escape === 'function'
+                    ? window.CSS.escape(pid)
+                    : pid.replace(/["\\]/g, '\\$&');
+                const card = document.querySelector(`.post-card[data-post-id="${esc}"]`);
+                if (!card || !card.isConnected) {
+                    try {
+                        window.location.href = `/feed?focus_post=${encodeURIComponent(pid)}&open_deck=1`;
+                    } catch (_) {
+                        /* ignore */
+                    }
+                    return false;
+                }
+
+                function tryOpenFromCard() {
+                    try {
+                        openMediaDeckForSource(card, {});
+                    } catch (_) {
+                        /* ignore */
+                    }
+                    if (state.deckOpen) return true;
+                    const modHost = card.querySelector('[data-canopy-module-card="1"], [data-canopy-widget-manifest]');
+                    if (modHost) {
+                        try {
+                            openMediaDeckForManifestNode(modHost);
+                        } catch (_) {
+                            /* ignore */
+                        }
+                    }
+                    if (state.deckOpen) return true;
+                    const bundleHost = card.querySelector('[data-canopy-module-bundle-id]');
+                    if (bundleHost) {
+                        try {
+                            openMediaDeckForManifestNode(bundleHost);
+                        } catch (_) {
+                            /* ignore */
+                        }
+                    }
+                    return !!state.deckOpen;
+                }
+
+                if (tryOpenFromCard()) return true;
+
+                if (typeof window.canopyApplySourceLayoutsInScope === 'function') {
+                    try {
+                        window.canopyApplySourceLayoutsInScope(card);
+                    } catch (_) {
+                        /* ignore */
+                    }
+                }
+                if (tryOpenFromCard()) return true;
+
+                requestAnimationFrame(() => {
+                    if (typeof window.canopyApplySourceLayoutsInScope === 'function') {
+                        try {
+                            window.canopyApplySourceLayoutsInScope(card);
+                        } catch (_) {
+                            /* ignore */
+                        }
+                    }
+                    if (tryOpenFromCard()) return;
+                    requestAnimationFrame(() => {
+                        tryOpenFromCard();
+                    });
+                });
+                return true;
+            }
+
+            /**
+             * Open the Canopy deck for a channel message by id (e.g. antecedent of repost/variant).
+             * Same strategy as openDeckForFeedAntecedentPost (no forced navigate when row is in DOM).
+             *
+             * Channel messages often carry `data-canopy-source-layout` on `.message-content`; the compositor
+             * moves attachments into a shell. Opening the deck *before* `canopyApplySourceLayoutsInScope` runs
+             * yields an empty item list — so we always sync layout + media launchers first, then try the same
+             * controls users click (layout "Open deck" + playback launcher).
+             */
+            function openDeckForChannelAntecedentMessage(sourceMessageId) {
+                const mid = String(sourceMessageId || '').trim();
+                if (!mid) return false;
+                const esc = window.CSS && typeof window.CSS.escape === 'function'
+                    ? window.CSS.escape(mid)
+                    : mid.replace(/["\\]/g, '\\$&');
+                const row = document.querySelector(`.message-item[data-message-id="${esc}"]`);
+                if (!row || !row.isConnected) {
+                    try {
+                        window.location.href = `/channels/locate?message_id=${encodeURIComponent(mid)}&open_deck=1`;
+                    } catch (_) {
+                        /* ignore */
+                    }
+                    return false;
+                }
+
+                function syncRowForDeck() {
+                    if (typeof window.canopyApplySourceLayoutsInScope === 'function') {
+                        try {
+                            window.canopyApplySourceLayoutsInScope(row);
+                        } catch (_) {
+                            /* ignore */
+                        }
+                    }
+                    /* Facades have no iframe until click — deck scan/queue needs real iframes to dock reliably. */
+                    try {
+                        row.querySelectorAll('.youtube-embed .yt-facade').forEach((facade) => {
+                            try {
+                                materializeYouTubeFacade(facade, { autoplay: false });
+                            } catch (_) {
+                                /* ignore */
+                            }
+                        });
+                    } catch (_) {
+                        /* ignore */
+                    }
+                    try {
+                        scanForMedia(row);
+                    } catch (_) {
+                        /* ignore */
+                    }
+                    try {
+                        syncSourceMediaDeckLaunchersInScope(row);
+                    } catch (_) {
+                        /* ignore */
+                    }
+                }
+
+                /** Prefer the same code paths as inline UI (layout toolbar + injected launcher). */
+                function tryOpenViaChannelDeckControls() {
+                    try {
+                        const layoutBtn = row.querySelector('.canopy-source-layout-deck-launch');
+                        if (layoutBtn && typeof layoutBtn.click === 'function') {
+                            layoutBtn.click();
+                            if (state.deckOpen) return true;
+                        }
+                    } catch (_) {
+                        /* ignore */
+                    }
+                    try {
+                        const deckBtn = row.querySelector('[data-canopy-playback-launcher] [data-open-media-deck]');
+                        if (deckBtn && typeof deckBtn.click === 'function') {
+                            deckBtn.click();
+                            if (state.deckOpen) return true;
+                        }
+                    } catch (_) {
+                        /* ignore */
+                    }
+                    return false;
+                }
+
+                function tryOpenFromRow() {
+                    syncRowForDeck();
+                    if (tryOpenViaChannelDeckControls()) return true;
+                    const roots = [
+                        row,
+                        row.querySelector('.message-content'),
+                        row.querySelector('[data-canopy-source-ref="content:lede"]'),
+                    ].filter((n) => n && n.nodeType === 1);
+                    const uniqRoots = [];
+                    roots.forEach((el) => {
+                        if (uniqRoots.indexOf(el) < 0) uniqRoots.push(el);
+                    });
+                    for (let i = 0; i < uniqRoots.length; i += 1) {
+                        try {
+                            openMediaDeckForSource(uniqRoots[i], { play: true });
+                        } catch (_) {
+                            /* ignore */
+                        }
+                        if (state.deckOpen) return true;
+                    }
+                    const modHost = row.querySelector('[data-canopy-module-card="1"], [data-canopy-widget-manifest]');
+                    if (modHost) {
+                        try {
+                            openMediaDeckForManifestNode(modHost);
+                        } catch (_) {
+                            /* ignore */
+                        }
+                    }
+                    if (state.deckOpen) return true;
+                    const bundleHost = row.querySelector('[data-canopy-module-bundle-id]');
+                    if (bundleHost) {
+                        try {
+                            openMediaDeckForManifestNode(bundleHost);
+                        } catch (_) {
+                            /* ignore */
+                        }
+                    }
+                    return !!state.deckOpen;
+                }
+
+                if (tryOpenFromRow()) return true;
+
+                if (typeof window.canopyApplySourceLayoutsInScope === 'function') {
+                    try {
+                        window.canopyApplySourceLayoutsInScope(row);
+                    } catch (_) {
+                        /* ignore */
+                    }
+                }
+                if (tryOpenFromRow()) return true;
+
+                requestAnimationFrame(() => {
+                    if (tryOpenFromRow()) return;
+                    requestAnimationFrame(() => {
+                        tryOpenFromRow();
+                    });
+                });
+                return true;
+            }
+
+            if (typeof window !== 'undefined') {
+                window.openMediaDeckForManifestNode = openMediaDeckForManifestNode;
+                window.openDeckForFeedAntecedentPost = openDeckForFeedAntecedentPost;
+                window.openDeckForChannelAntecedentMessage = openDeckForChannelAntecedentMessage;
             }
 
             if (playBtn) {
@@ -6822,39 +9588,7 @@
 
             if (closeBtn) {
                 closeBtn.addEventListener('click', () => {
-                    if (state.current && state.current.el) {
-                        const el = state.current.el;
-                        const type = state.current.type;
-                        if (type === 'youtube') {
-                            clearYouTubeDockResumeState(el);
-                            try {
-                                const player = el.__canopyMiniYTPlayer;
-                                if (player && typeof player.pauseVideo === 'function') {
-                                    player.pauseVideo();
-                                    el.__canopyMiniYTState = 2;
-                                }
-                            } catch (_) {}
-                            if (el.__canopyAutoDockPlaceholder) {
-                                undockYouTube(el);
-                            } else if (isDockedInMiniHost(el)) {
-                                const wrapper = el.closest('.youtube-embed') || el;
-                                wrapper.remove();
-                            }
-                        }
-                        pauseMediaElement(el, type);
-                        if (type === 'video' || type === 'youtube') {
-                            clearOrphanedDockedMedia(el, type, state.current.sourceEl || sourceContainer(el));
-                        }
-                        state.dismissedEl = el;
-                    }
-                    state.returnUrl = null;
-                    state.dockedSubtitle = null;
-                    closeMediaDeck({ forceClose: true });
-                    if (miniVideoHost) {
-                        miniVideoHost.style.display = 'none';
-                        miniVideoHost.innerHTML = '';
-                    }
-                    hideMini();
+                    stopActiveMediaPlayback();
                 });
             }
 
@@ -6892,6 +9626,18 @@
                 deckCloseBtn.addEventListener('click', () => closeMediaDeck({ forceClose: true }));
             }
 
+            if (deckQueueToggle) {
+                deckQueueToggle.addEventListener('click', () => {
+                    setDeckQueueCollapsed(!state.deckQueueCollapsed);
+                });
+            }
+
+            if (deckDetailToggle) {
+                deckDetailToggle.addEventListener('click', () => {
+                    setDeckDetailCollapsed(!state.deckDetailCollapsed);
+                });
+            }
+
             if (deckBackdrop) {
                 deckBackdrop.addEventListener('click', () => closeMediaDeck());
             }
@@ -6925,6 +9671,7 @@
                             }
                         } catch (_) {}
                     }
+                    scrollDeckStageIntoView();
                     scheduleMiniUpdate(50);
                 });
             }
@@ -6932,6 +9679,14 @@
             if (deckReturnBtn) {
                 deckReturnBtn.addEventListener('click', () => jumpToCurrentSource());
             }
+
+            document.querySelectorAll('[data-canopy-stop-active-media-nav]').forEach((link) => {
+                if (link.dataset.boundCanopyStopMediaNav === '1') return;
+                link.dataset.boundCanopyStopMediaNav = '1';
+                link.addEventListener('click', () => {
+                    stopActiveMediaPlayback({ clearDismissed: true });
+                }, true);
+            });
 
             if (deckPipBtn) {
                 deckPipBtn.addEventListener('click', async () => {
@@ -6997,11 +9752,13 @@
                 deckQueue.addEventListener('click', (event) => {
                     const btn = event.target && event.target.closest ? event.target.closest('.sidebar-media-deck-item[data-media-index]') : null;
                     if (!btn) return;
-                    const index = Number(btn.getAttribute('data-media-index') || -1);
-                    if (!Number.isFinite(index) || index < 0 || index >= state.deckItems.length) return;
-                    const nextItem = state.deckItems[index];
+                    const key = String(btn.getAttribute('data-media-key') || '').trim();
+                    const nextItem = key
+                        ? state.deckItems.find((item) => String(item && item.key || '').trim() === key)
+                        : null;
                     if (!nextItem) return;
-                    selectDeckItem(nextItem, { play: false });
+                    selectDeckItem(nextItem, { play: true });
+                    scrollDeckStageIntoView();
                     scheduleMiniUpdate(20);
                 });
             }
@@ -7031,6 +9788,7 @@
             });
 
             scanForMedia(document);
+            applySourceLayoutsInScope(document);
 
             const mutationRoot = mainScroller || document.body;
             state.mutationObserver = new MutationObserver((mutations) => {
@@ -7061,6 +9819,7 @@
                 });
                 dirtySources.forEach((source) => {
                     if (state.deckOpen && state.current && state.current.sourceEl === source) return;
+                    applySourceLayoutsInScope(source);
                     syncSourceMediaDeckLauncher(source);
                 });
                 updateSourceDeckLauncherActiveStates();
@@ -7108,6 +9867,12 @@
                     if (ph.isConnected) ph.remove();
                     delete el.__canopyAutoDockPlaceholder;
                 }
+                var ytWrapperForPlaceholder = el.closest ? el.closest('.youtube-embed') : null;
+                if (ytWrapperForPlaceholder && ytWrapperForPlaceholder !== el && ytWrapperForPlaceholder.__canopyAutoDockPlaceholder) {
+                    var wrapperPlaceholder = ytWrapperForPlaceholder.__canopyAutoDockPlaceholder;
+                    if (wrapperPlaceholder.isConnected) wrapperPlaceholder.remove();
+                    delete ytWrapperForPlaceholder.__canopyAutoDockPlaceholder;
+                }
 
                 if (!isDockedInMiniHost(el)) {
                     var wrapper = el.closest('.youtube-embed');
@@ -7125,18 +9890,26 @@
                     }
                 } catch (_) {}
 
+                if (state.persistMediaRetryHandle) {
+                    clearInterval(state.persistMediaRetryHandle);
+                    state.persistMediaRetryHandle = null;
+                }
+                function clearPersistRetry() {
+                    clearInterval(state.persistMediaRetryHandle);
+                    state.persistMediaRetryHandle = null;
+                }
                 var retries = 0;
-                var retryId = setInterval(function() {
+                state.persistMediaRetryHandle = setInterval(function() {
                     retries++;
-                    if (retries > 6) { clearInterval(retryId); return; }
+                    if (retries > 6) { clearPersistRetry(); return; }
                     try {
                         var p = el.__canopyMiniYTPlayer;
                         if (p && typeof p.getPlayerState === 'function') {
                             var s = p.getPlayerState();
-                            if (s === 1 || s === 3) { clearInterval(retryId); return; }
+                            if (s === 1 || s === 3) { clearPersistRetry(); return; }
                             p.playVideo();
                         }
-                    } catch (_) { clearInterval(retryId); }
+                    } catch (_) { clearPersistRetry(); }
                 }, 800);
             };
         }

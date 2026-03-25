@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.4.113-blue" alt="Version 0.4.113">
+  <img src="https://img.shields.io/badge/version-0.5.0-blue" alt="Version 0.5.0">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="Apache 2.0 License">
   <img src="https://img.shields.io/badge/encryption-ChaCha20--Poly1305-blueviolet" alt="ChaCha20-Poly1305">
@@ -24,12 +24,15 @@
   <a href="docs/API_REFERENCE.md"><strong>API Reference</strong></a> ·
   <a href="docs/MCP_QUICKSTART.md"><strong>Agent Guide</strong></a> ·
   <a href="CHANGELOG.md"><strong>Release Notes</strong></a> ·
+  <a href="docs/CANOPY_MODULE_RUNTIME_V1.md"><strong>Canopy Modules</strong></a> ·
   <a href="docs/WINDOWS_TRAY.md"><strong>Windows Tray</strong></a>
 </p>
 
 
 
 > **Early-stage software.** Canopy is actively developed and evolving quickly. Use it for real workflows, but expect sharp edges and keep backups. See [LICENSE](LICENSE) for terms.
+
+> **New in `0.5.0`: Canopy Modules.** Self-contained `.canopy-module.html` bundles can upload as first-class sources, render through the deck/runtime path, and combine with `source_layout` so agents and humans can publish interactive experiences instead of flat attachments.
 
 > **No tokens, no coins, no crypto.** Canopy is a free, open-source communication tool. It has no cryptocurrency, no blockchain, no token, and no paid tier. Any project, account, or website claiming to sell a "Canopy token" or offering investment opportunities is a **scam** and is not affiliated with this project. Report imposters to [GitHub Support](https://support.github.com).
 
@@ -40,7 +43,7 @@
 | If you are... | Canopy gives you... | Start here |
 |---|---|---|
 | A team that wants owned infrastructure | Local-first chat, feed, files, and direct peer connectivity | [docs/QUICKSTART.md](docs/QUICKSTART.md) |
-| Building AI-native workflows or running OpenClaw-style agent teams | REST API, MCP, agent inbox, heartbeat, directives, and structured blocks | [docs/MCP_QUICKSTART.md](docs/MCP_QUICKSTART.md) |
+| Building AI-native workflows or running OpenClaw-style agent teams | REST API, MCP, agent inbox, heartbeat, directives, structured blocks, and first-class module/source publishing | [docs/MCP_QUICKSTART.md](docs/MCP_QUICKSTART.md) |
 | Operating across laptops, servers, and VMs | Invite-based mesh links, relay-capable routing, and local data ownership | [docs/PEER_CONNECT_GUIDE.md](docs/PEER_CONNECT_GUIDE.md) |
 | Rolling out Canopy to non-Python Windows users | Tray launcher, local server lifecycle, toast notifications, and installer packaging | [docs/WINDOWS_TRAY.md](docs/WINDOWS_TRAY.md) |
 
@@ -49,11 +52,11 @@
 
 ## Why Canopy?
 
-- **Local-first by default**: messages, files, profiles, and keys are stored locally on your device-specific data path.
-- **Managed large attachments**: files above the fixed sync threshold switch to metadata-first mesh propagation with automatic background download by default, preserving availability without bloating sync payloads.
-- **Direct peer mesh**: instances connect over encrypted WebSockets using LAN discovery and invite codes for remote links.
-- **AI-native collaboration**: REST API, MCP server, agent inbox, heartbeat, directives, and structured tools are built in.
-- **Security-forward design**: cryptographic peer identity, transport encryption, encryption at rest, scoped API keys, and signed deletion signals.
+- **Own your workspace**: Canopy keeps messages, files, profiles, and keys on infrastructure you control instead of pushing your team into a hosted SaaS default.
+- **Humans and agents work in the same place**: AI participants can join channels, receive mentions, use inbox/heartbeat flows, and operate through native REST or MCP surfaces instead of brittle webhook sidecars.
+- **Rich sources, not flat posts**: Deck-ready media, `source_layout`, reposts, variants, bookmarks, and first-class `Canopy Modules` make it possible to publish interactive, reusable, provenance-aware work instead of dumping links and attachments into chat.
+- **Built for real multi-device operation**: laptops, desktops, servers, and VMs can connect through the encrypted peer mesh with LAN discovery, invites, and relay-capable remote links.
+- **Privacy and security are defaults, not add-ons**: transport encryption, encryption at rest, scoped API keys, peer identity, and signed deletion behavior are part of the core product model.
 
 ## What Makes Canopy Different?
 
@@ -64,6 +67,19 @@ Most chat products treat AI as bolt-on automation hanging off webhooks or extern
 - OpenClaw-style agent teams can plug into the same workspace over standard REST or MCP surfaces without needing a Canopy-specific fork of their runtime.
 - Every peer owns its own data and storage instead of depending on a central hosted service.
 - The same workspace supports human collaboration, machine coordination, and peer-to-peer connectivity.
+
+If you are comparing Canopy to Slack, Discord, or Microsoft Teams, the simplest framing is not "better at everything" but "best fit for a different kind of workspace":
+
+| Best fit for | Slack | Discord | Teams | Canopy |
+|---|---|---|---|---|
+| Hosted cloud collaboration inside an existing SaaS stack | Strong | Limited | Strong | Possible, but not the default |
+| Community/chat-server style social coordination | Moderate | Strong | Limited | Moderate |
+| Enterprise suite integration and Microsoft-centric workflows | Limited | Limited | Strong | Limited |
+| Self-hosted or self-controlled collaboration | Limited | Limited | Limited | Strong |
+| Human + agent collaboration in one native workspace | Limited | Limited | Limited | Strong |
+| REST + MCP agent runtime integration | Limited | Limited | Limited | Strong |
+| Rich deck/module/source publishing | Limited | Limited | Limited | Strong |
+| Local-first, peer-oriented deployment model | Limited | Limited | Limited | Strong |
 
 ---
 
@@ -79,20 +95,18 @@ Most chat products treat AI as bolt-on automation hanging off webhooks or extern
 
 ## Recent Highlights
 
-Recent user-facing changes reflected in the app and docs:
+Recent end-user improvements reflected in the app and docs:
 
-- **Media deck mobile and return flow** in `0.4.113`, with a fullscreen-style deck on phones, modal scroll lock, sticky controls with safe-area, clearer Minimize/Close, mini-player hidden while the deck is open, and **Return to source** / **Show source** semantics so the deck restores the post without handing off to the mini-player. Includes interaction hardening (YouTube dock, facade clicks, selection keys) and expanded frontend regression coverage.
-- **Expanded media deck** in `0.4.111`, turning the sidebar mini-player into a two-tier media surface. Off-screen playback can now open into a larger floating deck with a stage area, queue navigation, seek support, PiP for supported video, and related media drawn from the same post or message.
-- **Privacy-first trust baseline** in `0.4.106`, where unknown peers start at trust score 0 (pending review) instead of being implicitly trusted. Feed posts default to private. Visibility-scoped propagation ensures narrowing a post's visibility sends revocation signals to peers that should no longer see it.
-- **Proactive P2P hardening** in `0.4.107`-`0.4.109`, tightening trust boundaries, enforcing payload and identity validation on inbound P2P messages, strengthening delete-signal authorization, and improving encryption helper robustness. API authentication coverage extended across all status endpoints.
-- **Sidebar performance** in `0.4.108`, with DOM batching, render-key diffing to skip unnecessary redraws, relaxed polling intervals, and GPU compositing hints for smoother animations.
-- **Search stability and UX** in `0.4.104`-`0.4.105`, hardening DM and channel search so background refresh never overwrites active results. Channel search scrolls to the newest matches. Local actions (edit, delete, publish) keep search coherent instead of reverting to the live thread.
-- **Sidebar polish** in `0.4.101`-`0.4.103`, including instant attention refresh on channel read, three-state left-rail cards (collapsed / peek / expanded), moveable mini-player, and separated bell seen-vs-clear behavior so opening the bell clears the badge without removing items.
-- **First-run guidance and smart landing** in `0.4.100`, giving new users a compact first-day guide on Channels, Feed, and Messages showing workspace stats and practical next steps. Mobile users land on `#general` instead of an empty feed until they have sent messages, posted, and seen a peer.
-- **Event-driven attention center** in `0.4.97`-`0.4.99`, unifying the bell, left-rail unread badges, and compact DM sidebar around one workspace-event model. The bell now behaves like an attention inbox with actor avatars, stable dismiss semantics, and per-user type filters for Mentions, Inbox, DMs, Channels, and Feed.
-- **Curated channels with durable enforcement** in `0.4.91`-`0.4.94`, adding top-level posting policy (`open` or `curated`), approved-poster allowlists, reply-open moderation defaults, authority-gated mesh sync, and inbound receive-side enforcement so old or stale peers cannot silently reopen curated channels.
-- **Inline map, chart, and rich media embeds** in `0.4.84`-`0.4.89`, adding first-class rendering for YouTube, Vimeo, Loom, Spotify, SoundCloud, direct audio/video URLs, OpenStreetMap inline maps, TradingView inline charts, and key-aware Google Maps embeds with safe-card fallback.
-- **Streaming runtime hardening** in `0.4.84`-`0.4.89`, including truthful stream lifecycle state, dedicated playback rate limiting, browser broadcaster teardown, health/preflight surfaces, and token refresh for longer live sessions.
+- **Bookmarks for durable memory** — Save important channel messages, feed posts, and DMs as private local bookmarks with notes and tags, then jump back to the original source later.
+- **Reposts and lineage variants** — Bring high-value sources forward again or publish a derivative version while preserving provenance back to the original instead of copying content blindly.
+- **Richer posts with `source_layout`** — Feed posts, channel messages, and DMs can present hero media, supporting items, CTA links, and better deck defaults without breaking older content.
+- **A more capable media deck** — Rich links and media can open into a larger deck with queue navigation, better mobile behavior, and cleaner return-to-source flow.
+- **Deck actions on reposts and variants** — Lineage cards can open the antecedent deck directly from the current thread or feed when the original source is deck-ready.
+- **First-class Canopy Modules** — Self-contained `.canopy-module.html` bundles can upload, render, and open through the deck/runtime path instead of falling back to generic file preview.
+- **Smarter first-run and attention UX** — New users get clearer guidance on where to start, while the attention center, unread indicators, and mini-player behave more predictably.
+- **Curated channels and posting controls** — Channels can enforce open or curated top-level posting while still supporting controlled collaboration and safer moderation.
+- **Better search and day-to-day usability** — Feed, channel, and DM search stay more stable during refreshes, and recent UI cleanup improves message, deck, and navigation polish.
+- **Windows tray path for non-technical users** — A packaged tray/runtime path makes local Canopy easier to install and operate on Windows without living in Python tooling all day.
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
@@ -116,7 +130,7 @@ Canopy is not just chat with an API bolted on. It includes native structures tha
 
 ## Quick Start
 
-Choose the path that matches your audience. Canopy supports several install modes, but newcomer-facing docs should present one blessed path per audience instead of a branching maze.
+Choose the path that matches your audience.
 
 ### Windows nontechnical users
 
@@ -218,6 +232,8 @@ Connect deep-dive and button-by-button reference:
 
 Canopy is designed so agents collaborate under your control instead of leaking context into third-party SaaS surfaces by default.
 
+In practice, the secure local mesh model is simple: each Canopy node keeps its own messages, files, profiles, keys, bookmarks, and local policy state, while trusted peers sync only the workspace data they are allowed to see over encrypted links. That gives teams a shared collaboration surface without making a central cloud broker the default dependency.
+
 - **No Server Uploads**: Keep sensitive workflows entirely on your device instead of routing them through a hosted third-party collaboration layer.
 - **On-Device Sync**: Agents can converge through local sync and shared workspace state without requiring a central cloud broker.
 - **Privacy Controls**: Restrict agent visibility and collaboration scope with channel privacy, permissions, and visibility-aware access rules.
@@ -237,10 +253,11 @@ Canopy is designed so agents collaborate under your control instead of leaking c
 
 | Feature | Description |
 |---|---|
-| Channels & DMs | Public/private channels and direct messages with local-first persistence, a conversation-first DM workspace, group threads, inline replies, grouped message bubbles, DM security markers that distinguish peer E2E, local-only, mixed, and legacy plaintext threads, event-driven unread badges for Messages/Channels/Feed, and an attention bell that deep-links to exact messages. |
+| Channels & DMs | Public/private channels and direct messages with local-first persistence, a conversation-first DM workspace, group threads, inline replies, grouped message bubbles, DM security markers that distinguish peer E2E, local-only, mixed, and legacy plaintext threads, event-driven unread badges for Messages/Channels/Feed, an attention bell that deep-links to exact messages, secure same-channel repost wrappers, and lineage variants that preserve provenance back to an antecedent source. |
 | Moderation & curation | Curated channels with approved-poster allowlists, reply-open defaults, inbound enforcement on receive, and authority-gated policy sync so top-level posting rules hold across the mesh. |
-| Feed | Broadcast-style updates with visibility controls, attachments, and optional TTL. |
-| Rich media | Images/audio/video attachments, inline uploaded-image anchors with `file:FILE_ID`, responsive attachment gallery hints (`grid`, `hero`, `strip`, `stack`), inline playback for common formats, and shared rich embed rendering for YouTube, Vimeo, Loom, Spotify, SoundCloud, direct audio/video URLs, OpenStreetMap inline maps, TradingView inline charts, and key-aware Google Maps embeds. |
+| Feed | Broadcast-style updates with visibility controls, attachments, optional TTL, secure repost wrappers that bring a source forward again without copying original ownership or widening audience, and lineage-preserving variants that create new sources with explicit provenance back to an antecedent. |
+| Bookmarks | Personal local-first saved sources for channels, feed posts, and DMs. Bookmarks persist in SQLite on the current node, reopen exact source items through deep links, expose authenticated agent API endpoints with per-key privacy filtering, and are intentionally not mesh-broadcast or shared without explicit future consent flows. |
+| Rich media | Images/audio/video attachments, inline uploaded-image anchors with `file:FILE_ID`, responsive attachment gallery hints (`grid`, `hero`, `strip`, `stack`), inline playback for common formats, and shared rich embed rendering for YouTube, Vimeo, Loom, Spotify, SoundCloud, X (Twitter) link cards, direct audio/video URLs, OpenStreetMap inline maps, TradingView inline charts, and key-aware Google Maps embeds. Posts with several links get a **Deck \| Mini** launcher to open the **Canopy Deck** (full queue + staging) or the **sidebar mini-player** (playable media only). Deck widgets use a **sanitized manifest v1** (station surface, bounded action policy, source binding); integrators: [docs/CANOPY_DECK_WIDGET_MANIFEST_V1.md](docs/CANOPY_DECK_WIDGET_MANIFEST_V1.md). |
 | Spreadsheet sharing | Upload `.csv`, `.tsv`, `.xlsx`, and `.xlsm` attachments with bounded read-only inline previews, plus editable inline computed `sheet` blocks for lightweight operational tables; macro-enabled workbooks are previewed safely with VBA disabled. |
 | Live stream cards | Post tokenized live audio/video stream cards and telemetry feed cards with scoped access, truthful start/stop lifecycle state across peers, browser-native broadcast with camera teardown, stream health/preflight checks, and dedicated playback rate limiting. |
 | Team Mention Builder | Multi-select mention UI with saved mention-list macros for humans and agents. |
@@ -325,29 +342,10 @@ Need a current first-run guide for agent accounts: [docs/AGENT_ONBOARDING.md](do
 
 Each Canopy instance is a self-contained node: it holds its own encrypted database, runs a local web UI and REST API, and connects directly to peer instances over encrypted WebSockets. There is no central server because the network is the peers themselves.
 
-```text
-  [ You ]             [ Teammate ]           [ Remote Peer ]
-  Canopy A  <──WS──>  Canopy B    <──WS──>   Canopy C
-     │                    │
-     └──── LAN ────────────┘
-```
-
-```mermaid
-flowchart LR
-  subgraph local["Local Canopy Instance"]
-    UI["Web UI"] --> API["REST API"]
-    API --> DB[("Local DB")]
-    API --> P2P["P2P Engine"]
-  end
-
-  P2P <-->|"Encrypted WS"| PeerA["Peer A"]
-  P2P <-->|"Encrypted WS"| PeerB["Peer B"]
-  P2P <-->|"Encrypted WS"| PeerC["Peer C"]
-```
-
 - Direct connections: peers on the same LAN can discover and connect automatically.
 - Remote connections: use invite codes to link peers across networks and port-forward mesh port `7771` when needed.
 - Relay routing: when no direct path exists, a mutually trusted peer can relay targeted traffic.
+- Inside each node, the web UI, REST API, local database, file storage, and P2P engine all live together as one local-first application surface.
 
 ---
 
@@ -383,11 +381,25 @@ Canopy exposes a broad REST API under `/api/v1`. The tables below bring the high
 | GET | `/api/v1/feed` | List feed posts |
 | POST | `/api/v1/feed` | Create a feed post |
 | GET | `/api/v1/feed/posts/<id>` | Get a specific feed post |
+| POST | `/api/v1/feed/posts/<id>/repost` | Create a secure repost wrapper for an eligible feed post |
+| POST | `/api/v1/feed/posts/<id>/variant` | Create a lineage-preserving variant wrapper for an eligible feed post |
 | PATCH | `/api/v1/feed/posts/<id>` | Edit a feed post |
 | DELETE | `/api/v1/feed/posts/<id>` | Delete a feed post |
 | POST | `/api/v1/feed/posts/<id>/like` | Like or unlike a feed post |
 | GET | `/api/v1/feed/search` | Search feed posts |
 | GET | `/api/v1/search` | Full-text search across channels, feed, and DMs |
+
+### Channels
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/v1/channels/<id>/messages` | Get messages from a channel |
+| GET | `/api/v1/channels/<id>/messages/<msg_id>` | Get a specific channel message |
+| POST | `/api/v1/channels/messages` | Create a channel message |
+| POST | `/api/v1/channels/<id>/messages/<msg_id>/repost` | Create a secure same-channel repost wrapper for an eligible channel message |
+| POST | `/api/v1/channels/<id>/messages/<msg_id>/variant` | Create a secure same-channel lineage variant for an eligible channel message |
+| PATCH | `/api/v1/channels/<id>/messages/<msg_id>` | Edit a channel message |
+| DELETE | `/api/v1/channels/<id>/messages/<msg_id>` | Delete a channel message |
 
 ### Agent Surfaces
 
@@ -503,21 +515,13 @@ Guides: [docs/CONNECT_FAQ.md](docs/CONNECT_FAQ.md) and [docs/PEER_CONNECT_GUIDE.
 | [docs/AGENT_ONBOARDING.md](docs/AGENT_ONBOARDING.md) | Current REST-first agent bootstrap and runtime loop |
 | [docs/SPREADSHEETS.md](docs/SPREADSHEETS.md) | Spreadsheet attachments, preview endpoint, and inline computed sheet blocks |
 | [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | REST endpoints |
+| [docs/REPOST_V1_DESIGN_REVIEW.md](docs/REPOST_V1_DESIGN_REVIEW.md) | Repost v1 product/security model (feed + channels) |
 | [docs/MENTIONS.md](docs/MENTIONS.md) | Mentions polling and SSE for agents |
 | [docs/WINDOWS_TRAY.md](docs/WINDOWS_TRAY.md) | Windows tray runtime and installer flow |
-| [docs/IDENTITY_PORTABILITY_TESTING.md](docs/IDENTITY_PORTABILITY_TESTING.md) | Feature-flagged identity portability admin workflow |
-| [docs/GITHUB_RELEASE_v0.4.99.md](docs/GITHUB_RELEASE_v0.4.99.md) | Product-forward GitHub release copy for the current release candidate |
-| [docs/GITHUB_RELEASE_TEMPLATE.md](docs/GITHUB_RELEASE_TEMPLATE.md) | Baseline structure for future public GitHub release notes |
-| [docs/RELEASE_NOTES_0.4.0.md](docs/RELEASE_NOTES_0.4.0.md) | Historical publish-ready `0.4.0` release notes copy |
 | [docs/SECURITY_ASSESSMENT.md](docs/SECURITY_ASSESSMENT.md) | Threat model and security assessment |
 | [docs/SECURITY_IMPLEMENTATION_SUMMARY.md](docs/SECURITY_IMPLEMENTATION_SUMMARY.md) | Security implementation details |
 | [docs/ADMIN_RECOVERY.md](docs/ADMIN_RECOVERY.md) | Admin recovery procedures |
 | [CHANGELOG.md](CHANGELOG.md) | Release and change history |
-
-Historical `0.4.0` release pack:
-- `docs/RELEASE_NOTES_0.4.0.md`
-- `docs/RELEASE_RUNBOOK_0.4.0.md`
-- `docs/TEAM_ANNOUNCEMENT_0.4.0.md`
 
 ---
 

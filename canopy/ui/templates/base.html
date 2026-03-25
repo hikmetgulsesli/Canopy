@@ -856,15 +856,16 @@
             right: 24px;
             bottom: 22px;
             width: min(456px, calc(100vw - 36px));
-            max-height: min(82vh, 860px);
             z-index: 1600;
             display: none;
             pointer-events: none;
         }
 
         .sidebar-media-deck.is-visible {
-            display: block;
+            display: flex;
+            flex-direction: column;
             pointer-events: auto;
+            max-height: min(82vh, 860px);
         }
 
         .sidebar-media-deck-shell {
@@ -879,11 +880,116 @@
                 0 28px 64px rgba(2, 8, 23, 0.55),
                 inset 0 1px 0 rgba(255, 255, 255, 0.07);
             backdrop-filter: blur(18px) saturate(145%);
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 auto;
+            min-height: 0;
+            max-height: min(82vh, 860px);
+        }
+
+        /* Scrollable middle: stage, queue, meta / station / widget — not transport controls */
+        .sidebar-media-deck-scroll {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: hidden;
+            overscroll-behavior-y: contain;
+            scrollbar-gutter: stable;
+        }
+
+        .sidebar-media-deck-detail {
             display: grid;
-            grid-template-rows: auto auto auto auto;
+            gap: 12px;
+            padding: 0 18px 12px;
+            min-width: 0;
+        }
+
+        .sidebar-media-deck.is-module-active {
+            max-height: min(92vh, 1020px);
+        }
+
+        .sidebar-media-deck.is-module-active .sidebar-media-deck-shell {
+            max-height: min(92vh, 1020px);
+        }
+
+        /* Give the module stage all remaining vertical space in the scroll region (avoids a short fixed vh box). */
+        .sidebar-media-deck.is-module-active .sidebar-media-deck-scroll {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-media-deck.is-module-active .sidebar-media-deck-stage-shell {
+            flex: 1 1 auto;
+            min-height: clamp(260px, 34vh, 560px);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-media-deck.is-module-active .sidebar-media-deck-stage {
+            aspect-ratio: auto;
+            flex: 1 1 auto;
+            min-height: clamp(240px, 34vh, 560px);
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        /* Module iframe must stay in-flow: position:absolute removed all in-flow children from widget-stage,
+           so the flex box could collapse to 0 height and the module vanished. */
+        .sidebar-media-deck.is-module-active .sidebar-media-deck-widget-stage {
+            flex: 1 1 auto;
+            min-height: clamp(220px, 32vh, 520px);
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0;
+        }
+
+        .sidebar-media-deck.is-module-active .sidebar-media-deck-widget-stage > .sidebar-media-deck-widget-panel {
+            flex: 0 0 auto;
+        }
+
+        .sidebar-media-deck.is-module-active .sidebar-media-deck-widget-frame.sidebar-media-deck-module-frame,
+        .sidebar-media-deck.is-module-active .sidebar-media-deck-module-frame {
+            flex: 1 1 auto;
+            align-self: stretch;
+            width: 100% !important;
+            min-width: 0;
+            min-height: clamp(260px, 42vh, 720px) !important;
+            height: auto;
+            object-fit: fill;
+        }
+
+        /* srcdoc module iframes: cover letterboxes the replaced content; fill uses the full frame box. */
+        .sidebar-media-deck.is-module-active .sidebar-media-deck-stage iframe.sidebar-media-deck-module-frame {
+            object-fit: fill !important;
+        }
+
+        /* Keep queue header + Show list in view when scrolling a tall module stage */
+        .sidebar-media-deck.is-module-active .sidebar-media-deck-queue-header {
+            position: sticky;
+            top: 0;
+            z-index: 4;
+            padding-top: 6px;
+            padding-bottom: 8px;
+            margin: 0 -4px;
+            padding-left: 4px;
+            padding-right: 4px;
+            background: linear-gradient(180deg, rgba(12, 20, 38, 0.98), rgba(12, 20, 38, 0.88));
+            backdrop-filter: blur(14px) saturate(130%);
+        }
+
+        .sidebar-media-deck-footer {
+            flex-shrink: 0;
+            display: grid;
+            gap: 12px;
+            padding: 12px 18px 18px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            background: linear-gradient(180deg, rgba(9, 15, 30, 0.55), rgba(9, 15, 30, 0.92));
         }
 
         .sidebar-media-deck-header {
+            flex-shrink: 0;
             display: flex;
             align-items: flex-start;
             flex-wrap: wrap;
@@ -1019,6 +1125,40 @@
             height: 100%;
         }
 
+        .canopy-yt-mini-placeholder,
+        .canopy-video-mini-placeholder {
+            position: relative;
+            display: flex;
+            align-items: flex-end;
+            justify-content: flex-start;
+            overflow: hidden;
+            border-radius: 10px;
+            background:
+                linear-gradient(180deg, rgba(15, 23, 42, 0.12), rgba(15, 23, 42, 0.56)),
+                color-mix(in srgb, var(--canopy-bg-card) 82%, #000 18%);
+            border: 1px solid color-mix(in srgb, var(--canopy-border) 74%, var(--canopy-primary) 26%);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        }
+
+        .canopy-media-placeholder-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            margin: 0.65rem;
+            padding: 0.3rem 0.55rem;
+            border-radius: 999px;
+            background: rgba(15, 23, 42, 0.72);
+            color: rgba(255, 255, 255, 0.92);
+            font-size: 0.72rem;
+            font-weight: 600;
+            line-height: 1;
+            backdrop-filter: blur(8px);
+        }
+
+        .canopy-media-placeholder-badge i {
+            font-size: 0.78rem;
+        }
+
         .sidebar-media-deck-visual {
             position: absolute;
             inset: 0;
@@ -1088,12 +1228,6 @@
             max-width: 82%;
         }
 
-        .sidebar-media-deck-body {
-            padding: 0 18px 18px;
-            display: grid;
-            gap: 12px;
-        }
-
         .sidebar-media-deck-meta {
             display: grid;
             gap: 6px;
@@ -1104,6 +1238,36 @@
             flex-wrap: wrap;
             align-items: center;
             gap: 8px;
+        }
+
+        .sidebar-media-deck-inline-toggle {
+            margin-left: auto;
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--canopy-text-secondary);
+            border-radius: 999px;
+            padding: 5px 10px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.69rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            transition: all 0.2s ease;
+        }
+
+        .sidebar-media-deck-inline-toggle:hover {
+            background: rgba(34, 197, 94, 0.12);
+            border-color: rgba(74, 222, 128, 0.28);
+            color: #dcfce7;
+        }
+
+        .sidebar-media-deck-inline-toggle:focus-visible {
+            outline: none;
+            background: rgba(34, 197, 94, 0.12);
+            border-color: rgba(74, 222, 128, 0.4);
+            color: #dcfce7;
+            box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.2);
         }
 
         .sidebar-media-deck-provider {
@@ -1136,6 +1300,204 @@
         .sidebar-media-deck-subtitle {
             font-size: 0.82rem;
             color: var(--canopy-text-secondary);
+        }
+
+        .sidebar-media-deck-widget-summary {
+            display: grid;
+            gap: 10px;
+            padding: 12px 14px;
+            margin-top: 4px;
+            border-radius: 16px;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            background: rgba(255, 255, 255, 0.035);
+        }
+
+        .sidebar-media-deck-station-summary {
+            display: grid;
+            gap: 8px;
+            padding: 12px 14px;
+            margin-top: 4px;
+            border-radius: 16px;
+            border: 1px solid rgba(34, 197, 94, 0.18);
+            background:
+                radial-gradient(circle at top left, rgba(34, 197, 94, 0.12), transparent 40%),
+                rgba(255, 255, 255, 0.03);
+        }
+
+        .sidebar-media-deck-station-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .sidebar-media-deck-station-kicker {
+            font-size: 0.68rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--canopy-text-muted);
+        }
+
+        .sidebar-media-deck-station-policy {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(96, 165, 250, 0.24);
+            background: rgba(15, 23, 42, 0.72);
+            color: var(--canopy-text-secondary);
+            font-size: 0.69rem;
+            font-weight: 700;
+        }
+
+        .sidebar-media-deck-station-title {
+            font-size: 0.95rem;
+            font-weight: 800;
+            color: var(--canopy-text-primary);
+            line-height: 1.3;
+        }
+
+        .sidebar-media-deck-station-subtitle {
+            font-size: 0.8rem;
+            line-height: 1.5;
+            color: var(--canopy-text-secondary);
+        }
+
+        .sidebar-media-deck-station-badges {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .sidebar-media-deck-station-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 9px;
+            border-radius: 999px;
+            border: 1px solid rgba(34, 197, 94, 0.18);
+            background: rgba(7, 15, 28, 0.7);
+            color: var(--canopy-text-secondary);
+            font-size: 0.69rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+        }
+
+        .sidebar-media-deck-widget-badges {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .sidebar-media-deck-widget-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 9px;
+            border-radius: 999px;
+            border: 1px solid rgba(129, 140, 248, 0.2);
+            background: rgba(15, 23, 42, 0.7);
+            color: var(--canopy-text-secondary);
+            font-size: 0.69rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+        }
+
+        .sidebar-media-deck-widget-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+            gap: 10px;
+        }
+
+        .sidebar-media-deck-widget-kv {
+            padding: 10px 11px;
+            border-radius: 14px;
+            background: rgba(2, 6, 23, 0.34);
+            border: 1px solid rgba(148, 163, 184, 0.12);
+        }
+
+        .sidebar-media-deck-widget-kv-label {
+            font-size: 0.65rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--canopy-text-muted);
+            margin-bottom: 4px;
+        }
+
+        .sidebar-media-deck-widget-kv-value {
+            font-size: 0.8rem;
+            color: var(--canopy-text-primary);
+            font-weight: 600;
+            line-height: 1.35;
+        }
+
+        .sidebar-media-deck-widget-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 2px;
+        }
+
+        .sidebar-media-deck-widget-stage {
+            width: 100%;
+            min-height: 100%;
+            display: grid;
+            align-items: stretch;
+            gap: 12px;
+        }
+
+        .sidebar-media-deck-widget-frame {
+            width: 100%;
+            min-height: 100%;
+            border: 0;
+            border-radius: 18px;
+            background: linear-gradient(180deg, rgba(10, 16, 29, 0.98), rgba(10, 16, 29, 0.82));
+        }
+
+        .sidebar-media-deck-module-frame {
+            min-height: 520px;
+            box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.08);
+        }
+
+        .sidebar-media-deck-widget-panel {
+            min-height: 100%;
+            padding: 20px;
+            border-radius: 18px;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            background:
+                radial-gradient(circle at top left, rgba(34, 197, 94, 0.14), transparent 35%),
+                linear-gradient(180deg, rgba(10, 16, 29, 0.98), rgba(10, 16, 29, 0.82));
+            display: grid;
+            gap: 14px;
+        }
+
+        .sidebar-media-deck-module-panel {
+            place-items: center;
+            text-align: center;
+            min-height: 240px;
+            background:
+                radial-gradient(circle at top left, rgba(16, 185, 129, 0.14), transparent 35%),
+                linear-gradient(180deg, rgba(10, 16, 29, 0.98), rgba(10, 16, 29, 0.82));
+        }
+
+        .sidebar-media-deck-widget-panel-title {
+            font-size: 1rem;
+            font-weight: 800;
+            color: var(--canopy-text-primary);
+            line-height: 1.25;
+        }
+
+        .sidebar-media-deck-widget-panel-copy {
+            font-size: 0.84rem;
+            line-height: 1.55;
+            color: var(--canopy-text-secondary);
+            white-space: pre-wrap;
         }
 
         .sidebar-media-deck-progress-row {
@@ -1251,10 +1613,18 @@
             min-width: 0;
         }
 
+        .sidebar-media-deck-queue-shell.is-collapsed {
+            padding-bottom: 10px;
+        }
+
+        .sidebar-media-deck-queue-shell.is-collapsed .sidebar-media-deck-queue {
+            display: none;
+        }
+
         .sidebar-media-deck-queue-header {
             display: flex;
             align-items: center;
-            justify-content: space-between;
+            justify-content: flex-start;
             gap: 10px;
         }
 
@@ -1280,6 +1650,17 @@
             scroll-snap-type: x proximity;
             scrollbar-gutter: stable;
             padding: 2px 2px 6px;
+        }
+
+        .sidebar-media-deck-detail.is-collapsed {
+            gap: 8px;
+            padding-bottom: 8px;
+        }
+
+        .sidebar-media-deck-detail.is-collapsed .sidebar-media-deck-subtitle,
+        .sidebar-media-deck-detail.is-collapsed .sidebar-media-deck-station-summary,
+        .sidebar-media-deck-detail.is-collapsed .sidebar-media-deck-widget-summary {
+            display: none !important;
         }
 
         .sidebar-media-deck-item {
@@ -1393,6 +1774,14 @@
             display: block;
         }
 
+        /* Fine-pointer desktops: dimmer stays visual-only so wheel/scroll reaches the channel/feed
+           under the deck. Coarse (touch) keeps default hit-testing so tap-outside still closes. */
+        @media (hover: hover) and (pointer: fine) {
+            .sidebar-media-deck-backdrop.is-visible {
+                pointer-events: none;
+            }
+        }
+
         .canopy-media-deck-source-slot {
             display: flex;
             justify-content: flex-end;
@@ -1402,6 +1791,110 @@
             margin-top: 0.65rem;
             position: relative;
             z-index: 2;
+        }
+
+        /* Deck | Mini launcher should sit in the action row like the other post controls. */
+        .canopy-media-playback-launcher {
+            display: inline-flex;
+            align-items: stretch;
+            flex-wrap: nowrap;
+            min-height: calc(1.5em + 0.5rem + 2px);
+            border-radius: 0.5rem;
+            overflow: hidden;
+            border: 1px solid color-mix(in srgb, var(--canopy-border) 78%, var(--canopy-primary) 22%);
+            background: color-mix(in srgb, var(--canopy-bg-card) 88%, var(--canopy-primary) 12%);
+            color: var(--canopy-text-secondary);
+            box-shadow: none;
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: rgba(255, 255, 255, 0.06);
+            transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+        }
+
+        .canopy-media-playback-launcher:hover {
+            border-color: color-mix(in srgb, var(--canopy-primary) 38%, var(--canopy-border) 62%);
+            background: color-mix(in srgb, var(--canopy-bg-card) 82%, var(--canopy-primary) 18%);
+            color: var(--canopy-text-primary);
+        }
+
+        .canopy-media-playback-launcher:focus-within {
+            outline: 2px solid color-mix(in srgb, var(--canopy-primary) 52%, transparent 48%);
+            outline-offset: 2px;
+        }
+
+        .canopy-media-playback-launcher.is-in-source-slot {
+            margin-left: auto;
+        }
+
+        .canopy-media-playback-seg {
+            flex: 1 1 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.3rem;
+            min-width: 0;
+            min-height: calc(1.5em + 0.5rem);
+            padding: 0.25rem 0.5rem;
+            border: none;
+            margin: 0;
+            background: transparent;
+            color: inherit;
+            font-size: 0.74rem;
+            font-weight: 600;
+            letter-spacing: 0;
+            text-transform: none;
+            transition: background 0.2s ease, color 0.2s ease;
+        }
+
+        .canopy-media-playback-seg-divider {
+            width: 1px;
+            align-self: stretch;
+            flex-shrink: 0;
+            background: color-mix(in srgb, var(--canopy-border) 84%, transparent 16%);
+        }
+
+        .canopy-media-playback-seg--deck:hover,
+        .canopy-media-playback-seg--mini:hover {
+            background: color-mix(in srgb, var(--canopy-bg-tertiary) 74%, var(--canopy-primary) 26%);
+        }
+
+        .canopy-media-playback-seg--deck.is-active {
+            background: color-mix(in srgb, var(--canopy-primary) 20%, var(--canopy-bg-card) 80%);
+            color: var(--canopy-text-primary);
+        }
+
+        .canopy-media-playback-seg--mini.is-active {
+            background: color-mix(in srgb, var(--canopy-primary) 16%, var(--canopy-bg-card) 84%);
+            color: var(--canopy-text-primary);
+        }
+
+        .canopy-media-playback-launcher--deck-only .canopy-media-playback-seg--deck {
+            flex: 1 1 auto;
+        }
+
+        .canopy-media-playback-seg i {
+            font-size: 0.85rem;
+            opacity: 0.85;
+        }
+
+        .canopy-media-playback-launcher .canopy-media-deck-launcher-count {
+            min-width: 1.2rem;
+            height: 1.2rem;
+            padding: 0 0.32rem;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: color-mix(in srgb, var(--canopy-border) 70%, var(--canopy-bg-card) 30%);
+            color: inherit;
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0;
+            text-transform: none;
+        }
+
+        .canopy-media-playback-seg--deck.is-active .canopy-media-deck-launcher-count,
+        .canopy-media-playback-seg--mini.is-active .canopy-media-deck-launcher-count {
+            background: color-mix(in srgb, var(--canopy-primary) 24%, var(--canopy-bg-card) 76%);
         }
 
         [data-post-actions],
@@ -1457,41 +1950,41 @@
         .canopy-media-deck-launcher {
             display: inline-flex;
             align-items: center;
-            gap: 8px;
-            padding: 7px 11px;
-            border-radius: 10px;
+            gap: 0.35rem;
+            min-height: calc(1.5em + 0.5rem + 2px);
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.5rem;
             touch-action: manipulation;
-            -webkit-tap-highlight-color: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(89, 222, 137, 0.28);
-            background: rgba(9, 17, 32, 0.66);
-            color: #eefbf4;
-            box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
-            font-size: 0.72rem;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-            transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+            -webkit-tap-highlight-color: rgba(255, 255, 255, 0.06);
+            border: 1px solid color-mix(in srgb, var(--canopy-border) 78%, var(--canopy-primary) 22%);
+            background: color-mix(in srgb, var(--canopy-bg-card) 88%, var(--canopy-primary) 12%);
+            color: var(--canopy-text-secondary);
+            box-shadow: none;
+            font-size: 0.74rem;
+            font-weight: 600;
+            letter-spacing: 0;
+            transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
         }
 
         .canopy-media-deck-launcher:hover {
-            transform: translateY(-1px);
-            background: rgba(13, 28, 48, 0.92);
-            border-color: rgba(89, 222, 137, 0.48);
-            box-shadow: 0 16px 30px rgba(0, 0, 0, 0.28);
+            background: color-mix(in srgb, var(--canopy-bg-card) 82%, var(--canopy-primary) 18%);
+            border-color: color-mix(in srgb, var(--canopy-primary) 38%, var(--canopy-border) 62%);
+            color: var(--canopy-text-primary);
         }
 
         .canopy-media-deck-launcher:focus-visible {
-            outline: 2px solid rgba(89, 222, 137, 0.7);
+            outline: 2px solid color-mix(in srgb, var(--canopy-primary) 52%, transparent 48%);
             outline-offset: 2px;
         }
 
         .canopy-media-deck-launcher.is-active {
-            background: linear-gradient(135deg, rgba(26, 184, 108, 0.92), rgba(14, 32, 56, 0.94));
-            border-color: rgba(161, 247, 198, 0.58);
-            color: #ffffff;
+            background: color-mix(in srgb, var(--canopy-primary) 20%, var(--canopy-bg-card) 80%);
+            border-color: color-mix(in srgb, var(--canopy-primary) 44%, var(--canopy-border) 56%);
+            color: var(--canopy-text-primary);
         }
 
         .canopy-media-deck-launcher i {
-            font-size: 0.9rem;
+            font-size: 0.85rem;
         }
 
         .canopy-media-deck-launcher-label {
@@ -1499,17 +1992,17 @@
         }
 
         .canopy-media-deck-launcher-count {
-            min-width: 1.35rem;
-            height: 1.35rem;
-            padding: 0 0.38rem;
+            min-width: 1.2rem;
+            height: 1.2rem;
+            padding: 0 0.32rem;
             border-radius: 999px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            background: rgba(255, 255, 255, 0.14);
+            background: color-mix(in srgb, var(--canopy-border) 70%, var(--canopy-bg-card) 30%);
             color: inherit;
             font-size: 0.68rem;
-            font-weight: 800;
+            font-weight: 700;
         }
 
         .canopy-media-deck-launcher.is-in-source-slot {
@@ -1534,6 +2027,14 @@
                 max-height: min(86vh, 860px);
             }
 
+            .sidebar-media-deck.is-visible {
+                max-height: min(86vh, 860px);
+            }
+
+            .sidebar-media-deck-shell {
+                max-height: min(86vh, 860px);
+            }
+
             .sidebar-media-deck-item {
                 min-width: 130px;
                 width: 130px;
@@ -1542,8 +2043,14 @@
 
             .canopy-media-deck-launcher,
             .canopy-media-mini-launcher {
-                padding: 7px 10px;
-                gap: 6px;
+                padding: 0.25rem 0.45rem;
+                gap: 0.3rem;
+            }
+
+            .canopy-media-playback-seg {
+                padding: 0.25rem 0.45rem;
+                gap: 0.3rem;
+                font-size: 0.68rem;
             }
         }
 
@@ -1559,15 +2066,20 @@
                 bottom: 0;
                 width: 100%;
                 max-height: 100dvh;
+                height: 100dvh;
             }
 
             .sidebar-media-deck-shell {
                 position: relative;
                 border-radius: 0;
-                height: 100dvh;
+                height: 100%;
                 max-height: 100dvh;
-                overflow-y: auto;
-                overscroll-behavior-y: contain;
+                flex: 1 1 auto;
+                min-height: 0;
+                overflow: hidden;
+            }
+
+            .sidebar-media-deck-scroll {
                 -webkit-overflow-scrolling: touch;
             }
 
@@ -1586,9 +2098,14 @@
             }
 
             .sidebar-media-deck-stage-shell,
-            .sidebar-media-deck-body,
+            .sidebar-media-deck-detail,
             .sidebar-media-deck-header,
             .sidebar-media-deck-queue-shell {
+                padding-left: 14px;
+                padding-right: 14px;
+            }
+
+            .sidebar-media-deck-footer {
                 padding-left: 14px;
                 padding-right: 14px;
             }
@@ -1597,40 +2114,88 @@
                 position: sticky;
                 top: 0;
                 z-index: 5;
-                padding-top: calc(env(safe-area-inset-top) + 20px);
-                padding-bottom: 10px;
+                padding-top: calc(env(safe-area-inset-top) + 12px);
+                padding-bottom: 8px;
                 background:
                     linear-gradient(180deg, rgba(10, 16, 29, 0.98), rgba(10, 16, 29, 0.92));
                 backdrop-filter: blur(20px) saturate(130%);
+                gap: 8px;
+                align-items: center;
+                flex-wrap: nowrap;
             }
 
             .sidebar-media-deck-source {
-                white-space: normal;
-                overflow: visible;
-                text-overflow: unset;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                font-size: 0.7rem;
             }
 
             .sidebar-media-deck-action-btn {
                 width: auto;
-                min-width: 42px;
-                min-height: 40px;
-                padding: 0 12px;
+                min-width: 38px;
+                min-height: 38px;
+                padding: 0 10px;
                 border-radius: 12px;
                 gap: 6px;
             }
 
             .sidebar-media-deck-action-label {
-                display: inline;
+                display: none;
             }
 
             .sidebar-media-deck-stage {
-                max-height: min(34dvh, 280px);
+                max-height: min(42dvh, 320px);
+                min-height: 180px;
                 border-radius: 18px;
             }
 
+            .sidebar-media-deck.is-module-active .sidebar-media-deck-scroll {
+                display: flex;
+                flex-direction: column;
+            }
+
+            .sidebar-media-deck.is-module-active .sidebar-media-deck-stage-shell {
+                flex: 1 1 auto;
+                min-height: clamp(220px, 40dvh, 520px);
+                display: flex;
+                flex-direction: column;
+            }
+
+            .sidebar-media-deck.is-module-active .sidebar-media-deck-stage {
+                max-height: none;
+                flex: 1 1 auto;
+                min-height: clamp(200px, 36dvh, 480px);
+                display: flex;
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .sidebar-media-deck.is-module-active .sidebar-media-deck-widget-stage {
+                flex: 1 1 auto;
+                min-height: clamp(180px, 34dvh, 440px);
+                display: flex;
+                flex-direction: column;
+                gap: 0;
+            }
+
+            .sidebar-media-deck.is-module-active .sidebar-media-deck-module-frame {
+                flex: 1 1 auto;
+                align-self: stretch;
+                width: 100% !important;
+                min-width: 0;
+                min-height: clamp(200px, 40dvh, 520px) !important;
+                height: auto;
+                object-fit: fill;
+            }
+
+            .sidebar-media-deck.is-module-active .sidebar-media-deck-stage iframe.sidebar-media-deck-module-frame {
+                object-fit: fill !important;
+            }
+
             .sidebar-media-deck-stage-shell {
-                padding-top: 10px;
-                padding-bottom: 8px;
+                padding-top: 8px;
+                padding-bottom: 6px;
             }
 
             .sidebar-media-deck-visual {
@@ -1647,19 +2212,21 @@
             }
 
             .sidebar-media-deck-queue-shell {
-                padding-bottom: 10px;
+                padding-bottom: 8px;
             }
 
-            .sidebar-media-deck-body {
-                position: sticky;
-                bottom: 0;
+            .sidebar-media-deck-footer {
+                padding-top: 10px;
+                padding-bottom: calc(env(safe-area-inset-bottom) + 14px);
+                gap: 8px;
                 z-index: 5;
-                padding: 12px 14px calc(env(safe-area-inset-bottom) + 14px);
-                gap: 10px;
                 background:
-                    linear-gradient(180deg, rgba(9, 15, 30, 0.72), rgba(9, 15, 30, 0.98) 24%);
+                    linear-gradient(180deg, rgba(9, 15, 30, 0.82), rgba(9, 15, 30, 0.98) 40%);
                 backdrop-filter: blur(18px) saturate(125%);
-                border-top: 1px solid rgba(255, 255, 255, 0.08);
+            }
+
+            .sidebar-media-deck-detail {
+                padding-bottom: 8px;
             }
 
             .sidebar-media-deck-controls {
@@ -1704,15 +2271,54 @@
             }
 
             .sidebar-media-deck-shell {
-                grid-template-rows: auto auto auto auto;
                 max-height: calc(100vh - 20px);
-                overflow-y: auto;
-                overscroll-behavior-y: contain;
             }
 
             .sidebar-media-deck-stage {
                 min-height: 180px;
                 max-height: 42vh;
+            }
+
+            .sidebar-media-deck.is-module-active .sidebar-media-deck-scroll {
+                display: flex;
+                flex-direction: column;
+            }
+
+            .sidebar-media-deck.is-module-active .sidebar-media-deck-stage-shell {
+                flex: 1 1 auto;
+                min-height: clamp(180px, 42vh, 480px);
+                display: flex;
+                flex-direction: column;
+            }
+
+            .sidebar-media-deck.is-module-active .sidebar-media-deck-stage {
+                flex: 1 1 auto;
+                min-height: clamp(160px, 38vh, 420px);
+                display: flex;
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .sidebar-media-deck.is-module-active .sidebar-media-deck-widget-stage {
+                flex: 1 1 auto;
+                min-height: clamp(140px, 36vh, 400px);
+                display: flex;
+                flex-direction: column;
+                gap: 0;
+            }
+
+            .sidebar-media-deck.is-module-active .sidebar-media-deck-module-frame {
+                flex: 1 1 auto;
+                align-self: stretch;
+                width: 100% !important;
+                min-width: 0;
+                min-height: clamp(160px, 42vh, 480px) !important;
+                height: auto;
+                object-fit: fill;
+            }
+
+            .sidebar-media-deck.is-module-active .sidebar-media-deck-stage iframe.sidebar-media-deck-module-frame {
+                object-fit: fill !important;
             }
 
             .sidebar-media-deck-item {
@@ -4109,6 +4715,33 @@
             box-shadow: 0 0 0 0.18rem rgba(14, 165, 233, 0.2);
         }
 
+        .bookmark-action-btn {
+            border-color: rgba(250, 204, 21, 0.32);
+            color: #fde68a;
+            background: linear-gradient(145deg, rgba(97, 76, 0, 0.24), rgba(120, 53, 15, 0.14));
+            backdrop-filter: blur(10px);
+        }
+
+        .bookmark-action-btn:hover,
+        .bookmark-action-btn:focus {
+            border-color: rgba(250, 204, 21, 0.68);
+            color: #fff6d8;
+            box-shadow: 0 0 0 0.18rem rgba(250, 204, 21, 0.16);
+        }
+
+        .bookmark-action-btn.is-saved {
+            border-color: rgba(250, 204, 21, 0.82);
+            color: #1f2937;
+            background: linear-gradient(135deg, rgba(250, 204, 21, 0.96), rgba(245, 158, 11, 0.9));
+            box-shadow: 0 10px 24px rgba(250, 204, 21, 0.2);
+        }
+
+        .bookmark-action-btn.is-saved:hover,
+        .bookmark-action-btn.is-saved:focus {
+            color: #111827;
+            border-color: rgba(251, 191, 36, 0.95);
+        }
+
         #contentContextModal .modal-dialog {
             max-width: min(1220px, 96vw);
         }
@@ -6474,6 +7107,195 @@
                 font-size: 0.88rem;
             }
         }
+
+        .canopy-source-layout-shell {
+            display: grid;
+            gap: 1rem;
+            margin-top: 0.35rem;
+            padding: 1rem 1.1rem 1.05rem;
+            border-radius: 16px;
+            border: 1px solid var(--canopy-border, rgba(51, 65, 85, 0.65));
+            background: var(--canopy-bg-secondary, rgba(23, 23, 40, 0.55));
+            box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+        }
+
+        .message-content > .canopy-source-layout-shell,
+        .post-content > .canopy-source-layout-shell {
+            max-width: min(100%, 920px);
+        }
+
+        .canopy-source-layout-top {
+            display: grid;
+            grid-template-columns: minmax(0, 1.8fr) minmax(260px, 0.95fr);
+            gap: 0.95rem;
+            align-items: start;
+        }
+
+        /* No aside: use full width for main column (avoid empty grid track). */
+        .canopy-source-layout-top:not(:has(> .canopy-source-layout-side)) {
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        .canopy-source-layout-main,
+        .canopy-source-layout-side,
+        .canopy-source-layout-strip,
+        .canopy-source-layout-below {
+            display: grid;
+            gap: 0.85rem;
+            min-width: 0;
+        }
+
+        .canopy-source-layout-hero,
+        .canopy-source-layout-lede,
+        .canopy-source-layout-side,
+        .canopy-source-layout-strip,
+        .canopy-source-layout-below,
+        .canopy-source-layout-actions-wrap {
+            min-width: 0;
+        }
+
+        .canopy-source-layout-hero > *,
+        .canopy-source-layout-side > *,
+        .canopy-source-layout-strip > *,
+        .canopy-source-layout-below > * {
+            min-width: 0;
+        }
+
+        .canopy-source-layout-strip {
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        }
+
+        .canopy-source-layout-actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.55rem;
+            width: 100%;
+        }
+
+        .canopy-source-layout-actions .btn {
+            border-radius: 999px;
+            min-height: 2rem;
+        }
+
+        .canopy-source-layout-hero-label {
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--canopy-text-muted, #64748b);
+            margin-bottom: 0.55rem;
+            padding-bottom: 0.45rem;
+            border-bottom: 1px solid var(--canopy-border, rgba(51, 65, 85, 0.45));
+        }
+
+        .canopy-source-layout-slot-label {
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: var(--canopy-text-secondary, #cbd5e1);
+            margin-bottom: 0.45rem;
+        }
+
+        .canopy-source-layout-supporting-block {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        .canopy-source-layout-actions.canopy-source-layout-actions--deck-only {
+            justify-content: flex-end;
+        }
+
+        .canopy-source-layout-deck-launch {
+            margin-inline-start: auto;
+            border-radius: 10px !important;
+            font-weight: 600 !important;
+        }
+
+        .canopy-source-layout-actions:has(.btn:not(.canopy-source-layout-deck-launch)) .canopy-source-layout-deck-launch {
+            margin-inline-start: auto;
+        }
+
+        /* Hero: full column width; breakout of default 520px media-grid cap */
+        .canopy-source-layout-hero .media-grid {
+            max-width: 100% !important;
+            width: 100%;
+            border-radius: 14px;
+        }
+
+        .canopy-source-layout-hero .media-grid[data-count="1"] .mg-cell {
+            min-height: min(42vw, 280px);
+            max-height: min(52vh, 440px) !important;
+        }
+
+        .canopy-source-layout-hero .media-grid[data-count="1"] .mg-cell img {
+            min-height: min(42vw, 280px);
+        }
+
+        .canopy-source-layout-lede {
+            color: var(--canopy-text-primary, #f8fafc);
+            font-size: 1.05rem;
+            line-height: 1.58;
+        }
+
+        .canopy-source-layout-lede .mentionable a,
+        .canopy-source-layout-lede a {
+            font-weight: 600;
+        }
+
+        .canopy-source-layout-side {
+            align-self: stretch;
+        }
+
+        .canopy-source-layout-side:not(:empty) {
+            padding: 0.65rem 0.75rem;
+            border-radius: 12px;
+            background: var(--canopy-bg-tertiary, #1e1e32);
+            border: 1px solid var(--canopy-border, rgba(51, 65, 85, 0.45));
+        }
+
+        .canopy-source-layout-strip:not(:empty) {
+            padding: 0.5rem 0;
+            overflow-x: auto;
+            overscroll-behavior-x: contain;
+            scrollbar-width: thin;
+        }
+
+        .canopy-source-layout-below:not(:empty) {
+            padding-top: 0.35rem;
+            border-top: 1px solid var(--canopy-border, rgba(51, 65, 85, 0.35));
+        }
+
+        .canopy-source-layout-actions-wrap:not(:empty) {
+            margin-top: 0.15rem;
+        }
+
+        .canopy-source-layout-hero .stream-card,
+        .canopy-source-layout-hero .attachment-item,
+        .canopy-source-layout-hero .dm-attachment,
+        .canopy-source-layout-hero .embed-preview,
+        .canopy-source-layout-hero .provider-card-embed {
+            margin-bottom: 0 !important;
+        }
+
+        .canopy-source-layout-side .stream-card,
+        .canopy-source-layout-side .attachment-item,
+        .canopy-source-layout-side .dm-attachment {
+            margin-bottom: 0 !important;
+        }
+
+        .canopy-source-layout-strip .stream-card,
+        .canopy-source-layout-strip .attachment-item,
+        .canopy-source-layout-strip .dm-attachment {
+            margin-bottom: 0 !important;
+            height: 100%;
+        }
+
+        @media (max-width: 1024px) {
+            .canopy-source-layout-top {
+                grid-template-columns: minmax(0, 1fr);
+            }
+        }
     </style>
     
     {% block extra_css %}{% endblock %}
@@ -6483,7 +7305,7 @@
         <!-- Navigation -->
         <nav class="navbar navbar-expand-lg navbar-dark">
             <div class="container-fluid">
-                <a class="navbar-brand" href="/">
+                <a class="navbar-brand" href="/" data-canopy-stop-active-media-nav="1">
                     <img src="{{ url_for('static', filename='icons/canopy-logo.png') }}" alt="Canopy" class="brand-logo">
                     <span class="brand-text">Canopy</span>
                 </a>
@@ -6625,6 +7447,10 @@
                            href="{{ url_for('ui.tasks_page') }}" data-title="Tasks">
                             <i class="bi bi-check2-square"></i> <span>Tasks</span>
                         </a>
+                        <a class="nav-link {% if request.endpoint == 'ui.bookmarks_page' %}active{% endif %}"
+                           href="{{ url_for('ui.bookmarks_page') }}" data-title="Bookmarks">
+                            <i class="bi bi-bookmarks"></i> <span>Bookmarks</span>
+                        </a>
                         <a class="nav-link {% if request.endpoint == 'ui.api_keys' %}active{% endif %}" 
                            href="{{ url_for('ui.api_keys') }}" data-title="API Keys">
                             <i class="bi bi-key"></i> <span>API Keys</span>
@@ -6672,7 +7498,7 @@
                                     <div class="sidebar-media-mini-subtitle" id="sidebar-media-mini-subtitle">Media is docked while off-screen</div>
                                 </div>
                                 <div class="sidebar-media-mini-actions">
-                                    <button type="button" class="sidebar-media-mini-expand" id="sidebar-media-mini-expand" aria-label="Open media deck">
+                                    <button type="button" class="sidebar-media-mini-expand" id="sidebar-media-mini-expand" aria-label="Open Canopy deck">
                                         <i class="bi bi-arrows-angle-expand"></i>
                                     </button>
                                     <button type="button" class="sidebar-media-mini-pin" id="sidebar-media-mini-pin" aria-label="Move mini player">
@@ -6869,14 +7695,14 @@
                         <div class="sidebar-media-deck-chip-row">
                             <span class="sidebar-media-deck-chip">
                                 <i class="bi bi-broadcast"></i>
-                                <span id="sidebar-media-deck-chip-label">Media Deck</span>
+                                <span id="sidebar-media-deck-chip-label">Canopy Deck · 1 item</span>
                             </span>
-                            <span class="sidebar-media-deck-chip muted" id="sidebar-media-deck-count-chip">1 item</span>
+                            <span class="sidebar-media-deck-chip muted" id="sidebar-media-deck-count-chip" hidden aria-hidden="true"></span>
                         </div>
                         <div class="sidebar-media-deck-source" id="sidebar-media-deck-source">Now playing from Canopy</div>
                     </div>
                     <div class="sidebar-media-deck-actions">
-                        <button type="button" class="sidebar-media-deck-action-btn" id="sidebar-media-deck-minimize" aria-label="Minimize media deck">
+                        <button type="button" class="sidebar-media-deck-action-btn" id="sidebar-media-deck-minimize" aria-label="Minimize Canopy deck">
                             <i class="bi bi-dash-lg"></i>
                             <span class="sidebar-media-deck-action-label">Minimize</span>
                         </button>
@@ -6884,12 +7710,13 @@
                             <i class="bi bi-pip"></i>
                             <span class="sidebar-media-deck-action-label">Mini player</span>
                         </button>
-                        <button type="button" class="sidebar-media-deck-action-btn" id="sidebar-media-deck-close" aria-label="Close media deck">
+                        <button type="button" class="sidebar-media-deck-action-btn" id="sidebar-media-deck-close" aria-label="Close Canopy deck">
                             <i class="bi bi-x-lg"></i>
                             <span class="sidebar-media-deck-action-label">Close</span>
                         </button>
                     </div>
                 </div>
+                <div class="sidebar-media-deck-scroll">
                 <div class="sidebar-media-deck-stage-shell">
                     <div id="sidebar-media-deck-stage" class="sidebar-media-deck-stage is-empty" aria-label="Expanded media stage">
                         <div id="sidebar-media-deck-visual" class="sidebar-media-deck-visual">
@@ -6907,31 +7734,56 @@
                 </div>
                 <div class="sidebar-media-deck-queue-shell">
                     <div class="sidebar-media-deck-queue-header">
-                        <span class="sidebar-media-deck-queue-title">More From This Source</span>
-                        <span class="sidebar-media-deck-queue-count" id="sidebar-media-deck-queue-count">0 items</span>
+                        <span class="sidebar-media-deck-queue-title">From this source</span>
+                        <span class="sidebar-media-deck-queue-count" id="sidebar-media-deck-queue-count" hidden aria-hidden="true"></span>
+                        <button type="button" class="sidebar-media-deck-inline-toggle" id="sidebar-media-deck-queue-toggle" aria-expanded="true">
+                            <i class="bi bi-chevron-up"></i>
+                            <span>Collapse list</span>
+                        </button>
                     </div>
                     <div id="sidebar-media-deck-queue" class="sidebar-media-deck-queue">
-                        <div class="sidebar-media-deck-empty">Multiple videos or clips in the same post/message will appear here.</div>
+                        <div class="sidebar-media-deck-empty">Media, maps, charts, streams, and other safe widgets from the same post/message will appear here.</div>
                     </div>
                 </div>
-                <div class="sidebar-media-deck-body">
+                <div class="sidebar-media-deck-detail">
                     <div class="sidebar-media-deck-meta">
                         <div class="sidebar-media-deck-meta-top">
                             <span class="sidebar-media-deck-provider" id="sidebar-media-deck-provider">
                                 <i class="bi bi-play-circle"></i>
-                                <span id="sidebar-media-deck-provider-label">Media</span>
+                                <span id="sidebar-media-deck-provider-label">Deck item</span>
                             </span>
-                            <span class="sidebar-media-deck-count" id="sidebar-media-deck-count">1 playable item</span>
+                            <span class="sidebar-media-deck-count" id="sidebar-media-deck-count">1 item</span>
+                            <button type="button" class="sidebar-media-deck-inline-toggle" id="sidebar-media-deck-detail-toggle" aria-expanded="true">
+                                <i class="bi bi-layout-text-window-reverse"></i>
+                                <span>Hide details</span>
+                            </button>
                         </div>
-                        <div class="sidebar-media-deck-title" id="sidebar-media-deck-title">Now Playing</div>
-                        <div class="sidebar-media-deck-subtitle" id="sidebar-media-deck-subtitle">Use the deck to stay with media while you keep working.</div>
+                        <div class="sidebar-media-deck-title" id="sidebar-media-deck-title">Canopy Deck</div>
+                        <div class="sidebar-media-deck-subtitle" id="sidebar-media-deck-subtitle">Stay with media, maps, streams, telemetry, and related widgets while you keep working.</div>
                     </div>
-                    <div class="sidebar-media-deck-progress-row">
+                    <div class="sidebar-media-deck-station-summary" id="sidebar-media-deck-station-summary" hidden>
+                        <div class="sidebar-media-deck-station-head">
+                            <span class="sidebar-media-deck-station-kicker">Station Surface</span>
+                            <span class="sidebar-media-deck-station-policy" id="sidebar-media-deck-station-policy">Bounded actions</span>
+                        </div>
+                        <div class="sidebar-media-deck-station-title" id="sidebar-media-deck-station-title">Source-bound surface</div>
+                        <div class="sidebar-media-deck-station-subtitle" id="sidebar-media-deck-station-subtitle">Typed operational context stays attached to the source while actions remain bounded.</div>
+                        <div class="sidebar-media-deck-station-badges" id="sidebar-media-deck-station-badges"></div>
+                    </div>
+                    <div class="sidebar-media-deck-widget-summary" id="sidebar-media-deck-widget-summary" hidden>
+                        <div class="sidebar-media-deck-widget-badges" id="sidebar-media-deck-widget-badges"></div>
+                        <div class="sidebar-media-deck-widget-details" id="sidebar-media-deck-widget-details"></div>
+                        <div class="sidebar-media-deck-widget-actions" id="sidebar-media-deck-widget-actions"></div>
+                    </div>
+                </div>
+                </div>
+                <div class="sidebar-media-deck-footer">
+                    <div class="sidebar-media-deck-progress-row" id="sidebar-media-deck-progress-row">
                         <span class="sidebar-media-deck-time" id="sidebar-media-deck-current-time">--:--</span>
                         <input type="range" class="sidebar-media-deck-seek" id="sidebar-media-deck-seek" min="0" max="1000" value="0" step="1" disabled aria-label="Seek media">
                         <span class="sidebar-media-deck-time end" id="sidebar-media-deck-duration">--:--</span>
                     </div>
-                    <div class="sidebar-media-deck-controls">
+                    <div class="sidebar-media-deck-controls" id="sidebar-media-deck-controls">
                         <button type="button" class="sidebar-media-deck-btn" id="sidebar-media-deck-prev">
                             <i class="bi bi-skip-backward-fill"></i><span>Prev</span>
                         </button>
@@ -7252,6 +8104,82 @@
             </div>
         </div>
     </div>
+
+    <script>
+        (function () {
+            function setBookmarkButtonState(button, isBookmarked) {
+                if (!button) return;
+                const active = Boolean(isBookmarked);
+                button.dataset.bookmarked = active ? 'true' : 'false';
+                button.classList.toggle('is-saved', active);
+                if (button.classList.contains('dropdown-item')) {
+                    button.classList.toggle('active', active);
+                }
+                const icon = button.querySelector('i');
+                if (icon) {
+                    icon.className = active ? 'bi bi-bookmark-fill' : 'bi bi-bookmark';
+                }
+                const label = button.querySelector('[data-bookmark-label]');
+                if (label) {
+                    label.textContent = active ? 'Saved' : 'Save';
+                }
+                const title = active ? 'Remove bookmark' : 'Save bookmark';
+                button.setAttribute('title', title);
+                button.setAttribute('aria-label', title);
+            }
+
+            async function toggleBookmark(button) {
+                if (!button || button.dataset.busy === 'true') return;
+                const sourceType = String(button.dataset.sourceType || '').trim();
+                const sourceId = String(button.dataset.sourceId || '').trim();
+                if (!sourceType || !sourceId) return;
+                button.dataset.busy = 'true';
+                button.disabled = true;
+                try {
+                    const result = await apiCall('/ajax/bookmarks/toggle', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            source_type: sourceType,
+                            source_id: sourceId,
+                        }),
+                    });
+                    const nextState = Boolean(result && result.bookmarked);
+                    document.querySelectorAll('[data-bookmark-button="1"]').forEach((candidate) => {
+                        if (
+                            String(candidate.dataset.sourceType || '').trim() === sourceType &&
+                            String(candidate.dataset.sourceId || '').trim() === sourceId
+                        ) {
+                            setBookmarkButtonState(candidate, nextState);
+                        }
+                    });
+                    showAlert(nextState ? 'Saved to bookmarks' : 'Removed from bookmarks', 'success');
+                } catch (error) {
+                    showAlert((error && error.error) || 'Failed to update bookmark', 'danger');
+                } finally {
+                    button.dataset.busy = 'false';
+                    button.disabled = false;
+                }
+            }
+
+            window.setCanopyBookmarkButtonState = setBookmarkButtonState;
+            window.toggleCanopyBookmark = toggleBookmark;
+
+            document.addEventListener('click', function (event) {
+                const button = event.target && event.target.closest
+                    ? event.target.closest('[data-bookmark-button="1"]')
+                    : null;
+                if (!button) return;
+                event.preventDefault();
+                toggleBookmark(button);
+            });
+
+            document.addEventListener('DOMContentLoaded', function () {
+                document.querySelectorAll('[data-bookmark-button="1"]').forEach((button) => {
+                    setBookmarkButtonState(button, button.dataset.bookmarked === 'true');
+                });
+            });
+        })();
+    </script>
     
     {% block extra_js %}{% endblock %}
 </body>

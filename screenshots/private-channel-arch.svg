@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="920" viewBox="0 0 1500 920" role="img" aria-labelledby="title desc">
+  <title id="title">Private architecture collaboration in Canopy</title>
+  <desc id="desc">A structured architecture diagram showing people and agents feeding into a private Canopy workspace, with policy controls, local data, and optional peer mesh sync.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1419"/>
+      <stop offset="100%" stop-color="#162028"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a242d"/>
+      <stop offset="100%" stop-color="#202d37"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7aa9c2"/>
+      <stop offset="100%" stop-color="#6bb7a8"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#000000" flood-opacity="0.22"/>
+    </filter>
+    <style>
+      .title { font: 700 44px Arial, sans-serif; fill: #f4f8fb; }
+      .subtitle { font: 400 23px Arial, sans-serif; fill: #b9c7d2; }
+      .heading { font: 700 25px Arial, sans-serif; fill: #eef5fa; }
+      .label { font: 700 21px Arial, sans-serif; fill: #eef5fa; }
+      .body { font: 400 19px Arial, sans-serif; fill: #d7e2ea; }
+      .small { font: 400 18px Arial, sans-serif; fill: #c4d1da; }
+      .node { fill: url(#panel); stroke: #7697aa; stroke-width: 2.2; rx: 26; }
+      .soft { fill: #18222b; stroke: #5f7d90; stroke-width: 2; rx: 22; }
+      .chip { fill: #21303a; stroke: #7393a7; stroke-width: 1.6; rx: 16; }
+      .line { stroke: url(#accent); stroke-width: 4; fill: none; stroke-linecap: round; }
+      .dash { stroke: #80b1b4; stroke-width: 3; fill: none; stroke-dasharray: 12 10; stroke-linecap: round; }
+      .dot { fill: #78b0b2; }
+    </style>
+  </defs>
+
+  <rect width="1500" height="920" fill="url(#bg)"/>
+
+  <text x="90" y="96" class="title">Private architecture collaboration</text>
+  <text x="90" y="138" class="subtitle">Humans, local agents, rich sources, and policy controls stay inside one Canopy workspace.</text>
+
+  <rect x="80" y="205" width="285" height="162" class="node" filter="url(#shadow)"/>
+  <text x="112" y="252" class="label">Architect laptop</text>
+  <text x="112" y="294" class="body">Channel discussion</text>
+  <text x="112" y="326" class="body">Module review</text>
+  <text x="112" y="358" class="body">Deck and source layouts</text>
+
+  <rect x="80" y="418" width="285" height="162" class="node" filter="url(#shadow)"/>
+  <text x="112" y="465" class="label">Reviewer tablet</text>
+  <text x="112" y="507" class="body">Inline comments</text>
+  <text x="112" y="539" class="body">Approval or rejection</text>
+  <text x="112" y="571" class="body">Decision signals</text>
+
+  <rect x="80" y="631" width="285" height="162" class="node" filter="url(#shadow)"/>
+  <text x="112" y="678" class="label">Local agent runtime</text>
+  <text x="112" y="720" class="body">Mentions and inbox</text>
+  <text x="112" y="752" class="body">REST or MCP actions</text>
+  <text x="112" y="784" class="body">Structured work objects</text>
+
+  <rect x="450" y="178" width="620" height="470" class="node" filter="url(#shadow)"/>
+  <text x="495" y="234" class="heading">Canopy workspace</text>
+  <text x="495" y="274" class="subtitle" style="font-size:21px;">Private channel, shared context, and provenance-aware publishing</text>
+
+  <rect x="500" y="332" width="240" height="94" class="chip"/>
+  <text x="548" y="388" class="label" style="font-size:20px;">#studio-private</text>
+
+  <rect x="780" y="332" width="240" height="94" class="chip"/>
+  <text x="826" y="388" class="label" style="font-size:20px;">Team mention builder</text>
+
+  <rect x="500" y="460" width="240" height="94" class="chip"/>
+  <text x="558" y="516" class="label" style="font-size:20px;">Canopy Modules</text>
+
+  <rect x="780" y="460" width="240" height="94" class="chip"/>
+  <text x="852" y="516" class="label" style="font-size:20px;">Deck and Mini</text>
+
+  <rect x="500" y="588" width="240" height="94" class="chip"/>
+  <text x="570" y="644" class="label" style="font-size:20px;">Tasks and signals</text>
+
+  <rect x="780" y="588" width="240" height="94" class="chip"/>
+  <text x="834" y="644" class="label" style="font-size:20px;">Reposts and variants</text>
+
+  <rect x="1140" y="206" width="280" height="186" class="soft" filter="url(#shadow)"/>
+  <text x="1175" y="256" class="label">Policy and identity</text>
+  <text x="1175" y="302" class="body">Scoped API keys</text>
+  <text x="1175" y="334" class="body">Curated channel controls</text>
+  <text x="1175" y="366" class="body">Visibility-aware access</text>
+
+  <rect x="1140" y="438" width="280" height="186" class="soft" filter="url(#shadow)"/>
+  <text x="1175" y="488" class="label">Local data plane</text>
+  <text x="1175" y="534" class="body">Messages, files, profiles</text>
+  <text x="1175" y="566" class="body">SQLite and attachment store</text>
+  <text x="1175" y="598" class="body">Bookmarks stay private</text>
+
+  <rect x="450" y="722" width="970" height="116" class="soft" filter="url(#shadow)"/>
+  <text x="492" y="772" class="label">Optional peer mesh sync</text>
+  <text x="492" y="812" class="small">Encrypted WebSocket links, invite-based trust, and relay-capable remote connections extend the workspace without turning it into a cloud-first dependency.</text>
+
+  <path d="M365 286 C405 286, 420 300, 450 332" class="line"/>
+  <path d="M365 499 C405 499, 420 490, 450 507" class="line"/>
+  <path d="M365 712 C405 712, 420 636, 450 600" class="line"/>
+
+  <path d="M1070 380 C1105 380, 1110 332, 1140 332" class="dash"/>
+  <path d="M1070 507 C1105 507, 1110 531, 1140 531" class="dash"/>
+  <path d="M935 780 C1040 780, 1090 780, 1140 780" class="dash"/>
+
+  <circle cx="450" cy="332" r="7" class="dot"/>
+  <circle cx="450" cy="507" r="7" class="dot"/>
+  <circle cx="450" cy="600" r="7" class="dot"/>
+  <circle cx="1140" cy="332" r="7" class="dot"/>
+  <circle cx="1140" cy="531" r="7" class="dot"/>
+  <circle cx="1140" cy="780" r="7" class="dot"/>
+</svg>
