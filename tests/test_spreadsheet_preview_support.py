@@ -109,6 +109,93 @@ class _AllowedAccess:
 
 
 class TestSpreadsheetPreviewSupport(unittest.TestCase):
+    def test_validate_file_upload_accepts_canopy_module_bundle(self):
+        module_bytes = b"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Module</title>
+</head>
+<body>
+  <div id="app">Lesson Module</div>
+  <script>
+    window.addEventListener('load', function () {
+      document.getElementById('app').setAttribute('data-ready', '1');
+    });
+  </script>
+</body>
+</html>
+"""
+        is_valid, error, validated_type = validate_file_upload(
+            module_bytes,
+            'text/html',
+            'lesson-module.canopy-module.html',
+        )
+        self.assertTrue(is_valid, error)
+        self.assertIsNone(error)
+        self.assertEqual(validated_type, 'text/html')
+
+    def test_validate_file_upload_accepts_canopy_module_with_generic_octet_stream_metadata(self):
+        module_bytes = b"""<!doctype html>
+<html><head><meta charset="utf-8"></head><body><script>window.x=1;</script></body></html>
+"""
+        is_valid, error, validated_type = validate_file_upload(
+            module_bytes,
+            'application/octet-stream',
+            'lesson.canopy-module.html',
+        )
+        self.assertTrue(is_valid, error)
+        self.assertEqual(validated_type, 'text/html')
+
+    def test_validate_file_upload_rejects_canopy_module_with_external_script(self):
+        module_bytes = b"""<!doctype html>
+<html><head><meta charset="utf-8"></head><body>
+<script src="https://example.com/app.js"></script>
+</body></html>
+"""
+        is_valid, error, _ = validate_file_upload(
+            module_bytes,
+            'text/html',
+            'unsafe.canopy-module.html',
+        )
+        self.assertFalse(is_valid)
+        self.assertIn('external scripts', str(error).lower())
+
+    def test_validate_file_upload_rejects_canopy_module_with_inline_event_handler(self):
+        module_bytes = b"""<!doctype html>
+<html><body><button onclick="alert('x')">Run</button></body></html>
+"""
+        is_valid, error, _ = validate_file_upload(
+            module_bytes,
+            'text/html',
+            'unsafe.canopy-module.html',
+        )
+        self.assertFalse(is_valid)
+        self.assertIn('inline event handler', str(error).lower())
+
+    def test_validate_file_upload_rejects_canopy_module_with_external_image_source(self):
+        module_bytes = b"""<!doctype html>
+<html><body><img src="https://example.com/demo.png"></body></html>
+"""
+        is_valid, error, _ = validate_file_upload(
+            module_bytes,
+            'text/html',
+            'unsafe.canopy-module.html',
+        )
+        self.assertFalse(is_valid)
+        self.assertIn('self-contained', str(error).lower())
+
+    def test_build_file_preview_disables_generic_preview_for_canopy_module(self):
+        module_bytes = b"""<!doctype html><html><body><script>console.log('hi')</script></body></html>"""
+        preview = build_file_preview(
+            module_bytes,
+            'lesson-module.canopy-module.html',
+            'text/html',
+        )
+        self.assertFalse(preview['previewable'])
+        self.assertEqual(preview['kind'], 'module')
+        self.assertIn('deck', preview['error'].lower())
+
     def test_validate_file_upload_accepts_real_xlsx(self):
         workbook_bytes = _build_workbook_bytes()
         is_valid, error, validated_type = validate_file_upload(

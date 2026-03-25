@@ -2,7 +2,6 @@
 # Keep this aligned with files that are shipped in the public repo and do not
 # depend on private notes, local-only infrastructure, or non-deterministic state.
 
-tests/test_agent_reliability_endpoints.py
 tests/test_connection_diagnostics_endpoint.py
 tests/test_routing_rate_limits.py
 tests/test_network_connectivity_regressions.py
@@ -10,3 +9,4 @@ tests/test_messages_ui_workspace.py
 tests/test_dm_group_message_access.py
 tests/test_sidebar_recent_dm_contacts.py
 tests/test_spreadsheet_preview_support.py
+tests/test_ui_polish_regressions.py

@@ -69,8 +69,8 @@
                             </div>
                             <div class="mention-builder-subtitle" id="feed-mention-builder-count">0 selected</div>
                         </div>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleFeedMentionBuilder(false)">
-                            <i class="bi bi-x-lg"></i>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleFeedMentionBuilder(false)" aria-label="Close Team Mention Builder">
+                            <i class="bi bi-x-lg" aria-hidden="true"></i>
                         </button>
                     </div>
                     <div class="mention-builder-toolbar">
@@ -289,8 +289,8 @@
             </div>
             <div class="d-flex align-items-center gap-2 composer-submit-row">
                 <div id="feed-mention-macro-buttons" class="mention-macro-buttons" style="display: none;"></div>
-                <button type="button" class="btn btn-primary" onclick="createPost()">
-                    <i class="bi bi-send"></i> Share Post
+                <button type="button" class="btn btn-primary" id="share-post-btn" onclick="createPost()">
+                    <i class="bi bi-send" aria-hidden="true"></i> Share Post
                 </button>
             </div>
         </div>
@@ -554,7 +554,7 @@
                             </div>
                             
                             <!-- Post Content (shown once per type in the if/elif/else below) -->
-                            <div class="post-content mb-3" data-post-content="1">
+                            <div class="post-content mb-3" data-post-content="1"{% if post.metadata and post.metadata.source_layout %} data-canopy-source-layout="{{ post.metadata.source_layout|tojson|forceescape }}"{% endif %}>
                                 <!-- Display attachments from metadata -->
                                 {% if post.metadata and post.metadata.attachments %}
                                     {% set images = [] %}
@@ -592,7 +592,7 @@
                                                 'large_attachment': true,
                                                 'storage_mode': attachment.storage_mode or 'remote_large'
                                             } %}
-                                            <div class="attachment-item mb-2 p-2 border rounded">
+                                            <div class="attachment-item mb-2 p-2 border rounded"{% if attachment.id or attachment.file_id or attachment.origin_file_id %} data-canopy-source-ref="attachment:{{ attachment.id or attachment.file_id or attachment.origin_file_id }}"{% endif %}>
                                                 <div class="d-flex align-items-center flex-wrap">
                                                     <i class="bi bi-music-note me-2"></i>
                                                     <div class="flex-grow-1">
@@ -631,12 +631,91 @@
                                                 'large_attachment': true,
                                                 'storage_mode': attachment.storage_mode or 'remote_large'
                                             } %}
-                                            {% set attachment_file_id = attachment.id or attachment.file_id or ((attachment.url.split('/files/')[1].split('/')[0]) if attachment.url and '/files/' in attachment.url else None) %}
+                                            {% set attachment_file_id = attachment.id or attachment.file_id or attachment.origin_file_id or ((attachment.url.split('/files/')[1].split('/')[0]) if attachment.url and '/files/' in attachment.url else None) %}
                                             {% set lower_name = (attachment.name or '')|lower %}
+                                            {% set is_module = (attachment.type or '') == 'text/html' and (lower_name.endswith('.canopy-module.html') or lower_name.endswith('.canopy-module.htm')) %}
                                             {% set spreadsheet_preview = lower_name.endswith('.csv') or lower_name.endswith('.tsv') or lower_name.endswith('.xlsx') or lower_name.endswith('.xlsm') %}
                                             {% set previewable = attachment_file_id and (lower_name.endswith('.md') or lower_name.endswith('.markdown') or lower_name.endswith('.txt') or lower_name.endswith('.log') or lower_name.endswith('.json') or lower_name.endswith('.py') or lower_name.endswith('.js') or lower_name.endswith('.ts') or spreadsheet_preview or lower_name.endswith('.yaml') or lower_name.endswith('.yml') or lower_name.endswith('.xml') or lower_name.endswith('.tex') or lower_name.endswith('.html') or lower_name.endswith('.css') or lower_name.endswith('.sh') or lower_name.endswith('.bat') or lower_name.endswith('.cfg') or lower_name.endswith('.ini') or lower_name.endswith('.toml')) %}
                                             {% set preview_id = 'feed-attachment-preview-' ~ post.id ~ '-' ~ loop.index0 %}
-                                            <div class="attachment-item mb-2 p-2 border rounded">
+                                            {% set module_title = (attachment.name or 'Canopy Module')|replace('.canopy-module.html', '')|replace('.canopy-module.htm', '')|replace('-', ' ')|replace('_', ' ')|title %}
+                                            {% set module_manifest = {
+                                                'version': 1,
+                                                'key': 'module:' ~ (attachment_file_id or module_title|lower|replace(' ', '-')),
+                                                'widget_type': 'module_surface',
+                                                'render_mode': 'module_runtime',
+                                                'title': module_title,
+                                                'subtitle': 'Safe executable lesson or station logic bound to this source.',
+                                                'provider_label': 'Canopy Module',
+                                                'icon': 'bi-box-fill',
+                                                'body_text': 'Single-file module bundle executed inside the Canopy Module Runtime.',
+                                                'badges': ['Module', 'Sandboxed', 'Source-bound'],
+                                                'details': [
+                                                    {'label': 'File', 'value': attachment.name or 'module bundle'},
+                                                    {'label': 'Format', 'value': 'Single HTML bundle'}
+                                                ],
+                                                'station_surface': {
+                                                    'kind': 'station_surface',
+                                                    'domain': 'education',
+                                                    'label': module_title ~ ' Surface',
+                                                    'summary': 'Executable lesson or station logic remains bound to this source while capabilities stay brokered.',
+                                                    'recurring': false,
+                                                    'scope': 'source'
+                                                },
+                                                'action_policy': {
+                                                    'bounded': true,
+                                                    'max_risk': 'view',
+                                                    'human_gate': 'none',
+                                                    'audit_label': 'Bounded runtime'
+                                                },
+                                                'source_binding': {
+                                                    'binding_type': 'post_attachment',
+                                                    'source_scope': 'source',
+                                                    'return_label': 'Return to source'
+                                                },
+                                                'module_runtime': {
+                                                    'format': 'single_html',
+                                                    'bundle_file_id': attachment_file_id,
+                                                    'bundle_url': '/files/' ~ attachment_file_id,
+                                                    'module_type': module_title,
+                                                    'runtime_label': 'Canopy Module',
+                                                    'capabilities': {
+                                                        'required': ['source.read', 'deck.return'],
+                                                        'optional': ['clipboard.write', 'module.storage.local']
+                                                    }
+                                                }
+                                            } %}
+                                            {% if is_module %}
+                                            <div class="attachment-item mb-2 p-3 border rounded" data-canopy-module-card="1" data-canopy-widget-manifest="{{ module_manifest|tojson|forceescape }}" data-canopy-widget-key="{{ module_manifest.key|e }}"{% if attachment_file_id %} data-canopy-module-bundle-id="{{ attachment_file_id|e }}" data-canopy-module-bundle-name="{{ (attachment.name or '')|e }}" data-canopy-source-ref="attachment:{{ attachment_file_id }}"{% endif %}>
+                                                <div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
+                                                    <div>
+                                                        <div class="fw-semibold"><i class="bi bi-box-fill me-2"></i>{{ module_title }}</div>
+                                                        <div class="small text-muted mt-1">Safe executable module bundle attached to this source.</div>
+                                                        <div class="d-flex flex-wrap gap-2 mt-2">
+                                                            <span class="badge rounded-pill text-bg-secondary">Module</span>
+                                                            <span class="badge rounded-pill text-bg-secondary">Sandboxed</span>
+                                                            <span class="badge rounded-pill text-bg-secondary">Source-bound</span>
+                                                        </div>
+                                                    </div>
+                                                    <span class="badge rounded-pill text-bg-info">Canopy Module</span>
+                                                </div>
+                                                <div class="d-flex align-items-center justify-content-between mt-3 gap-2 flex-wrap">
+                                                    <span class="small text-muted">{{ attachment.name }}</span>
+                                                    <div class="stream-card-actions">
+                                                        <button type="button"
+                                                                class="btn btn-sm btn-outline-success"
+                                                                onclick="openMediaDeckForManifestNode(this)">
+                                                            <i class="bi bi-grid-1x2"></i> Open module
+                                                        </button>
+                                                        {% if attachment.url %}
+                                                        <a href="{{ attachment.url }}" class="btn btn-sm btn-outline-primary" download="{{ attachment.name }}">
+                                                            <i class="bi bi-download"></i> Download
+                                                        </a>
+                                                        {% endif %}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            {% else %}
+                                            <div class="attachment-item mb-2 p-2 border rounded"{% if attachment_file_id %} data-canopy-source-ref="attachment:{{ attachment_file_id }}"{% endif %}>
                                                 <div class="d-flex align-items-center">
                                                     <i class="bi bi-{% if attachment.type.startswith('video/') %}camera-video{% elif 'pdf' in (attachment.type or '') %}file-pdf{% elif lower_name.endswith('.csv') or lower_name.endswith('.tsv') or lower_name.endswith('.xlsx') or lower_name.endswith('.xlsm') %}file-earmark-spreadsheet{% else %}file-earmark{% endif %} me-2"></i>
                                                     <div class="flex-grow-1">
@@ -683,6 +762,7 @@
                                                 <div id="{{ preview_id }}" class="file-preview-wrapper mt-2" style="display:none;"></div>
                                                 {% endif %}
                                             </div>
+                                            {% endif %}
                                         {% endfor %}
                                     </div>
                                 {% endif %}
@@ -1211,7 +1291,150 @@
                                     </div>
                                 {% endif %}
                                 
-                                {% if post.poll %}
+                                {% if post.variant_reference %}
+                                    {# Variant = first-class post body; lineage is a slim provenance bar (no duplicate “antecedent card”). #}
+                                    {% set ref = post.variant_reference %}
+                                    <div class="post-variant-shell post-variant-shell--minimal" data-variant-wrapper="1">
+                                        {% if post.display_content %}
+                                            <div data-canopy-source-ref="content:lede">
+                                                <p class="mb-0 post-text mentionable">{{ post.display_content }}</p>
+                                            </div>
+                                        {% endif %}
+                                        {% if ref.module_param_delta %}
+                                            <div class="post-variant-param-delta">
+                                                <span class="delta-label">Δ</span>{{ ref.module_param_delta }}
+                                            </div>
+                                        {% endif %}
+                                        <div class="post-lineage-bar" role="note" aria-label="Lineage provenance">
+                                            <span class="badge rounded-pill text-bg-secondary post-lineage-badge" title="This post is a derivative with preserved lineage">
+                                                <i class="bi bi-bezier2 me-1" aria-hidden="true"></i>{{ ref.relationship_label or 'Variant' }}
+                                            </span>
+                                            {% if ref.available %}
+                                                <a class="link-light link-underline-opacity-50 link-underline-opacity-100-hover" href="{{ ref.href }}" title="Open the antecedent post">
+                                                    Antecedent{% if ref.author_display or ref.author_id %} <span class="text-muted">({{ ref.author_display or ref.author_id }})</span>{% endif %}
+                                                </a>
+                                                {% if ref.created_at %}
+                                                    <span class="text-muted" data-timestamp="{{ ref.created_at }}">{{ ref.created_at }}</span>
+                                                {% endif %}
+                                                {% if ref.source_id and (ref.has_source_layout|default(true)) %}
+                                                <button type="button" class="btn btn-sm btn-outline-primary"
+                                                        onclick="canopyNavigateFeedDeckForPostId({{ ref.source_id|tojson }})"
+                                                        title="Jump to the antecedent post and open its deck">
+                                                    <i class="bi bi-grid-1x2 me-1" aria-hidden="true"></i>Deck
+                                                </button>
+                                                {% endif %}
+                                            {% else %}
+                                                <span class="text-warning">{{ ref.unavailable_label or 'Antecedent unavailable' }}</span>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                {% elif post.repost_reference %}
+                                    {% set ref = post.repost_reference %}
+                                    <div class="post-repost-shell post-repost-shell--streamlined" data-repost-wrapper="1">
+                                        {% if post.display_content %}
+                                            <div data-canopy-source-ref="content:lede">
+                                                <p class="mb-3 post-text mentionable">{{ post.display_content }}</p>
+                                            </div>
+                                        {% endif %}
+                                        <div class="post-repost-card{% if not ref.available %} is-unavailable{% endif %}">
+                                            <div class="post-repost-head">
+                                                <span class="post-repost-eyebrow">
+                                                    <i class="bi bi-repeat"></i> Original source
+                                                </span>
+                                            </div>
+                                            {% if ref.available %}
+                                                <div class="post-repost-meta">
+                                                    <strong>{{ ref.author_display or ref.author_id or 'Unknown author' }}</strong>
+                                                    <span>•</span>
+                                                    <span>{{ (ref.post_type or 'post')|replace('_', ' ')|title }}</span>
+                                                    <span>•</span>
+                                                    <span>{{ (ref.visibility or 'network')|replace('_', ' ')|title }}</span>
+                                                    <span>•</span>
+                                                    <span class="text-muted" data-timestamp="{{ ref.created_at }}">{{ ref.created_at }}</span>
+                                                </div>
+                                                {% set em = ref.embed if ref.embed is defined and ref.embed else {} %}
+                                                <div class="post-repost-quote">
+                                                    {% if ref.body_text is defined and ref.body_text %}
+                                                        <div class="post-repost-body">{{ ref.body_text }}</div>
+                                                        {% if ref.body_truncated %}
+                                                            <div class="post-repost-truncated-hint small text-muted mt-1">
+                                                                <i class="bi bi-scissors"></i> Truncated for the card &mdash; open original for the full post.
+                                                            </div>
+                                                        {% endif %}
+                                                    {% elif ref.preview_text %}
+                                                        <div class="post-repost-preview">{{ ref.preview_text }}</div>
+                                                    {% endif %}
+                                                    {% if em.get('link_url') %}
+                                                        <div class="post-repost-embed-link mt-2">
+                                                            <a href="{{ em.link_url }}" target="_blank" rel="noopener noreferrer" class="text-decoration-none d-inline-flex align-items-start gap-2">
+                                                                <i class="bi bi-link-45deg flex-shrink-0 mt-1"></i>
+                                                                <span>{{ em.get('link_title') or em.link_url }}</span>
+                                                            </a>
+                                                        </div>
+                                                    {% endif %}
+                                                    {% if em.get('image_url') %}
+                                                        <div class="post-repost-embed-media mt-2 text-center">
+                                                            <img src="{{ em.image_url }}" class="img-fluid rounded post-repost-embed-img" alt="">
+                                                        </div>
+                                                    {% endif %}
+                                                    {% if em.get('video_url') %}
+                                                        <div class="post-repost-embed-media mt-2 text-center">
+                                                            <video controls class="img-fluid rounded post-repost-embed-video" preload="metadata">
+                                                                <source src="{{ em.video_url }}" type="video/mp4">
+                                                            </video>
+                                                        </div>
+                                                    {% endif %}
+                                                    {% if em.get('audio_url') %}
+                                                        <div class="post-repost-embed-media mt-2">
+                                                            <audio controls preload="metadata" class="w-100">
+                                                                <source src="{{ em.audio_url }}" type="{{ em.get('audio_type') or 'audio/mpeg' }}">
+                                                            </audio>
+                                                        </div>
+                                                    {% endif %}
+                                                    {% if em.get('poll_question') %}
+                                                        <div class="post-repost-poll-preview mt-2 p-2 rounded" style="background: var(--canopy-bg-tertiary, rgba(255,255,255,0.04));">
+                                                            <div class="small text-uppercase text-muted mb-1 fw-semibold" style="letter-spacing:0.06em;">Poll</div>
+                                                            <div class="fw-semibold">{{ em.poll_question }}</div>
+                                                            {% if em.get('poll_option_previews') %}
+                                                                <ul class="small mb-0 mt-2 ps-3 text-muted">
+                                                                    {% for opt in em.poll_option_previews %}
+                                                                        <li>{{ opt }}</li>
+                                                                    {% endfor %}
+                                                                </ul>
+                                                            {% endif %}
+                                                        </div>
+                                                    {% endif %}
+                                                    {% if em.get('attachment_images') %}
+                                                        <div class="post-repost-thumb-grid mt-2">
+                                                            {% for img in em.attachment_images %}
+                                                                <a href="{{ ref.href }}" class="post-repost-thumb-link" title="View original post">
+                                                                    <img src="{{ img.url }}" alt="{{ img.name }}" loading="lazy" width="120" height="120">
+                                                                </a>
+                                                            {% endfor %}
+                                                        </div>
+                                                    {% endif %}
+                                                </div>
+                                                <div class="post-repost-actions d-flex flex-wrap gap-2 align-items-center">
+                                                    <a class="btn btn-sm btn-outline-primary" href="{{ ref.href }}">
+                                                        <i class="bi bi-box-arrow-up-right me-1" aria-hidden="true"></i>Open original
+                                                    </a>
+                                                    {% if ref.source_id and (ref.has_source_layout|default(true)) %}
+                                                    <button type="button" class="btn btn-sm btn-outline-primary"
+                                                            onclick="canopyNavigateFeedDeckForPostId({{ ref.source_id|tojson }})"
+                                                            title="Jump to the original post and open its deck">
+                                                        <i class="bi bi-grid-1x2 me-1" aria-hidden="true"></i>Deck
+                                                    </button>
+                                                    {% endif %}
+                                                </div>
+                                            {% else %}
+                                                <div class="post-repost-unavailable">{{ ref.unavailable_label or 'Original source unavailable' }}</div>
+                                                <div class="post-repost-unavailable-meta">
+                                                    This repost keeps attribution to the original source, but the source no longer renders here.
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                {% elif post.poll %}
                                     <div class="poll-card" data-poll-id="{{ post.id }}" data-poll-kind="feed" data-poll-ends="{{ post.poll.ends_at or '' }}" data-poll-closed="{{ 'true' if post.poll.is_closed else 'false' }}">
                                         <div class="poll-header">
                                             <span class="poll-label">Poll</span>
@@ -1243,7 +1466,7 @@
                                         </div>
                                     </div>
                                 {% elif post.post_type == 'link' %}
-                                    {% if post.display_content %}<p class="mb-2 post-text mentionable">{{ post.display_content }}</p>{% endif %}
+                                    {% if post.display_content %}<div data-canopy-source-ref="content:lede"><p class="mb-2 post-text mentionable">{{ post.display_content }}</p></div>{% endif %}
                                     {% if post.metadata and post.metadata.url %}
                                         <div class="card border-0" style="background: var(--canopy-bg-tertiary);">
                                             <div class="card-body py-2">
@@ -1254,7 +1477,7 @@
                                         </div>
                                     {% endif %}
                                 {% elif post.post_type == 'image' %}
-                                    {% if post.display_content %}<p class="mb-2 post-text mentionable">{{ post.display_content }}</p>{% endif %}
+                                    {% if post.display_content %}<div data-canopy-source-ref="content:lede"><p class="mb-2 post-text mentionable">{{ post.display_content }}</p></div>{% endif %}
                                     {% if post.metadata and post.metadata.image_url %}
                                         <div class="text-center">
                                             <img src="{{ post.metadata.image_url }}" class="img-fluid rounded" 
@@ -1262,7 +1485,7 @@
                                         </div>
                                     {% endif %}
                                 {% elif post.post_type == 'video' %}
-                                    {% if post.display_content %}<p class="mb-2 post-text mentionable">{{ post.display_content }}</p>{% endif %}
+                                    {% if post.display_content %}<div data-canopy-source-ref="content:lede"><p class="mb-2 post-text mentionable">{{ post.display_content }}</p></div>{% endif %}
                                     {% if post.metadata and post.metadata.video_url %}
                                         <div class="text-center">
                                             <video controls class="img-fluid rounded" style="max-height: 400px;">
@@ -1272,60 +1495,156 @@
                                         </div>
                                     {% endif %}
                                 {% else %}
-                                    {% if post.display_content %}<p class="mb-0 post-text mentionable">{{ post.display_content }}</p>{% endif %}
+                                    {% if post.display_content %}<div data-canopy-source-ref="content:lede"><p class="mb-0 post-text mentionable">{{ post.display_content }}</p></div>{% endif %}
                                 {% endif %}
                             </div>
                             
                             <!-- Post Actions -->
                             <div class="d-flex justify-content-between align-items-center pt-2 border-top" data-post-actions="1">
                                 <div class="d-flex gap-2 flex-wrap">
-                                    <button class="btn btn-sm icon-action-btn {% if post.user_has_liked %}btn-primary{% else %}btn-outline-primary{% endif %} like-btn" 
+                                    <button class="btn btn-sm btn-outline-secondary icon-action-btn" 
+                                            onclick="toggleComments('{{ post.id }}')"
+                                            title="Reply to this post"
+                                            aria-label="Reply to this post">
+                                        <i class="bi bi-reply"></i>
+                                        <span class="action-label">Reply</span>
+                                        <span class="comment-count action-count">{{ post.comments or 0 }}</span>
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-secondary icon-action-btn like-btn{% if post.user_has_liked %} is-liked{% endif %}"
                                             onclick="toggleLike('{{ post.id }}')"
                                             data-item-id="{{ post.id }}"
                                             data-liked="{{ 'true' if post.user_has_liked else 'false' }}"
                                             title="{% if post.user_has_liked %}Unlike post{% else %}Like post{% endif %}"
                                             aria-label="{% if post.user_has_liked %}Unlike post{% else %}Like post{% endif %}">
-                                        <i class="bi bi-heart{% if post.user_has_liked %}-fill{% endif %}"></i> 
-                                        <span class="like-text action-label">{% if post.user_has_liked %}Liked{% else %}Like{% endif %}</span> 
-                                        <span class="like-count action-count">{{ post.likes or 0 }}</span>
+                                        <i class="bi bi-heart{% if post.user_has_liked %}-fill{% endif %}"></i>
+                                        <span class="action-label like-text">{% if post.user_has_liked %}Liked{% else %}Like{% endif %}</span>
+                                        <span class="action-count like-count">{{ post.likes or 0 }}</span>
                                     </button>
-                                    <button class="btn btn-sm btn-outline-secondary icon-action-btn" 
-                                            onclick="toggleComments('{{ post.id }}')"
-                                            title="Toggle comments"
-                                            aria-label="Toggle comments">
-                                        <i class="bi bi-chat"></i>
-                                        <span class="action-label">Comment</span>
-                                        <span class="comment-count action-count">{{ post.comments or 0 }}</span>
+                                    <button class="btn btn-sm icon-action-btn bookmark-action-btn{% if post.is_bookmarked %} is-saved{% endif %}"
+                                            data-bookmark-button="1"
+                                            data-source-type="feed_post"
+                                            data-source-id="{{ post.id }}"
+                                            data-bookmarked="{{ 'true' if post.is_bookmarked else 'false' }}"
+                                            title="{% if post.is_bookmarked %}Remove bookmark{% else %}Save bookmark{% endif %}"
+                                            aria-label="{% if post.is_bookmarked %}Remove bookmark{% else %}Save bookmark{% endif %}">
+                                        <i class="bi bi-bookmark{% if post.is_bookmarked %}-fill{% endif %}"></i>
+                                        <span class="action-label" data-bookmark-label>{% if post.is_bookmarked %}Saved{% else %}Save{% endif %}</span>
                                     </button>
-                                    <button class="btn btn-sm btn-outline-info icon-action-btn" onclick="sharePost('{{ post.id }}')" title="Share post" aria-label="Share post">
-                                        <i class="bi bi-share"></i><span class="action-label">Share</span>
+                                    <button type="button" class="btn btn-sm btn-outline-info icon-action-btn repost-trigger-btn"
+                                            id="repost-trigger-{{ post.id }}"
+                                            onclick="toggleRepostComposer('{{ post.id }}')"
+                                            title="Repost — add optional note below"
+                                            aria-expanded="false"
+                                            aria-controls="repost-compose-{{ post.id }}"
+                                            aria-label="Repost source">
+                                        <i class="bi bi-repeat"></i><span class="action-label">Repost</span>
                                     </button>
-                                    <button class="btn btn-sm btn-outline-secondary copy-btn icon-action-btn"
-                                            onclick="copyToClipboard(this, '{{ post.id }}')"
-                                            title="Copy post text"
-                                            aria-label="Copy post text">
-                                        <i class="bi bi-clipboard"></i>
-                                    </button>
-                                    <button class="btn btn-sm btn-outline-secondary context-insight-trigger icon-action-btn"
-                                            onclick="openContentContextModalFromAction('feed_post', '{{ post.id }}'); return false;"
-                                            title="Open context insights"
-                                            aria-label="Open context insights">
-                                        <i class="bi bi-file-earmark-text"></i><span class="action-label">Context</span>
-                                    </button>
-                                    <button class="btn btn-sm btn-outline-info community-note-trigger icon-action-btn"
-                                            onclick="openCommunityNoteModal('feed_post', '{{ post.id }}')"
-                                            title="Open community notes"
-                                            aria-label="Open community notes">
-                                        <i class="bi bi-journal-check"></i>
-                                        <span class="action-label">Notes</span>
-                                        <span class="action-count">{{ post.community_notes_count or 0 }}</span>
-                                    </button>
+                                    <div class="dropdown">
+                                        <button class="btn btn-sm btn-outline-secondary icon-action-btn"
+                                                type="button"
+                                                data-bs-toggle="dropdown"
+                                                aria-expanded="false"
+                                                title="More post actions"
+                                                aria-label="More post actions">
+                                            <i class="bi bi-three-dots"></i><span class="action-label">More</span>
+                                        </button>
+                                        <ul class="dropdown-menu dropdown-menu-end">
+                                            <li>
+                                                <a class="dropdown-item" href="#" onclick="toggleVariantComposer('{{ post.id }}'); return false;">
+                                                    <i class="bi bi-bezier2 me-2"></i>Variant
+                                                </a>
+                                            </li>
+                                            <li>
+                                                <a class="dropdown-item" href="#" onclick="copyToClipboard(this, '{{ post.id }}'); return false;">
+                                                    <i class="bi bi-clipboard me-2"></i>Copy
+                                                </a>
+                                            </li>
+                                            <li>
+                                                <a class="dropdown-item" href="#" onclick="openContentContextModalFromAction('feed_post', '{{ post.id }}'); return false;">
+                                                    <i class="bi bi-file-earmark-text me-2"></i>Context
+                                                </a>
+                                            </li>
+                                            <li>
+                                                <a class="dropdown-item" href="#" onclick="openCommunityNoteModal('feed_post', '{{ post.id }}'); return false;">
+                                                    <i class="bi bi-journal-check me-2"></i>Notes <span class="text-muted">({{ post.community_notes_count or 0 }})</span>
+                                                </a>
+                                            </li>
+                                        </ul>
+                                    </div>
                                 </div>
                                 
                                 <small class="text-muted">
                                     <i class="bi bi-{% if post.post_type == 'text' %}type{% elif post.post_type == 'link' %}link{% elif post.post_type == 'image' %}image{% elif post.post_type == 'video' %}play{% elif post.post_type == 'poll' %}bar-chart{% else %}file{% endif %}"></i>
                                     {{ post.post_type.title() }}
                                 </small>
+                            </div>
+
+                            <!-- Repost inline composer (expands under actions — no modal) -->
+                            <div class="repost-inline-composer" id="repost-compose-{{ post.id }}" data-repost-compose="1" style="display: none;" hidden>
+                                <div class="repost-inline-inner">
+                                    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                        <i class="bi bi-repeat text-info" aria-hidden="true"></i>
+                                        <span class="small fw-semibold">Repost to your feed</span>
+                                        <span class="text-muted small ms-md-auto">Optional note · <kbd class="small px-1">Esc</kbd> close · <kbd class="small px-1">⌘</kbd>/<kbd class="small px-1">Ctrl</kbd>+<kbd class="small px-1">Enter</kbd> send</span>
+                                    </div>
+                                    <label class="visually-hidden" for="repost-text-{{ post.id }}">Optional repost note</label>
+                                    <textarea class="form-control form-control-sm repost-inline-text"
+                                              id="repost-text-{{ post.id }}"
+                                              rows="3"
+                                              maxlength="5000"
+                                              placeholder="Add a short note (optional)…"></textarea>
+                                    <div class="d-flex justify-content-between align-items-center mt-2 gap-2 flex-wrap">
+                                        <small class="text-muted repost-inline-counter">0 / 5000</small>
+                                        <div class="d-flex gap-2">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="closeRepostComposer('{{ post.id }}')">Cancel</button>
+                                            <button type="button" class="btn btn-sm btn-primary" id="repost-submit-{{ post.id }}" onclick="submitRepostInline('{{ post.id }}')">
+                                                <i class="bi bi-repeat me-1"></i>Repost
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="variant-inline-composer" id="variant-compose-{{ post.id }}" data-variant-compose="1" style="display: none;" hidden>
+                                <div class="repost-inline-inner">
+                                    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                        <i class="bi bi-bezier2 text-warning" aria-hidden="true"></i>
+                                        <span class="small fw-semibold">Create a lineage variant</span>
+                                        <span class="text-muted small ms-md-auto">Optional note + explicit relationship metadata</span>
+                                    </div>
+                                    <div class="row g-2 mb-2">
+                                        <div class="col-md-4">
+                                            <label class="form-label form-label-sm mb-1" for="variant-relationship-{{ post.id }}">Relationship</label>
+                                            <select class="form-select form-select-sm variant-inline-relationship" id="variant-relationship-{{ post.id }}">
+                                                <option value="curated_recomposition">Curated recomposition</option>
+                                                <option value="module_variant">Module variant</option>
+                                                <option value="parameterized_variant">Parameterized variant</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-8">
+                                            <label class="form-label form-label-sm mb-1" for="variant-delta-{{ post.id }}">Parameter delta</label>
+                                            <input type="text"
+                                                   class="form-control form-control-sm variant-inline-delta"
+                                                   id="variant-delta-{{ post.id }}"
+                                                   maxlength="500"
+                                                   placeholder="Optional: faster tempo, tighter loop, new support cards…">
+                                        </div>
+                                    </div>
+                                    <label class="visually-hidden" for="variant-text-{{ post.id }}">Optional variant note</label>
+                                    <textarea class="form-control form-control-sm variant-inline-text"
+                                              id="variant-text-{{ post.id }}"
+                                              rows="3"
+                                              maxlength="5000"
+                                              placeholder="Add a short note about how this variant changes the source…"></textarea>
+                                    <div class="d-flex justify-content-between align-items-center mt-2 gap-2 flex-wrap">
+                                        <small class="text-muted variant-inline-counter">0 / 5000</small>
+                                        <div class="d-flex gap-2">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="closeVariantComposer('{{ post.id }}')">Cancel</button>
+                                            <button type="button" class="btn btn-sm btn-warning" id="variant-submit-{{ post.id }}" onclick="submitVariantInline('{{ post.id }}')">
+                                                <i class="bi bi-bezier2 me-1"></i>Create variant
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                             
                             <!-- Comments Section (hidden by default) -->
@@ -1369,17 +1688,25 @@
         {% else %}
 	            <div class="text-center text-muted py-5">
                 {% if search_query %}
-                    <i class="bi bi-search fs-1 mb-3"></i>
+                    <i class="bi bi-search fs-1 mb-3 d-block" aria-hidden="true"></i>
                     <h5>No posts found</h5>
                     <p class="mb-3">No posts match your search criteria.</p>
+                    <div class="d-flex gap-2 justify-content-center">
+                        <a href="{{ url_for('ui.feed') }}" class="btn btn-outline-secondary">
+                            <i class="bi bi-x-circle" aria-hidden="true"></i> Clear search
+                        </a>
+                        <button class="btn btn-primary" type="button" onclick="openComposer()">
+                            <i class="bi bi-plus-circle" aria-hidden="true"></i> Create Post
+                        </button>
+                    </div>
                 {% else %}
-                    <i class="bi bi-newspaper fs-1 mb-3"></i>
+                    <i class="bi bi-newspaper fs-1 mb-3 d-block" aria-hidden="true"></i>
                     <h5>Your feed is empty</h5>
                     <p class="mb-3">Start following other users or create your first post!</p>
+                    <button class="btn btn-primary" type="button" onclick="openComposer()">
+                        <i class="bi bi-plus-circle" aria-hidden="true"></i> Create Post
+                    </button>
                 {% endif %}
-	                <button class="btn btn-primary" type="button" onclick="openComposer()">
-	                    <i class="bi bi-plus-circle"></i> Create Post
-	                </button>
 	            </div>
 	        {% endif %}
 	    </div>
@@ -1451,6 +1778,330 @@
     font-size: 0.74rem;
     font-weight: 600;
     line-height: 1;
+}
+
+[data-post-actions] .icon-action-btn,
+.post-lineage-bar .btn.btn-sm,
+.post-repost-actions .btn.btn-sm {
+    border-color: color-mix(in srgb, var(--canopy-border) 76%, var(--canopy-primary) 24%) !important;
+    background: color-mix(in srgb, var(--canopy-bg-card) 84%, var(--canopy-primary) 16%) !important;
+    color: var(--canopy-text-secondary) !important;
+    box-shadow: none !important;
+}
+
+[data-post-actions] .icon-action-btn:hover,
+[data-post-actions] .icon-action-btn:focus-visible,
+.post-lineage-bar .btn.btn-sm:hover,
+.post-lineage-bar .btn.btn-sm:focus-visible,
+.post-repost-actions .btn.btn-sm:hover,
+.post-repost-actions .btn.btn-sm:focus-visible {
+    border-color: color-mix(in srgb, var(--canopy-primary) 46%, var(--canopy-border) 54%) !important;
+    background: color-mix(in srgb, var(--canopy-bg-tertiary) 68%, var(--canopy-primary) 32%) !important;
+    color: var(--canopy-text-primary) !important;
+}
+
+.like-btn.is-liked,
+.bookmark-action-btn.is-saved,
+.repost-trigger-btn.is-repost-open,
+.variant-trigger-btn.is-variant-open {
+    border-color: color-mix(in srgb, var(--canopy-primary) 52%, var(--canopy-border) 48%) !important;
+    background: color-mix(in srgb, var(--canopy-primary) 28%, var(--canopy-bg-card) 72%) !important;
+    color: var(--canopy-text-primary) !important;
+}
+
+.post-repost-shell,
+.post-variant-shell {
+    display: grid;
+    gap: 0.85rem;
+}
+
+/* Lighter repost block — less nested-card chrome */
+.post-repost-shell--streamlined {
+    gap: 0.45rem;
+}
+.post-repost-shell--streamlined .post-repost-card {
+    border-radius: 0.65rem;
+    padding: 0.55rem 0.75rem;
+    box-shadow: none;
+    background: rgba(15, 23, 42, 0.58);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+}
+.post-repost-shell--streamlined .post-repost-head {
+    margin-bottom: 0.35rem;
+}
+.post-repost-shell--streamlined .post-repost-meta {
+    margin-bottom: 0.45rem;
+}
+.post-repost-shell--streamlined .post-repost-quote {
+    padding: 0.55rem 0.65rem;
+    border-radius: 0.55rem;
+}
+.post-repost-shell--streamlined .post-repost-actions {
+    margin-top: 0.5rem;
+}
+
+/* Lineage variants: read like a normal post; provenance is a slim bar (not a second “card”). */
+.post-variant-shell--minimal {
+    gap: 0.4rem;
+}
+.post-lineage-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem 0.65rem;
+    margin-top: 0.15rem;
+    padding-top: 0.55rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.2);
+    font-size: 0.82rem;
+    color: rgba(226, 232, 240, 0.82);
+}
+.post-lineage-bar .post-lineage-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+}
+.post-lineage-bar .btn-sm {
+    padding: 0.12rem 0.5rem;
+    font-size: 0.78rem;
+    line-height: 1.25;
+}
+.post-variant-param-delta {
+    font-size: 0.88rem;
+    color: rgba(226, 232, 240, 0.88);
+    margin-bottom: 0.15rem;
+}
+.post-variant-param-delta .delta-label {
+    font-weight: 600;
+    color: rgba(253, 230, 138, 0.85);
+    margin-right: 0.35rem;
+}
+
+.post-repost-card,
+.post-variant-card {
+    border: 1px solid rgba(56, 189, 248, 0.24);
+    border-radius: 1rem;
+    padding: 0.95rem 1rem;
+    background:
+        linear-gradient(180deg, rgba(8, 15, 28, 0.92), rgba(11, 19, 34, 0.96)),
+        radial-gradient(circle at top right, rgba(56, 189, 248, 0.18), transparent 44%);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.post-variant-card {
+    border-color: rgba(245, 158, 11, 0.28);
+    background:
+        linear-gradient(180deg, rgba(26, 18, 8, 0.94), rgba(23, 17, 9, 0.96)),
+        radial-gradient(circle at top right, rgba(245, 158, 11, 0.18), transparent 42%);
+}
+
+.post-repost-card.is-unavailable,
+.post-variant-card.is-unavailable {
+    border-color: rgba(148, 163, 184, 0.28);
+    background:
+        linear-gradient(180deg, rgba(13, 18, 29, 0.92), rgba(14, 19, 30, 0.96));
+}
+
+.post-repost-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.post-repost-head .post-repost-badge {
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.post-repost-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(186, 230, 253, 0.92);
+}
+
+.post-repost-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.18rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #d7fff2;
+    border: 1px solid rgba(34, 197, 94, 0.42);
+    background: rgba(34, 197, 94, 0.12);
+}
+
+.post-variant-card .post-repost-eyebrow {
+    color: rgba(254, 243, 199, 0.96);
+}
+
+.post-variant-card .post-repost-quote {
+    border-left-color: rgba(245, 158, 11, 0.52);
+}
+
+.post-variant-relationship {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.18rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #fff1c2;
+    border: 1px solid rgba(245, 158, 11, 0.32);
+    background: rgba(245, 158, 11, 0.12);
+}
+
+.post-variant-delta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin-top: 0.7rem;
+    padding: 0.55rem 0.75rem;
+    border-radius: 0.8rem;
+    border: 1px solid rgba(245, 158, 11, 0.2);
+    background: rgba(245, 158, 11, 0.08);
+    color: rgba(254, 243, 199, 0.96);
+    font-size: 0.9rem;
+}
+
+.post-variant-delta-label {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: rgba(253, 230, 138, 0.88);
+}
+
+.post-repost-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    align-items: center;
+    color: rgba(226, 232, 240, 0.86);
+    font-size: 0.9rem;
+}
+
+.post-repost-preview {
+    margin-top: 0.65rem;
+    color: rgba(241, 245, 249, 0.96);
+    font-size: 0.98rem;
+    line-height: 1.5;
+}
+
+.post-repost-quote {
+    margin-top: 0.65rem;
+    padding: 0.65rem 0.5rem 0.55rem 0.85rem;
+    border-left: 3px solid rgba(56, 189, 248, 0.55);
+    border-radius: 0 0.65rem 0.65rem 0;
+    background: rgba(0, 0, 0, 0.12);
+}
+
+.post-repost-body {
+    margin-top: 0.15rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.98rem;
+    line-height: 1.55;
+    color: rgba(241, 245, 249, 0.98);
+}
+
+.post-repost-embed-link a {
+    color: var(--canopy-text-primary, rgba(241, 245, 249, 0.96));
+}
+
+.post-repost-embed-img,
+.post-repost-embed-video {
+    max-height: 360px;
+}
+
+.post-repost-thumb-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+    gap: 0.4rem;
+    max-width: 100%;
+}
+
+.post-repost-thumb-link {
+    display: block;
+    border-radius: 0.45rem;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    aspect-ratio: 1;
+}
+
+.post-repost-thumb-link img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    vertical-align: middle;
+}
+
+.post-repost-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.8rem;
+}
+
+/* Inline repost composer (under post actions — no overlay) */
+.repost-inline-composer {
+    margin-top: 0.5rem;
+    padding-top: 0.65rem;
+    border-top: 1px dashed rgba(56, 189, 248, 0.35);
+}
+
+.repost-inline-composer .repost-inline-inner {
+    padding: 0.65rem 0.75rem 0.75rem;
+    border-radius: 0.65rem;
+    background: var(--canopy-bg-tertiary, rgba(0, 0, 0, 0.18));
+    border: 1px solid rgba(56, 189, 248, 0.2);
+}
+
+.variant-inline-composer {
+    margin-top: 0.5rem;
+    padding-top: 0.65rem;
+    border-top: 1px dashed rgba(245, 158, 11, 0.3);
+}
+
+.variant-inline-composer .repost-inline-inner {
+    padding: 0.65rem 0.75rem 0.75rem;
+    border-radius: 0.65rem;
+    background:
+        linear-gradient(180deg, rgba(34, 24, 10, 0.94), rgba(23, 17, 9, 0.96)),
+        radial-gradient(circle at top right, rgba(245, 158, 11, 0.12), transparent 38%);
+    border: 1px solid rgba(245, 158, 11, 0.22);
+}
+
+.variant-inline-text {
+    resize: vertical;
+    min-height: 4.5rem;
+    max-height: 12rem;
+}
+
+.repost-inline-composer .repost-inline-text {
+    resize: vertical;
+    min-height: 4.5rem;
+    max-height: 12rem;
+}
+
+.post-repost-unavailable {
+    font-weight: 700;
+    color: rgba(226, 232, 240, 0.92);
+}
+
+.post-repost-unavailable-meta {
+    margin-top: 0.35rem;
+    color: rgba(148, 163, 184, 0.96);
+    font-size: 0.9rem;
 }
 
 .task-inline-toggle {
@@ -4849,17 +5500,48 @@
             });
         }
 
+	    /** Full navigation to feed post + deck — reliable when the source row is not in the current DOM. */
+	    function canopyNavigateFeedDeckForPostId(postId) {
+	        const pid = String(postId || '').trim();
+	        if (!pid) return;
+	        window.location.href = '/feed?focus_post=' + encodeURIComponent(pid) + '&open_deck=1';
+	    }
+
 	    function focusPostFromQuery() {
 	        const params = new URLSearchParams(window.location.search);
 	        const focusPostId = params.get('focus_post') || params.get('post');
 	        if (!focusPostId) return;
 
-	        const el = document.querySelector(`[data-post-id="${focusPostId}"]`);
+	        const esc = window.CSS && typeof window.CSS.escape === 'function'
+	            ? window.CSS.escape(focusPostId)
+	            : focusPostId.replace(/["\\]/g, '\\$&');
+	        const el = document.querySelector(`[data-post-id="${esc}"]`);
 	        if (!el) return;
 
 	        el.classList.add('focus-flash');
 	        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 	        setTimeout(() => el.classList.remove('focus-flash'), 3200);
+
+	        const openDeck = (params.get('open_deck') || '').trim().toLowerCase();
+	        if (openDeck === '1' || openDeck === 'true' || openDeck === 'yes') {
+	            const tryDeck = function () {
+	                if (typeof window.openDeckForFeedAntecedentPost === 'function') {
+	                    window.openDeckForFeedAntecedentPost(focusPostId);
+	                }
+	            };
+	            if (typeof window.canopyApplySourceLayoutsInScope === 'function') {
+	                try {
+	                    window.canopyApplySourceLayoutsInScope(el);
+	                } catch (_) { /* ignore */ }
+	            }
+	            requestAnimationFrame(function () {
+	                requestAnimationFrame(tryDeck);
+	            });
+	            setTimeout(tryDeck, 120);
+	            setTimeout(tryDeck, 400);
+	            setTimeout(tryDeck, 1400);
+	            setTimeout(tryDeck, 2800);
+	        }
 	    }
 
 	    function loadTagSuggestionsOnce() {
@@ -5096,6 +5778,15 @@
             list.appendChild(item);
         });
     }
+
+    function setShareButtonState(loading) {
+        const btn = document.getElementById('share-post-btn');
+        if (!btn) return;
+        btn.disabled = loading;
+        btn.innerHTML = loading
+            ? '<span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span> Sharing...'
+            : '<i class="bi bi-send" aria-hidden="true"></i> Share Post';
+    }
     
 	    function createPost() {
 	        const textarea = document.getElementById('postContent');
@@ -5131,6 +5822,8 @@
                 showAlert('Fix the structured block issues before sharing this post.', 'warning');
                 return;
             }
+
+            setShareButtonState(true);
         
         let metadata = {};
         let permissions = visibility === 'custom' ? customPermissions : null;
@@ -5174,6 +5867,7 @@
 	            resetComposer();
                 renderFeedStructuredResult(response.structured_objects || []);
 	            setTimeout(refreshFeed, 900);
+                setShareButtonState(false);
 	        })
 	        .catch(error => {
                 if (error && error.structured_validation) {
@@ -5182,6 +5876,7 @@
                     renderFeedStructuredResult([]);
                 }
 	            showAlert(error.error || 'Failed to create post', error && error.structured_validation ? 'warning' : 'danger');
+                setShareButtonState(false);
 	        });
 	    }
     
@@ -5666,18 +6361,15 @@
         const icon = button.querySelector('i');
         
         button.dataset.liked = liked ? 'true' : 'false';
+        button.classList.toggle('is-liked', !!liked);
         
         if (liked) {
-            button.classList.remove('btn-outline-primary');
-            button.classList.add('btn-primary');
             if (likeText) likeText.textContent = 'Liked';
             button.setAttribute('title', 'Unlike post');
             button.setAttribute('aria-label', 'Unlike post');
             icon.classList.remove('bi-heart');
             icon.classList.add('bi-heart-fill');
         } else {
-            button.classList.remove('btn-primary');
-            button.classList.add('btn-outline-primary');
             if (likeText) likeText.textContent = 'Like';
             button.setAttribute('title', 'Like post');
             button.setAttribute('aria-label', 'Like post');
@@ -6035,28 +6727,270 @@
         toggleComments(postId);
     }
     
-    function sharePost(postId) {
-        const comment = prompt('Add a comment to your share (optional):') || '';
+    let _openRepostComposePostId = null;
 
-        apiCall('/ajax/share_post', {
+    function _updateRepostInlineCounter(textareaEl) {
+        if (!textareaEl) return;
+        const panel = textareaEl.closest('[data-repost-compose="1"]');
+        const counter = panel ? panel.querySelector('.repost-inline-counter') : null;
+        if (counter) counter.textContent = `${(textareaEl.value || '').length} / 5000`;
+    }
+
+    function _setRepostTriggerOpen(postId, open) {
+        const trig = document.getElementById('repost-trigger-' + postId);
+        if (!trig) return;
+        trig.classList.toggle('is-repost-open', !!open);
+        trig.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    function closeAllRepostComposers() {
+        document.querySelectorAll('[data-repost-compose="1"]').forEach((panel) => {
+            panel.style.display = 'none';
+            panel.setAttribute('hidden', 'hidden');
+            const pid = (panel.id || '').replace(/^repost-compose-/, '');
+            if (pid) _setRepostTriggerOpen(pid, false);
+        });
+        _openRepostComposePostId = null;
+    }
+
+    function closeRepostComposer(postId) {
+        const panel = document.getElementById('repost-compose-' + postId);
+        if (panel) {
+            panel.style.display = 'none';
+            panel.setAttribute('hidden', 'hidden');
+        }
+        _setRepostTriggerOpen(postId, false);
+        if (_openRepostComposePostId === postId) _openRepostComposePostId = null;
+    }
+
+    /** Toggle inline repost composer under the post (same post again = close). */
+    function toggleRepostComposer(postId) {
+        const panel = document.getElementById('repost-compose-' + postId);
+        if (!panel) return;
+        const ta = document.getElementById('repost-text-' + postId);
+        const isVisible = panel.style.display !== 'none' && !panel.hasAttribute('hidden');
+        if (isVisible) {
+            closeRepostComposer(postId);
+            return;
+        }
+        closeAllRepostComposers();
+        if (typeof closeAllVariantComposers === 'function') closeAllVariantComposers();
+        panel.style.display = 'block';
+        panel.removeAttribute('hidden');
+        _setRepostTriggerOpen(postId, true);
+        _openRepostComposePostId = postId;
+        if (ta) {
+            ta.value = '';
+            _updateRepostInlineCounter(ta);
+            setTimeout(() => {
+                ta.focus();
+                try { panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { /* ignore */ }
+            }, 0);
+        }
+    }
+
+    function submitRepostInline(postId) {
+        const ta = document.getElementById('repost-text-' + postId);
+        const submitBtn = document.getElementById('repost-submit-' + postId);
+        const comment = (ta && ta.value) ? ta.value.trim() : '';
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status"></span> …';
+        }
+        apiCall('/ajax/repost_post', {
             method: 'POST',
             body: JSON.stringify({ post_id: postId, comment: comment })
         })
         .then(data => {
             if (data.success) {
-                showAlert('Post shared!', 'success');
-                // Update share count in the UI
-                const shareBtn = document.querySelector(`#share-count-${postId}`);
-                if (shareBtn) {
-                    const cur = parseInt(shareBtn.textContent) || 0;
-                    shareBtn.textContent = cur + 1;
-                }
+                closeRepostComposer(postId);
+                showAlert('Repost created.', 'success');
+                window.location.reload();
             } else {
-                showAlert(data.error || 'Failed to share', 'danger');
+                showAlert(data.error || 'Failed to repost', 'danger');
             }
         })
-        .catch(err => showAlert('Share failed: ' + (err.message || err), 'danger'));
+        .catch(err => showAlert('Repost failed: ' + (err.message || err), 'danger'))
+        .finally(() => {
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="bi bi-repeat me-1"></i>Repost';
+            }
+        });
     }
+
+    function _wireRepostComposerGlobalsOnce() {
+        if (document.body.dataset.repostComposerWired === '1') return;
+        document.body.dataset.repostComposerWired = '1';
+        document.addEventListener('input', (e) => {
+            const t = e.target;
+            if (t && t.classList && t.classList.contains('repost-inline-text')) {
+                _updateRepostInlineCounter(t);
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape' || !_openRepostComposePostId) return;
+            const panel = document.getElementById('repost-compose-' + _openRepostComposePostId);
+            const active = document.activeElement;
+            if (panel && active && typeof active.closest === 'function' && panel.contains(active)) {
+                e.preventDefault();
+                closeRepostComposer(_openRepostComposePostId);
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' || (!e.ctrlKey && !e.metaKey)) return;
+            const ta = document.activeElement;
+            if (!ta || !ta.classList || !ta.classList.contains('repost-inline-text')) return;
+            const m = /^repost-text-(.+)$/.exec(ta.id || '');
+            if (!m) return;
+            e.preventDefault();
+            submitRepostInline(m[1]);
+        }, true);
+    }
+
+    /** @deprecated Use toggleRepostComposer — kept for any legacy callers */
+    function repostPost(postId) {
+        toggleRepostComposer(postId);
+    }
+
+    function sharePost(postId) {
+        toggleRepostComposer(postId);
+    }
+
+    let _openVariantComposePostId = null;
+
+    function _updateVariantInlineCounter(textareaEl) {
+        if (!textareaEl) return;
+        const panel = textareaEl.closest('[data-variant-compose="1"]');
+        const counter = panel ? panel.querySelector('.variant-inline-counter') : null;
+        if (counter) counter.textContent = `${(textareaEl.value || '').length} / 5000`;
+    }
+
+    function _setVariantTriggerOpen(postId, open) {
+        const trig = document.getElementById('variant-trigger-' + postId);
+        if (!trig) return;
+        trig.classList.toggle('is-variant-open', !!open);
+        trig.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    function closeAllVariantComposers() {
+        document.querySelectorAll('[data-variant-compose="1"]').forEach((panel) => {
+            panel.style.display = 'none';
+            panel.setAttribute('hidden', 'hidden');
+            const pid = (panel.id || '').replace(/^variant-compose-/, '');
+            if (pid) _setVariantTriggerOpen(pid, false);
+        });
+        _openVariantComposePostId = null;
+    }
+
+    function closeVariantComposer(postId) {
+        const panel = document.getElementById('variant-compose-' + postId);
+        if (panel) {
+            panel.style.display = 'none';
+            panel.setAttribute('hidden', 'hidden');
+        }
+        _setVariantTriggerOpen(postId, false);
+        if (_openVariantComposePostId === postId) _openVariantComposePostId = null;
+    }
+
+    function toggleVariantComposer(postId) {
+        const panel = document.getElementById('variant-compose-' + postId);
+        if (!panel) return;
+        const ta = document.getElementById('variant-text-' + postId);
+        const rel = document.getElementById('variant-relationship-' + postId);
+        const delta = document.getElementById('variant-delta-' + postId);
+        const isVisible = panel.style.display !== 'none' && !panel.hasAttribute('hidden');
+        if (isVisible) {
+            closeVariantComposer(postId);
+            return;
+        }
+        closeAllRepostComposers();
+        closeAllVariantComposers();
+        panel.style.display = 'block';
+        panel.removeAttribute('hidden');
+        _setVariantTriggerOpen(postId, true);
+        _openVariantComposePostId = postId;
+        if (rel) rel.value = 'curated_recomposition';
+        if (delta) delta.value = '';
+        if (ta) {
+            ta.value = '';
+            _updateVariantInlineCounter(ta);
+            setTimeout(() => {
+                ta.focus();
+                try { panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { /* ignore */ }
+            }, 0);
+        }
+    }
+
+    function submitVariantInline(postId) {
+        const ta = document.getElementById('variant-text-' + postId);
+        const rel = document.getElementById('variant-relationship-' + postId);
+        const delta = document.getElementById('variant-delta-' + postId);
+        const submitBtn = document.getElementById('variant-submit-' + postId);
+        const comment = (ta && ta.value) ? ta.value.trim() : '';
+        const relationshipKind = (rel && rel.value) ? rel.value : 'curated_recomposition';
+        const moduleParamDelta = (delta && delta.value) ? delta.value.trim() : '';
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status"></span> …';
+        }
+        apiCall('/ajax/variant_post', {
+            method: 'POST',
+            body: JSON.stringify({
+                post_id: postId,
+                comment,
+                relationship_kind: relationshipKind,
+                module_param_delta: moduleParamDelta
+            })
+        })
+        .then(data => {
+            if (data.success) {
+                closeVariantComposer(postId);
+                showAlert('Variant created.', 'success');
+                window.location.reload();
+            } else {
+                showAlert(data.error || 'Failed to create variant', 'danger');
+            }
+        })
+        .catch(err => showAlert('Variant failed: ' + (err.message || err), 'danger'))
+        .finally(() => {
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="bi bi-bezier2 me-1"></i>Create variant';
+            }
+        });
+    }
+
+    function _wireVariantComposerGlobalsOnce() {
+        if (document.body.dataset.variantComposerWired === '1') return;
+        document.body.dataset.variantComposerWired = '1';
+        document.addEventListener('input', (e) => {
+            const t = e.target;
+            if (t && t.classList && t.classList.contains('variant-inline-text')) {
+                _updateVariantInlineCounter(t);
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape' || !_openVariantComposePostId) return;
+            const panel = document.getElementById('variant-compose-' + _openVariantComposePostId);
+            const active = document.activeElement;
+            if (panel && active && typeof active.closest === 'function' && panel.contains(active)) {
+                e.preventDefault();
+                closeVariantComposer(_openVariantComposePostId);
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' || (!e.ctrlKey && !e.metaKey)) return;
+            const ta = document.activeElement;
+            if (!ta || !ta.classList || !ta.classList.contains('variant-inline-text')) return;
+            const m = /^variant-text-(.+)$/.exec(ta.id || '');
+            if (!m) return;
+            e.preventDefault();
+            submitVariantInline(m[1]);
+        }, true);
+    }
+
+    _wireVariantComposerGlobalsOnce();
     
     // Legacy comment loading function (kept for compatibility)
     function loadComments(messageId) {
@@ -6317,6 +7251,7 @@
 	        setupPostFileUpload();
 	        setupPasteHandler();
 	        setupCommentPasteHandlers(); // Initialize comment paste handlers
+            _wireRepostComposerGlobalsOnce();
             refreshFeedMentionListOptions();
             renderFeedMentionMacroButtons();
 	        formatTimestamps();

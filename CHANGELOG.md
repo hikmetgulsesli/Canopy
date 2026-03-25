@@ -8,14 +8,426 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-24
+
+### Added
+- **Canopy Module public-release baseline** — `Canopy Module` is now documented and versioned as a first-class layer in the product surface, making `0.5.0` the right milestone for the first curated public release candidate.
+
+### Changed
+- **Public release scrub** — Removed personal attribution and AI-process metadata from committed code/doc headers that are intended to ship in the public-facing tree.
+- **Release candidate alignment** — Package metadata, README versioning, and operator-facing docs now point to the `0.5.0` surface so the first public candidate is coherent across install, API, MCP, and tray documentation.
+
+## [0.4.159] - 2026-03-24
+
 ### Fixed
-- **Media deck on iOS** — The deck and backdrop are rendered in a body-level portal (outside `.app-container` / scrollable `.sidebar`) so `position: fixed` overlays are not clipped by overflow on iPhone Safari. Touch/narrow layouts open the source **Media deck** button on `pointerdown` to avoid the first tap only materializing YouTube in-page.
+- **Deck queue YouTube selection** — Queue clicks now stay bound to the clicked item instead of drifting across hidden facade/iframe transitions, and YouTube facade activation reuses the shared media registration hook so first-click playback in the deck no longer dies with a `registerMediaNode` reference error.
+
+### Changed
+- **Quieter deck launchers** — The `Deck` / `Mini` launcher controls at the bottom of posts and messages now use the same height, calmer chrome, and lower-contrast emphasis as the other action buttons so they no longer stretch or visually dominate the action row.
+- **Theme debug cleanup** — Removed the temporary theme/light-element debug helpers and automatic console spam that had accumulated during UI debugging.
+
+## [0.4.158] - 2026-03-24
+
+### Changed
+- **Mobile deck prioritizes playback** — On small screens the expanded deck now defaults to a playback-first layout by collapsing secondary queue/detail panels, shrinking the deck header chrome, and giving the stage more vertical room.
+- **Deck item changes play in place** — Selecting an item from the mobile deck queue or using `Prev` / `Next` now starts playback directly in the deck and recenters the stage, making it clearer that media is playing there instead of pushing attention back to the source.
+
+## [0.4.157] - 2026-03-24
+
+### Changed
+- **Mobile channel header cleanup** — On narrow screens the channel header now keeps search one tap away behind a dedicated icon instead of permanently consuming a full header row, while lower-frequency policy controls stay under `More`.
+- **Mobile composer prioritization** — The channel composer now keeps `attach`, `emoji`, `more`, and `send` on the main row, moving mention-builder, structured blocks, and stream tools behind a compact compose overflow menu.
+
+## [0.4.156] - 2026-03-24
+
+### Changed
+- **More consistent post actions** — Feed posts and channel messages now keep `Like` visible with the primary actions instead of burying it in overflow, while lower-frequency controls such as thread inbox stay behind `More`.
+- **Theme-matched action styling** — Primary post/message controls now use a shared Canopy-themed treatment and active states, replacing the noisier mix of Bootstrap accent colors.
+- **Tighter channel header controls** — The channels header now shifts to icon-first controls, moves secondary utilities into a single `More` menu, and wraps more cleanly on smaller widths to avoid cramped overlaps.
+
+## [0.4.155] - 2026-03-24
+
+### Changed
+- **Simpler post action toolbars** — Channel message and feed post action rows now keep the most-used controls front and center: `Reply`, `Bookmark`, and `Repost`, with `Deck` still shown when relevant. Lower-frequency actions move behind a single `More` menu to reduce visual clutter.
+
+### Added
+- **Toolbar regression coverage** — Expanded `tests/test_ui_polish_regressions.py` so the primary-vs-overflow action layout is guarded against accidental drift.
+
+## [0.4.154] - 2026-03-24
+
+### Added
+- **Public release audit note** — Added `docs/PUBLIC_RELEASE_AUDIT.md` to summarize the latest low-risk repo exposure review and record the path-scrub hardening that came out of it.
+- **UI polish regression coverage** — Added `tests/test_ui_polish_regressions.py` and included it in the public CI list to guard the latest accessibility and empty-state tweaks.
+
+### Changed
+- **README highlights** — Rewrote the `Recent Highlights` section to focus on user-facing capabilities such as bookmarks, reposts, variants, richer deck flows, and Windows tray usability instead of debug-oriented release notes.
+- **Doc version alignment** — Updated the remaining version-scope notes in `API_REFERENCE`, `QUICKSTART`, `MENTIONS`, and `WINDOWS_TRAY`, and removed stale links to a non-existent identity-portability doc.
+
+### Fixed
+- **Small UI/UX rough edges** — Feed post sharing now shows a loading state, feed empty-search results offer a clear reset path, message/channel empty states are friendlier, the channel reply cancel button is labeled for assistive tech, and profile avatar upload is keyboard accessible.
+- **Path disclosure cleanup** — Replaced absolute local-machine file citations in `docs/REPOST_V1_DESIGN_REVIEW.md` with project-relative paths.
+
+## [0.4.153] - 2026-03-23
+
+### Fixed
+- **Channel antecedent deck retry ladders** — The `open_deck=1` handoff on the channels page now delegates to the shared antecedent-deck helper with a short `requestAnimationFrame` retry path instead of a long sequence of timeout retries. The shared channel helper also drops its extra `120ms` / `450ms` retries, keeping the deck-open flow aligned with the intended “focus, apply layouts, retry briefly” behavior.
+
+## [0.4.151] - 2026-03-23
+
+### Fixed
+- **Antecedent deck open** — Removed **forced `/feed?focus_post` / locate redirect** after 420ms when the original post was **already** in the DOM (it could reload or race the deck). **Layout compositor** now runs **after** the first open attempt, not before every attempt (avoids redundant shell churn). One **rAF** retry only.
+
+## [0.4.150] - 2026-03-23
+
+### Fixed
+- **Deck from repost/variant “Open deck”** — Opening the antecedent’s deck now **runs `canopyApplySourceLayoutsInScope` on that post/message first**, retries on animation frames, tries **module/widget manifest** hosts if the generic scan is empty, then falls back to **`/feed?focus_post=…&open_deck=1`** or **`/channels/locate?…&open_deck=1`**. Fixes silent no-op when layout compositor had not yet run on the original card.
+- **Feed/channel repost chrome** — **Deck** control is in the **Original source** header next to **Deck-ready** (with `white-space: nowrap` on the badge) so it is not buried below the quote; duplicate bottom deck button removed.
+
+### Added
+- **Deck helpers without sidebar mini host** — If `#sidebar-media-mini` is missing, **`openDeckForFeedAntecedentPost` / `openDeckForChannelAntecedentMessage`** still exist and **navigate** via the deep-link URLs.
+
+## [0.4.149] - 2026-03-23
+
+### Changed
+- **Feed & channel variant UI** — Lineage variants are no longer shown as a large nested “antecedent card” (duplicate body, embeds, and framing). The **author’s variant text** reads like a normal post; **parameter delta** (if any) stays as a light note; provenance is a **compact bar** (relationship badge, link to antecedent, optional deck). **Reposts** are unchanged.
+
+## [0.4.148] - 2026-03-23
+
+### Fixed
+- **Deck on feed/channel repost & variant cards** — Wrappers never had **`data-canopy-source-layout`** (only the antecedent does), so the deck launcher did not appear. Added **Open deck** on repost/variant cards (when **`has_source_layout`**) via **`openDeckForFeedAntecedentPost`** / **`openDeckForChannelAntecedentMessage`**: opens the deck from the antecedent row if it is already in the DOM, otherwise navigates with **`focus_post`/`focus_message` + `open_deck=1`**. **`/channels/locate`** forwards **`open_deck`** to the channel view.
+
+## [0.4.147] - 2026-03-23
+
+### Fixed
+- **Channels page `ReferenceError: currentChannelName is not defined`** — Repost/variant UI in **`renderMessage`** used **`currentChannelName`** in template strings without a global. Added **`currentChannelName`** (initial value from first channel) and **`selectChannel`** keeps it in sync with **`channelName`**.
+
+## [0.4.146] - 2026-03-23
+
+### Fixed
+- **Channels “Error loading messages” after lineage work** — `displayMessages` failures were chained to the same `.catch` as `fetch`, so a **render** exception looked like a **load** failure. Render errors now use a **dedicated inner `.catch`** plus a **try/catch** around the render block (with console logging). API errors still show “Error loading messages”; render errors show a distinct message.
+
+## [0.4.145] - 2026-03-23
+
+### Fixed
+- **Channel lineage (repost/variant) breaking message load** — Building the reference preview could raise on odd `message_type` / `created_at` values on the resolved original, which caused **`ajax_get_channel_messages`** to **skip the entire wrapper message**. Previews now use safe serializers and catch preview build errors (mark reference unavailable). UI decoration failures clear **`is_repost` / `is_variant`** instead of aborting the message row.
+- **Channels spinner** — **`loadChannelMessages`** now **chains on `displayMessages`’s promise** so failures in the render path hit **`catch`** and **`finally`** (sidebar attention refresh still runs only when **`marked_read`**).
+
+## [0.4.144] - 2026-03-23
+
+### Fixed
+- **Channels not loading / empty threads** — Channel message AJAX decorated repost/variant links with `url_for('ui.locate_channel_message')`, which **does not exist**, causing **`BuildError`** and **skipped messages** in the response (data remained in DB). Now uses **`ui.channels_locate`** with **`/channels/locate?...`** fallback if `url_for` fails.
+- **Channel sidebar snapshot** — **`archived_at`** serialized via **`_sidebar_archived_at_iso`** so non-datetime values cannot break **`/ajax/channel_sidebar_state`**.
+
+### Notes
+- Restart web + hard-refresh for **`?v=0.4.144`**. After restart, ensure **one** process owns **7770** and **7771** (avoid duplicate instances).
+
+## [0.4.143] - 2026-03-23
+
+### Security
+- **Channel repost & lineage variant API** — `POST .../channels/<id>/messages/<msg_id>/repost` and `.../variant` now require **`WRITE_MESSAGES`** (decorator) **and** **`READ_MESSAGES`** (explicit handler check). Keys with **only** `READ_FEED` + `WRITE_FEED` no longer pass the auth gate; `WRITE_MESSAGES` without `READ_MESSAGES` returns **`READ_MESSAGES permission required`**. Aligns channel lineage mutations with the message surface and least-privilege agent keys.
+
+### Tests / docs
+- **`tests/test_channel_repost_v1.py`**, **`tests/test_channel_variant_v1.py`** — permission regression cases; **`docs/API_REFERENCE.md`**, **`docs/AGENT_ONBOARDING.md`**.
+
+### Notes
+- Restart web + hard-refresh for **`?v=0.4.143`**.
+
+## [0.4.142] - 2026-03-23
+
+### Added
+- **Lineage variants v1** — Narrow provenance wrappers using **`source_reference.kind = variant_v1`** alongside **`repost_v1`**. Feed **post → feed variant** (visibility same as antecedent; `public` / `network` / `trusted` only); channel **message → same-channel variant**. Optional **`relationship_kind`** (`curated_recomposition`, `module_variant`, `parameterized_variant`) and **`module_param_delta`**. No copied antecedent body/attachments/layout; **repost wrappers cannot be antecedents**; generic create/update strips forged `source_reference`; feed **PATCH** preserves legitimate existing provenance. **API:** `POST /api/v1/feed/posts/<id>/variant`, `POST /api/v1/channels/<id>/messages/<msg_id>/variant`. **UI:** inline amber-styled variant composer; **`variant_reference`** / **`is_variant`** on responses. **P2P:** variant metadata propagates with channel messages where applicable.
+
+### Tests / docs
+- **`tests/test_variant_v1.py`**, **`tests/test_channel_variant_v1.py`**, **`docs/LINEAGE_VARIANTS_V1_PLAN.md`**, updates to **`docs/API_REFERENCE.md`**, **`docs/AGENT_ONBOARDING.md`**, **`docs/REPOST_V1_IMPLEMENTATION_PLAN.md`**, **`README.md`**.
+
+### Notes
+- Restart web + hard-refresh feed and channels for **`?v=0.4.142`**.
+
+## [0.4.141] - 2026-03-23
+
+### Docs
+- **README** — Version badge `0.4.141`, nav link to **Repost v1** plan, **Documentation Map** entries for `REPOST_V1_DESIGN_REVIEW.md`, `REPOST_V1_IMPLEMENTATION_PLAN.md`, `BOOKMARKS_V1_PLAN.md`.
+- **`docs/API_REFERENCE.md`** — Web UI AJAX notes for feed (`/ajax/repost_post`, `/ajax/share_post`) and channels (`/ajax/repost_channel_message`).
+- **`docs/AGENT_ONBOARDING.md`** — Channel repost: UI uses session AJAX path.
+- **`docs/MCP_QUICKSTART.md`** — Version alignment + repost v1 endpoint reminder for MCP agents.
+- **`docs/REPOST_V1_DESIGN_REVIEW.md`** — Correct channel UI path to `POST /ajax/repost_channel_message` + JSON body shape.
+- **`docs/REPOST_V1_IMPLEMENTATION_PLAN.md`** — Read/render contract (`body_text`, `embed`, `channel_id`); API/UI/P2P shipped summary.
+
+### Notes
+- Prepares repo docs for upcoming **public** release curation so the public-facing documentation stays aligned with the primary development tree.
+
+## [0.4.140] - 2026-03-23
+
+### Added
+- **Channel repost v1 (same-channel reference wrappers)** — `channel_messages.source_reference` + `repost_policy` columns (migrated on startup). **`ChannelManager`**: `get_repost_eligibility`, `resolve_repost_reference`, `create_repost`; `send_message` / `update_message` only accept `source_reference` when **`allow_source_reference=True`** (forged wrappers stripped on generic paths). **API:** `POST /api/v1/channels/<channel_id>/messages/<message_id>/repost`, channel payloads include **`is_repost`** / **`repost_reference`** (aligned with feed: `body_text`, `embed`, `href` → `/channels/locate?message_id=…`). **UI:** inline repost composer in **`channels.html`**, **`POST /ajax/repost_channel_message`**. **P2P:** create/edit/catchup carry `source_reference` and `repost_policy`.
+
+### Tests / docs
+- **`tests/test_channel_repost_v1.py`**, **`tests/test_frontend_regressions.py`** markers; **`docs/API_REFERENCE.md`**, **`docs/AGENT_ONBOARDING.md`**, **`docs/REPOST_V1_IMPLEMENTATION_PLAN.md`**, **`README.md`**.
+
+### Notes
+- Restart web + hard-refresh channels view for **`?v=0.4.140`**.
+
+## [0.4.139] - 2026-03-23
+
+### Changed
+- **Feed repost UI** — Repost no longer uses a Bootstrap modal (avoids overlay/focus issues). **Repost** toggles an **inline composer** directly under that post’s action row (optional note, Cancel / Repost, character count). **Esc** closes when focus is inside the composer; **Ctrl/Cmd+Enter** submits. Active **Repost** button is highlighted while open.
+
+### Notes
+- Restart the web process and **hard-refresh** the feed.
+
+## [0.4.138] - 2026-03-23
+
+### Changed
+- **Feed repost UX** — Embedded original shows **full card-style preview**: long `body_text` (with truncation hint), link/image/video/audio embeds, poll question + option previews, and image **attachment thumbnails** (live-resolved; not copied into the repost row). Repost action uses a **Bootstrap modal** with optional commentary, character counter, and **Ctrl/Cmd+Enter** to publish (replaces `window.prompt`).
+
+### Docs
+- **`docs/API_REFERENCE.md`** — `repost_reference` rich fields documented.
+
+### Notes
+- Restart the web process and **hard-refresh** for **`?v=0.4.138`** and template/JS updates.
+
+## [0.4.137] - 2026-03-23
+
+### Added
+- **Feed repost v1 (secure reference wrappers)** — Reposts are **reference wrappers**, not copied posts: no copy of original body, attachments, or full metadata; visibility matches the source (**public** / **network** / **trusted** only; **private** / **custom** rejected). **Repost chains** and **`repost_policy: deny`** blocked. Generic **`POST/PATCH` feed** strips caller-forged **`source_reference`** / legacy share keys. **`FeedManager.create_repost`**, **`resolve_repost_reference`**, **`get_repost_eligibility`**; **`share_post`** aliases **`create_repost`**. Legacy **`shared_post_id`** rows still render/filter as reposts.
+
+### API / UI
+- **`POST /api/v1/feed/posts/<id>/repost`** (optional JSON **`comment`**). Feed payloads include **`repost_reference`** / **`is_repost`** when applicable.
+- **UI:** Feed template repost shell + **`/ajax/repost_post`** and **`/ajax/share_post`** (same handler, secure semantics); action label **Repost**.
+
+### Tests / docs
+- **`tests/test_repost_v1.py`**, **`docs/REPOST_V1_DESIGN_REVIEW.md`**, **`docs/REPOST_V1_IMPLEMENTATION_PLAN.md`**, **`docs/API_REFERENCE.md`**, **`docs/AGENT_ONBOARDING.md`**, **`README.md`**.
+
+### Notes
+- Restart the web process and **hard-refresh** so static assets use **`?v=0.4.137`**.
+
+## [0.4.136] - 2026-03-23
+
+### Added
+- **Bookmarks v1** — Local private saves for **`feed_post`**, **`channel_message`**, and **`dm_message`**: SQLite **`user_bookmarks`**, **`/bookmarks`** page, **`POST /ajax/bookmarks/toggle`** (CSRF), **`GET /bookmarks/open/<id>`**, REST **`/api/v1/bookmarks`** with permission-filtered list/detail ( **`READ_FEED`** for feed + channel sources, **`READ_MESSAGES`** for DMs). Server-derived snapshots; no P2P replication of bookmarks.
+
+### Tests
+- **`tests/test_bookmarks.py`** and related frontend/workspace/API session tests.
+
+### Docs
+- **`docs/BOOKMARKS_V1_PLAN.md`**, **`README.md`**, **`docs/API_REFERENCE.md`**, **`docs/AGENT_ONBOARDING.md`**.
+
+### Notes
+- Restart the web process and **hard-refresh** so static assets use **`?v=0.4.136`**.
+
+## [0.4.135] - 2026-03-22
+
+### Added
+- **Source layout v1 (channels)** — Compositor upgrades: promote single-cell **media grids** for hero sizing; **split image grids** when the layout references multiple `attachment:` ids; **widget `data-canopy-source-ref`** on module cards for `supporting` / deck; **Open deck** in the action toolbar; shell / hero / lede / side / strip CSS.
+- **`scripts/post_source_layout_multimedia_demo.py`** — Optional API demo post (images + module + full `source_layout`).
+- **`docs/CANOPY_SOURCE_LAYOUT_V1.md`** — Source layout documentation.
+- **Bundled `.canopy-module.html` surfaces** under `canopy/ui/static/modules/` (with SVG assets).
+
+### Changed
+- **AJAX channel messages** — Batch-merge `source_layout` from `channel_messages` so payloads match DB.
+- **Channels template** — `scheduleChannelSourceLayouts` (rAF) after message inject; `displayAttachments(..., source_layout)`.
+
+### Tests
+- **`tests/test_source_layout.py`**, **`tests/test_frontend_regressions.py`** — Layout / UI regressions.
+
+### Notes
+- Restart the Canopy web process and **hard-refresh** so static `?v=0.4.135` and templates load.
+
+## [0.4.134] - 2026-02-27
+
+### Security
+- **Source layout action URLs** — Reject **protocol-relative** URLs (`//host/...`) in `normalize_source_layout` (they were incorrectly allowed as “paths” because they start with `/`). Client compositor mirrors the same rule before emitting `<a href>`.
+
+### Fixed
+- **Source layout compositor** — If layout JSON changes while a shell already exists, **unwrap** the old shell and **rebuild** instead of leaving a stale layout.
+
+### Tests
+- **`tests/test_source_layout.py`** — Assert `//…` action URLs are stripped alongside `javascript:`.
+
+### Notes
+- **Local:** Restart the Canopy web process and **hard-refresh** so **`canopy-main.js`** and any template changes load at **v0.4.134**.
+
+## [0.4.133] - 2026-03-21
+
+### Changed
+- **Media deck: scroll channel/feed behind dimmer (desktop)** — On **`(hover: hover)`** and **`pointer: fine`**, the deck backdrop uses **`pointer-events: none`** so **wheel scroll** reaches the channel/feed while the deck stays open. Touch/coarse pointers unchanged (tap-outside on dimmer still closes).
+
+### Tests
+- **`tests/test_frontend_regressions.py`** — backdrop pass-through comment substring.
+
+### Notes
+- **Local testing:** Restart the Canopy web process and **hard-refresh** the browser (or open a fresh tab) so inlined **`base.html`** styles and bumped **`?v={{ canopy_version }}`** script URLs pick up **v0.4.133**.
+
+## [0.4.132] - 2026-03-21
+
+### Fixed
+- **Module deck: module visible again (regression from absolute iframe)** — **`position: absolute`** on the module iframe removed it from flow, so **`.sidebar-media-deck-widget-stage`** could collapse to **0 height** and the module disappeared. Restored **in-flow** **`flex`** sizing with **`min-height` clamps** on stage, widget-stage, and module iframe; kept **`object-fit: fill`** and **`injectDeckModuleRuntime`** **`html, body`** height shell.
+
+### Tests
+- **`tests/test_frontend_regressions.py`** — module iframe **`min-height` clamp** substring (replaces absolute/inset asserts).
+
+## [0.4.131] - 2026-03-21
+
+### Fixed
+- **Module deck: iframe fills stage on Windows (Chromium)** — **`height:100%` / flex on replaced iframes** often left a large empty band (stage background visible). **`is-module-active`** module iframe now uses **`position: absolute; inset: 0`** inside **`position: relative`** **`.sidebar-media-deck-widget-stage`** (desktop, mobile, short landscape). **`injectDeckModuleRuntime`** adds base **`html, body { height: 100%; … }`** so module documents can fill the frame.
+
+### Tests
+- **`tests/test_frontend_regressions.py`** — absolute/inset module frame + **`data-canopy-module-shell`**.
+
+## [0.4.130] - 2026-03-21
+
+### Fixed
+- **Module deck: stage fills available pane (Windows)** — Replaces the fixed **`vh` height clamp** on **`is-module-active`** (which capped the stage and made the module look smaller). **`sidebar-media-deck-scroll`** and **`stage-shell`** use a column **flex** chain so the stage **grows with the deck**; **`is-module-active`** shell **`max-height`** aligned with the taller deck cap; **`object-fit: fill !important`** on the module **iframe** so it overrides the global stage **`object-fit: cover`**.
+
+### Tests
+- **`tests/test_frontend_regressions.py`** — **`is-module-active`** **`stage-shell`** / **`scroll`** layout rules.
+
+## [0.4.129] - 2026-02-27
+
+### Fixed
+- **Module deck: module iframe not filling the stage (Windows / Chromium)** — When **`is-module-active`**, the deck stage now uses a **definite `height`** (same **`clamp`** as min/max) so **`height: 100%`** on the module iframe resolves; widget stage remains a column flex child with **`min-height: 0`**; module frame uses **`flex: 1`**, **`object-fit: fill`**, and matching rules for mobile and short-landscape breakpoints.
+
+## [0.4.128] - 2026-03-21
+
+### Fixed
+- **Module deck: queue missing for mixed sources** — `syncDeckLayoutMode` ran before `renderDeckQueue`, so the queue item count could be stale and the list stayed collapsed with no way to pick YouTube. Layout now keys off `state.deckItems.length` (`deckLayoutLastQueueCount`), keeps the **FROM THIS SOURCE** strip **expanded** when there is more than one deck item, and re-runs `syncDeckLayoutMode` after `renderDeckQueue`.
+
+### Changed
+- **Module deck scroll** — Sticky **FROM THIS SOURCE** queue header while **`is-module-active`** so **Show list** / the strip stays reachable above a tall module stage.
+
+### Tests
+- **`tests/test_frontend_regressions.py`** — `deckLayoutLastQueueCount` substring.
+
+## [0.4.127] - 2026-03-21
+
+### Changed
+- **Module-focused deck layout** — When the selected deck item is **`module_runtime`**, the deck uses **`is-module-active`**: larger stage budget, **FROM THIS SOURCE** queue and detail/context default collapsed (**Show list** / **Show details** restore them). Non-module selection returns to the usual expanded layout. CSS in **`base.html`**; **`syncDeckLayoutMode`** / toggles in **`canopy-main.js`**.
+
+### Fixed
+- **Deck fails to open / disappears after queue rebuild** — **`reconcileDeckQueueItemsBuilt`** no longer uses **`!item.key`** (drops valid keys only when **`undefined` / `null` / ''**). If a rebuild would yield an empty list while the prior queue had items, the previous list is reused. **`buildSourceWidgetList`** / union paths are wrapped in **`try/catch`** so malformed DOM cannot abort deck open.
+- **Deck queue loses module after switching to YouTube (mixed source)** — Docked media breaks **`sourceContainer`**, so **`renderDeckQueue`** could rebuild with only the active clip. Mitigations: **`deckOriginSourceEl`** + **`deckOriginMessageId` / `deckOriginPostId`**; **`deckItemSourceEl`** skips sidebar hosts; **`widgetManifestFromDeckNode`** + module-card discovery in **`buildSourceWidgetList`**; **`reconcileDeckQueueItemsBuilt`** keeps prior widget rows when DOM nodes still belong to the pinned message/post (**`widgetDeckOriginContainsEl`**) and backfills from **`buildSourceWidgetList(origin)`**; **`mergeDeckWidgetUnionIntoDeckItems`** on **`openMediaDeckForSource`** and full-item **`openMiniPlayerForSource`** so Deck / mini / Open module share the same widget union; explicit widget merge in **`renderDeckQueue`** uses **`widgetDeckOriginContainsEl`** instead of **`deckItemSourceEl === sourceEl`**.
+
+### Tests
+- **`tests/test_frontend_regressions.py`** — **`is-module-active`** layout CSS and **`syncDeckLayoutMode`** toggle string; deck queue / **`deckItemKeyUsable`** / **`reconcileDeckQueueItemsBuilt`** substrings as applicable.
+
+## [0.4.126] - 2026-02-27
+
+### Fixed
+- **Module card “Open module” silent failure / wrong deck item** — Module attachment roots now carry **`data-canopy-module-bundle-id`** (and name) whenever a file id is known. **`openMediaDeckForManifestNode(this)`** resolves that host and, if inline JSON fails to parse/sanitize, rebuilds the manifest from the bundle id so the deck opens on the **module** (not only when a YouTube embed is also present). User-visible **`showAlert`** when metadata is still unusable.
+- **“Metadata incomplete or invalid” follow-up** — **`sanitizeDeckModuleBundleUrl`** accepts percent-encoded same-origin **`/files/<id>`** paths (no traversal). **`normalizeDeckModuleRuntime`** uses trim-only **`bundle_file_id`** and **`encodeURIComponent`** on the fallback **`/files/…`** path. Channel/feed/DM **`file_id`** resolution includes **`origin_file_id`**. **`extractDeckModuleBundleFileIdFromManifestAttr`** scrapes **`bundle_file_id` / `bundle_url`** from a broken manifest attribute when needed.
+- **Open module matched wrong DOM node** — Module cards use **`data-canopy-module-card="1"`**. **`resolveCanopyModuleDeckManifestHost`** prefers that root so **`closest('[data-canopy-widget-manifest]')` no longer stops on an unrelated ancestor** (e.g. empty/broken manifest). **`extractCanopyModuleBundleFileIdFromHost`** reads the file id from same-origin **`/files/…`** links on the card (e.g. **Download**) when data attributes fail. Clear alert if the source message/post container cannot be resolved.
+
+### Documentation
+- **`docs/CANOPY_MODULE_RUNTIME_V1.md`** — Web UI deck-open path: data attributes and JS helpers used by channels, feed, and DMs.
+
+### Tests
+- **`tests/test_frontend_regressions.py`** — `resolveCanopyModuleDeckManifestHost`, `extractCanopyModuleBundleFileIdFromHost`, `data-canopy-module-card`, bundle attrs, `openMediaDeckForManifestNode(this)` wiring.
+
+## [0.4.125] - 2026-02-27
+
+### Fixed
+- **Canopy Module deck queue on Open module** — When opening the deck from a module card, the clicked module is now passed as an **`explicitItem`** (`buildDeckWidgetItem` + **`mergeExplicitDeckItem`**) into **`openMediaDeckForSource`**, so the module row cannot disappear if DOM recollection omits it. **`renderDeckQueue`** re-merges the **selected non-media widget** the same way on the first queue rebuild so the queue does not collapse to media-only items.
+
+### Tests
+- **`tests/test_frontend_regressions.py`** — Substrings for `buildDeckWidgetItem`, `mergeExplicitDeckItem`, `explicitItem` / `explicitSelectedWidget`, and `state.deckItems = mergeExplicitDeckItem(`.
+
+## [0.4.124] - 2026-02-27
+
+### Fixed
+- **Canopy Module cross-peer deck queue** — Module manifests now set **`bundle_url`** to the local **`/files/<id>`** path (channels JS, feed + DM Jinja) instead of reusing **`attachment.url`**, which could be an absolute remote URL and fail **`sanitizeDeckModuleBundleUrl`**. **`normalizeDeckModuleRuntime`** falls back to **`/files/<bundle_file_id>`** when the primary URL sanitizes to empty so older manifests can recover.
+
+### Tests
+- **`tests/test_frontend_regressions.py`** — Strings for `primaryBundleUrl` / fallback `bundleUrl`, channels `encodeURIComponent` bundle path, Jinja `bundle_url` bindings.
+
+## [0.4.123] - 2026-02-27
+
+### Added
+- **`openMediaDeckForManifestNode(node)`** — Resolves a widget manifest node, finds its source, opens the media deck with **`preferredKey`** set to that manifest’s **`key`** so the correct module item is selected (not a generic source default).
+
+### Changed
+- **Module attachment cards** (channels, feed, DMs) — Primary **Open module** button on the card; optional **Download** when a file URL exists. Removes passive “use the deck launcher” style copy so single-module posts have a direct affordance. Source-level **Deck | Mini** launcher unchanged for mixed-media sources.
+
+### Tests
+- **`tests/test_frontend_regressions.py`** — Assertions for `openMediaDeckForManifestNode`, `window` export, and template `onclick` wiring across channels, feed, and DM macros.
+
+## [0.4.122] - 2026-02-27
+
+### Added
+- **Canopy Module bundle validation** — Filenames ending in `.canopy-module.html` / `.canopy-module.htm` use `_validate_canopy_module_bundle()`: UTF-8 HTML document, **300 KiB** max, inline script allowed; blocks external scripts, inline event handlers, CSP override meta, embedded browsing tags, and non–self-contained resource URLs (`data:` / `blob:` / `#` only).
+- **Module-aware MIME inference** — Generic uploads (`application/octet-stream`, etc.) still normalize to `text/html` when the filename extension implies HTML, so agents can upload modules without spoofing types.
+- **Module preview semantics** — `build_file_preview()` returns `previewable: false`, `kind: "module"` for module bundles; `is_text_previewable()` excludes them.
+- **Module bundle coverage** — Generic `Canopy Module` fixtures are covered in validation and manual deck-check workflows without shipping a local showcase bundle in the public repo.
+- **Documentation** — `docs/CANOPY_MODULE_RUNTIME_V1.md` and cross-links in README / API / agent docs.
+
+### Changed
+- **Channel / feed / DM templates** — Module attachments emit `module_surface` / `module_runtime` deck manifests instead of behaving like plain HTML files.
+- **Frontend** — `canopyIsModuleBundle()` excludes module bundles from generic text preview eligibility (`canopy-main.js`).
+
+### Tests
+- **`tests/test_spreadsheet_preview_support.py`** — Module accept/reject and preview behavior.
+- **`tests/test_frontend_regressions.py`** — Module preview helpers and runtime/template assertions.
+
+## [0.4.121] - 2026-02-27
+
+### Changed
+- **Version bump** — release-candidate alignment for current local testing; no functional runtime change in this commit.
+
+### Documentation
+- **Agent note (local only)** — `agent_note/AGENT_NOTE_CANOPY_MODULE_RUNTIME_V1_SCAFFOLD_2026-03-20.md` revised: repo-relative paths, explicit capability allowlist and gating (`context.get` vs broker methods), `CanopyModule` API, CSP/sandbox notes, link to `docs/CANOPY_MODULE_RUNTIME_V1.md`.
+
+## [0.4.120] - 2026-03-20
 
 ### Improved
-- **Media deck vs mini player** — Opening the deck from a post no longer materializes YouTube until **Play** (facade stays static; avoids the “first tap wakes video, second opens deck” feel). Source actions add **Mini player** next to **Media deck**; the deck header adds **Mini player** to hand off from the expanded view. **Minimize** docks YouTube into the mini player even when the source is still on-screen (`forceDockMini`). Mini player stays visible for a docked facade until Play; deck/mini controls resolve the iframe when present.
-- **YouTube handoff** — Before reparenting embeds (mini ↔ deck ↔ inline), the app snapshots time/play state, updates the embed URL (`start` / `autoplay`) when needed, re-bridges the IFrame API after a `src` change, and runs the existing dock-restore loop so playback can continue instead of restarting at 0. The same path is used when restoring docked YouTube to the post placeholder. **Mini ↔ deck** moves skip URL rewrites and player resets so the iframe is not torn down in-place (avoids a blank deck stage).
-- **Media deck resilience** — `repairMediaCurrentReference` rebinds `state.current` from the post/message when the prior node is disconnected; `reconcileDeckStageMediaPlacement` moves video/YouTube back onto the deck stage if it was left elsewhere; failed repair while the deck is open force-closes the deck. Docked YouTube **ENDED** uses the iframe’s `__canopyMiniYTState` when `state.current.el` is the wrapper.
-- **Deck controls on short screens** — Header actions wrap; **Collapse** and **Mini bar** are duplicated in the sticky bottom control row (with Prev/Play/Next) so you can reach mini-player handoff without scrolling to the top.
+- **Deck transport controls always visible** — Seek bar and primary deck actions (**Prev / Play / Next**, collapse, mini bar, **Return**) live in a pinned **footer** below the scroll region. Only the stage, horizontal queue, and detail blocks (title, station summary, widget actions) scroll, so you no longer scroll past content to reach controls.
+
+## [0.4.119] - 2026-03-20
+
+### Fixed
+- **Deck scroll reachability** — On desktop/tablet, the deck shell grid uses `minmax(0, 1fr)` for the main body row and `.sidebar-media-deck-body` scrolls (`min-height: 0`, `overflow-y: auto`, stable scrollbar gutter) so controls below a tall stage/queue remain reachable.
+
+### Improved
+- **Station surface dedup** — `renderDeckStationSummary` skips the station summary for **simple reference** widgets (maps/charts: `reference_surface`, source-scoped, view-only, no human gate) while preserving the summary for streams, telemetry, station scope, low-risk actions, and gated flows.
+
+## [0.4.118] - 2026-03-20
+
+### Changed
+- Version bump (local testing / mesh verification).
+
+## [0.4.117] - 2026-03-20
+
+### Added
+- **Widget manifest v1 contract** — Sanitized deck manifests now always include **`station_surface`** (kind, domain, label, summary, recurring, scope), **`action_policy`** (`max_risk`, `human_gate`, `audit_label`, bounded flag), and **`source_binding`** (`return_label` drives deck **Return** copy). Defaults apply when older embed producers omit these fields.
+- **Bounded action model** — Per-action **`risk`** (`view` \| `low`) and **`scope`** (`source` \| `station`); `canRunDeckWidgetAction` enforces policy at runtime; optional **`requires_confirmation`** before run.
+- **Station surface UI** — Deck shows a **Station Surface** summary (policy pill + badges for domain, recurring/source-bound, scope, risk tier, human gate) when a widget with `station_surface` is selected.
+- **Stream cards** — Channel stream/telemetry cards emit the full manifest (explicit `station_surface`, `action_policy`, `source_binding`, and per-action risk/scope).
+
+### Documentation
+- **[docs/CANOPY_DECK_WIDGET_MANIFEST_V1.md](docs/CANOPY_DECK_WIDGET_MANIFEST_V1.md)** — Integrator reference for manifest v1, enums, and non-goals.
+
+## [0.4.116] - 2026-03-20
+
+### Improved
+- **Deck / mini launcher on posts** — Single fused **Deck | Mini** segmented control (one pill, subtle divider, count badges per side) instead of two separate buttons; deck-only sources hide the Mini segment.
+- **Deck panel copy** — Item total appears once in the header chip (`Canopy Deck · N items`); queue header no longer repeats the count; meta line shows **Item k of N** when there are multiple entries instead of duplicating totals.
+
+## [0.4.115] - 2026-03-20
+
+### Fixed
+- **Deck widget iframe flash** — Map and other deck widgets no longer rebuild their iframe on every mini-player tick (~700ms); the stage is reused when the embed signature is unchanged.
+- **Spotify deck embed** — Optional `intl-*/` path segment in Spotify URLs is recognized; Spotify (and SoundCloud) deck iframes omit the sandbox attribute so behavior matches in-feed embed previews.
+
+## [0.4.114] - 2026-03-20
+
+### Added
+- **Canopy Deck widget foundation (phase 1 + bounded phase 2)** — Typed, sanitized widget manifests (`map`, `chart`, `media_embed`, `story`, `media_stream`, `telemetry_panel`) with allowlisted iframe hosts, external links, and callback actions (`open_stream_workspace`, clipboard copy, etc.). Rich embeds (Vimeo, Loom, Spotify, SoundCloud, Google Maps, OSM, TradingView, etc.) publish deck-safe manifests; channel stream cards expose `stream_summary` with workspace / copy-id actions. Deck UI supports widget summary, badges, details, and safe iframe or summary staging; mini player stays media-only; **Deck** launcher counts all deck items while **Mini player** counts playable media only.
+
+### Fixed
+- **Media deck on iOS** — Deck portal outside `.app-container`; touch/narrow `pointerdown` on deck launcher avoids first-tap-only YouTube materialize.
+
+### Improved
+- **Media deck vs mini player** — Deferred YouTube materialize for deck open; dual launchers; `forceDockMini` on minimize; facade-friendly mini chrome; iframe-resolved controls.
+- **YouTube handoff** — Snapshot time/play across hosts; skip URL rewrite for mini↔deck reparents; restore path for post placeholder.
+- **Deck resilience** — `repairMediaCurrentReference` uses full deck items (media + widgets) and leaves `state.current` null for widget-only repair; stage reconciliation; short-screen footer **Collapse** / **Mini bar**.
 
 ## [0.4.113] - 2026-03-20
 

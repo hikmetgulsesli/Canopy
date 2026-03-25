@@ -3,18 +3,23 @@ File upload validation and security checks for Canopy.
 
 Validates file types, sizes, and content to prevent malicious uploads.
 
-Author: Konrad Walus (architecture, design, and direction)
 Project: Canopy - Local Mesh Communication
 License: Apache 2.0
-Development: AI-assisted implementation (Claude, Codex, GitHub Copilot, Cursor IDE, Ollama)
 """
 
-import logging
-import zipfile
+from __future__ import annotations
+
 import io
-from typing import Tuple, Optional
+import logging
+import re
+import zipfile
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+CANOPY_MODULE_SUFFIXES = ('.canopy-module.html', '.canopy-module.htm')
+CANOPY_MODULE_MAX_BYTES = 300 * 1024
 
 
 # Extension-to-MIME mapping for when browsers send application/octet-stream
@@ -85,6 +90,69 @@ def _infer_content_type(filename: str) -> Optional[str]:
         return 'application/gzip'
     ext = lower.rsplit('.', 1)[-1] if '.' in lower else ''
     return _EXT_TO_MIME.get(f'.{ext}')
+
+
+def is_canopy_module_filename(filename: str | None) -> bool:
+    lower = str(filename or '').strip().lower()
+    return any(lower.endswith(suffix) for suffix in CANOPY_MODULE_SUFFIXES)
+
+
+def _has_safe_inline_module_resource_urls(file_str: str) -> bool:
+    for attr_name in ('src', 'href', 'poster', 'action', 'formaction'):
+        quoted_pattern = re.compile(
+            rf"""\b{attr_name}\s*=\s*(['"])\s*(?!data:|blob:|#)[^'"]+\1""",
+            re.IGNORECASE,
+        )
+        bare_pattern = re.compile(
+            rf"""\b{attr_name}\s*=\s*(?!['"])(?!data:|blob:|#)[^\s>]+""",
+            re.IGNORECASE,
+        )
+        if quoted_pattern.search(file_str) or bare_pattern.search(file_str):
+            return False
+    return True
+
+
+def _validate_canopy_module_bundle(file_data: bytes) -> tuple[bool, Optional[str]]:
+    try:
+        file_str = file_data.decode('utf-8', errors='strict')
+    except UnicodeDecodeError:
+        return False, "Canopy Module bundle must be valid UTF-8 HTML"
+
+    lowered = file_str.lower()
+    stripped = lowered.lstrip()
+
+    if not (stripped.startswith('<!doctype') or stripped.startswith('<html')):
+        return False, "Canopy Module bundle must be a complete HTML document"
+
+    if len(file_data) > CANOPY_MODULE_MAX_BYTES:
+        return False, (
+            f"Canopy Module bundle exceeds the v1 size budget of {CANOPY_MODULE_MAX_BYTES} bytes"
+        )
+
+    blocked_substrings = [
+        'javascript:',
+        '<iframe',
+        '<frame',
+        '<frameset',
+        '<object',
+        '<embed',
+        '<applet',
+        '<base',
+    ]
+    for pattern in blocked_substrings:
+        if pattern in lowered:
+            return False, "Canopy Module bundle contains a blocked HTML feature"
+
+    if re.search(r'<script\b[^>]*\bsrc\s*=', lowered, re.IGNORECASE):
+        return False, "Canopy Module bundle cannot load external scripts"
+    if re.search(r'\son[a-z0-9_-]+\s*=', lowered, re.IGNORECASE):
+        return False, "Canopy Module bundle cannot use inline event handler attributes"
+    if re.search(r'<meta\b[^>]*http-equiv\s*=\s*["\']?content-security-policy', lowered, re.IGNORECASE):
+        return False, "Canopy Module bundle cannot override the Canopy runtime CSP"
+    if not _has_safe_inline_module_resource_urls(file_str):
+        return False, "Canopy Module bundle must be self-contained (data/blob/hash URLs only)"
+
+    return True, None
 
 
 # Allowed MIME types and their magic bytes signatures
@@ -329,31 +397,37 @@ def validate_file_upload(
     
     if len(file_data) == 0:
         return False, "File is empty", None
-    
+
+    is_canopy_module = claimed_content_type == 'text/html' and is_canopy_module_filename(filename)
+
     # 3. Verify magic bytes match claimed type
     magic_bytes = ALLOWED_TYPES[claimed_content_type]
     if magic_bytes:  # Some types like text/plain don't have magic bytes
         magic_match = False
-        for signature in magic_bytes:
-            if claimed_content_type == 'application/x-tar':
-                # TAR signature is at offset 257
-                if len(file_data) > 262 and file_data[257:262] == signature:
-                    magic_match = True
-                    break
-            elif claimed_content_type in ('image/webp', 'audio/wav'):
-                # RIFF containers need extra validation
-                if file_data.startswith(b'RIFF'):
-                    if claimed_content_type == 'image/webp' and len(file_data) > 12 and file_data[8:12] == b'WEBP':
+        if is_canopy_module:
+            stripped = file_data.lstrip().lower()
+            magic_match = stripped.startswith(b'<!doctype') or stripped.startswith(b'<html')
+        else:
+            for signature in magic_bytes:
+                if claimed_content_type == 'application/x-tar':
+                    # TAR signature is at offset 257
+                    if len(file_data) > 262 and file_data[257:262] == signature:
                         magic_match = True
                         break
-                    elif claimed_content_type == 'audio/wav' and len(file_data) > 12 and file_data[8:12] == b'WAVE':
+                elif claimed_content_type in ('image/webp', 'audio/wav'):
+                    # RIFF containers need extra validation
+                    if file_data.startswith(b'RIFF'):
+                        if claimed_content_type == 'image/webp' and len(file_data) > 12 and file_data[8:12] == b'WEBP':
+                            magic_match = True
+                            break
+                        elif claimed_content_type == 'audio/wav' and len(file_data) > 12 and file_data[8:12] == b'WAVE':
+                            magic_match = True
+                            break
+                else:
+                    if file_data.startswith(signature):
                         magic_match = True
                         break
-            else:
-                if file_data.startswith(signature):
-                    magic_match = True
-                    break
-        
+
         if not magic_match:
             return False, f"File content does not match claimed type '{claimed_content_type}'", None
     
@@ -371,16 +445,21 @@ def validate_file_upload(
     
     # 4b. Check for dangerous patterns in HTML files
     if claimed_content_type in ('text/html',):
-        try:
-            file_str = file_data.decode('utf-8', errors='strict').lower()
-        except UnicodeDecodeError:
-            return False, "HTML file contains invalid UTF-8 encoding", None
-        
-        dangerous_patterns = ['<script', 'javascript:', 'onerror=', 'onload=', '<iframe',
-                              '<object', '<embed', '<applet']
-        for pattern in dangerous_patterns:
-            if pattern in file_str:
-                return False, "HTML file contains potentially dangerous content", None
+        if is_canopy_module:
+            module_ok, module_error = _validate_canopy_module_bundle(file_data)
+            if not module_ok:
+                return False, module_error, None
+        else:
+            try:
+                file_str = file_data.decode('utf-8', errors='strict').lower()
+            except UnicodeDecodeError:
+                return False, "HTML file contains invalid UTF-8 encoding", None
+
+            dangerous_patterns = ['<script', 'javascript:', 'onerror=', 'onload=', '<iframe',
+                                  '<object', '<embed', '<applet']
+            for pattern in dangerous_patterns:
+                if pattern in file_str:
+                    return False, "HTML file contains potentially dangerous content", None
 
     # 4c. Validate that OOXML spreadsheet uploads are actually workbook containers.
     if claimed_content_type in (

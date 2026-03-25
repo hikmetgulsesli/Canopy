@@ -6,10 +6,8 @@ Model Context Protocol server that exposes Canopy functionality as tools
 for AI agents to interact with. Uses proper API key authentication to ensure
 user control over agent permissions.
 
-Author: Konrad Walus (architecture, design, and direction)
 Project: Canopy - Local Mesh Communication
 License: Apache 2.0
-Development: AI-assisted implementation (Claude, Codex, GitHub Copilot, Cursor IDE, Ollama)
 """
 
 import asyncio
@@ -1258,10 +1256,10 @@ class CanopyMCPServer:
                     raise ValueError(f"Unknown tool: {name}")
                     
             except Exception as e:
-                logger.error(f"Error handling tool call {name}: {e}")
+                logger.error(f"Error handling tool call {name}: {e}", exc_info=True)
                 return [TextContent(
                     type="text",
-                    text=f"Error: {str(e)}"
+                    text="Error: Tool call failed"
                 )]
 
     async def _send_message(self, args: Dict[str, Any]) -> List[TextContent]:

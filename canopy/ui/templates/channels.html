@@ -57,7 +57,294 @@
         font-weight: 600;
         line-height: 1;
     }
-    
+    .message-actions .icon-action-btn,
+    .post-lineage-bar .btn.btn-sm,
+    .post-repost-actions .btn.btn-sm {
+        border-color: color-mix(in srgb, var(--canopy-border) 76%, var(--canopy-primary) 24%) !important;
+        background: color-mix(in srgb, var(--canopy-bg-card) 84%, var(--canopy-primary) 16%) !important;
+        color: var(--canopy-text-secondary) !important;
+        box-shadow: none !important;
+    }
+    .message-actions .icon-action-btn:hover,
+    .message-actions .icon-action-btn:focus-visible,
+    .post-lineage-bar .btn.btn-sm:hover,
+    .post-lineage-bar .btn.btn-sm:focus-visible,
+    .post-repost-actions .btn.btn-sm:hover,
+    .post-repost-actions .btn.btn-sm:focus-visible {
+        border-color: color-mix(in srgb, var(--canopy-primary) 46%, var(--canopy-border) 54%) !important;
+        background: color-mix(in srgb, var(--canopy-bg-tertiary) 68%, var(--canopy-primary) 32%) !important;
+        color: var(--canopy-text-primary) !important;
+    }
+    .like-btn.is-liked,
+    .bookmark-action-btn.is-saved,
+    .repost-trigger-btn.is-repost-open,
+    .variant-trigger-btn.is-variant-open {
+        border-color: color-mix(in srgb, var(--canopy-primary) 52%, var(--canopy-border) 48%) !important;
+        background: color-mix(in srgb, var(--canopy-primary) 28%, var(--canopy-bg-card) 72%) !important;
+        color: var(--canopy-text-primary) !important;
+    }
+
+    .post-repost-shell,
+    .post-variant-shell {
+        display: grid;
+        gap: 0.85rem;
+    }
+
+    /* Lighter repost block — less “nested card” chrome, same information */
+    .post-repost-shell--streamlined {
+        gap: 0.45rem;
+    }
+    .post-repost-shell--streamlined .post-repost-card {
+        border-radius: 0.65rem;
+        padding: 0.55rem 0.75rem;
+        box-shadow: none;
+        background: rgba(15, 23, 42, 0.58);
+        border: 1px solid rgba(148, 163, 184, 0.16);
+    }
+    .post-repost-shell--streamlined .post-repost-head {
+        margin-bottom: 0.35rem;
+    }
+    .post-repost-shell--streamlined .post-repost-meta {
+        margin-bottom: 0.45rem;
+    }
+    .post-repost-shell--streamlined .post-repost-quote {
+        padding: 0.55rem 0.65rem;
+        border-radius: 0.55rem;
+    }
+    .post-repost-shell--streamlined .post-repost-actions {
+        margin-top: 0.5rem;
+    }
+
+    .post-variant-shell--minimal {
+        gap: 0.35rem;
+    }
+    .post-lineage-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.45rem 0.65rem;
+        margin-top: 0.2rem;
+        padding-top: 0.5rem;
+        border-top: 1px solid rgba(148, 163, 184, 0.2);
+        font-size: 0.82rem;
+        color: rgba(226, 232, 240, 0.82);
+    }
+    .post-lineage-bar .post-lineage-badge {
+        font-size: 0.72rem;
+        font-weight: 600;
+    }
+    .post-lineage-bar .btn-sm {
+        padding: 0.1rem 0.45rem;
+        font-size: 0.76rem;
+        line-height: 1.25;
+    }
+    .post-variant-param-delta {
+        font-size: 0.86rem;
+        color: rgba(226, 232, 240, 0.88);
+    }
+    .post-variant-param-delta .delta-label {
+        font-weight: 600;
+        color: rgba(253, 230, 138, 0.85);
+        margin-right: 0.35rem;
+    }
+
+    .post-repost-card,
+    .post-variant-card {
+        border: 1px solid rgba(56, 189, 248, 0.24);
+        border-radius: 1rem;
+        padding: 0.95rem 1rem;
+        background:
+            linear-gradient(180deg, rgba(8, 15, 28, 0.92), rgba(11, 19, 34, 0.96)),
+            radial-gradient(circle at top right, rgba(56, 189, 248, 0.18), transparent 44%);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+    }
+
+    .post-variant-card {
+        border-color: rgba(245, 158, 11, 0.28);
+        background:
+            linear-gradient(180deg, rgba(26, 18, 8, 0.94), rgba(23, 17, 9, 0.96)),
+            radial-gradient(circle at top right, rgba(245, 158, 11, 0.18), transparent 42%);
+    }
+
+    .post-repost-card.is-unavailable,
+    .post-variant-card.is-unavailable {
+        border-color: rgba(148, 163, 184, 0.28);
+        background: linear-gradient(180deg, rgba(13, 18, 29, 0.92), rgba(14, 19, 30, 0.96));
+    }
+
+    .post-repost-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 0.5rem;
+        flex-wrap: wrap;
+    }
+
+    .post-repost-head .post-repost-badge {
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+
+    .post-repost-eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.74rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: rgba(186, 230, 253, 0.92);
+    }
+
+    .post-repost-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.2rem 0.55rem;
+        border-radius: 999px;
+        border: 1px solid rgba(56, 189, 248, 0.3);
+        background: rgba(56, 189, 248, 0.12);
+        color: rgba(224, 242, 254, 0.96);
+        font-size: 0.72rem;
+        font-weight: 600;
+    }
+
+    .post-variant-card .post-repost-eyebrow {
+        color: rgba(254, 243, 199, 0.96);
+    }
+
+    .post-variant-card .post-repost-quote {
+        border-color: rgba(245, 158, 11, 0.22);
+        background: rgba(41, 28, 10, 0.78);
+    }
+
+    .post-variant-relationship {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.2rem 0.55rem;
+        border-radius: 999px;
+        border: 1px solid rgba(245, 158, 11, 0.3);
+        background: rgba(245, 158, 11, 0.12);
+        color: rgba(254, 243, 199, 0.96);
+        font-size: 0.72rem;
+        font-weight: 600;
+    }
+
+    .post-variant-delta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        align-items: center;
+        margin-bottom: 0.65rem;
+        padding: 0.65rem 0.8rem;
+        border-radius: 0.8rem;
+        border: 1px solid rgba(245, 158, 11, 0.22);
+        background: rgba(245, 158, 11, 0.08);
+        color: rgba(254, 243, 199, 0.96);
+        font-size: 0.84rem;
+    }
+
+    .post-variant-delta-label {
+        font-size: 0.68rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: rgba(253, 230, 138, 0.88);
+    }
+
+    .post-repost-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        align-items: center;
+        margin-bottom: 0.6rem;
+        color: rgba(226, 232, 240, 0.82);
+        font-size: 0.82rem;
+    }
+
+    .post-repost-quote {
+        border-radius: 0.9rem;
+        padding: 0.85rem 0.95rem;
+        background: rgba(15, 23, 42, 0.78);
+        border: 1px solid rgba(148, 163, 184, 0.16);
+    }
+
+    .post-repost-body,
+    .post-repost-preview {
+        white-space: pre-wrap;
+        color: var(--canopy-text-primary);
+        line-height: 1.55;
+    }
+
+    .post-repost-thumb-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+        gap: 0.5rem;
+    }
+
+    .post-repost-thumb-link img {
+        width: 100%;
+        height: 96px;
+        object-fit: cover;
+        border-radius: 0.7rem;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+    }
+
+    .post-repost-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        align-items: center;
+        margin-top: 0.75rem;
+    }
+
+    .post-repost-unavailable {
+        font-weight: 700;
+        color: rgba(226, 232, 240, 0.95);
+    }
+
+    .post-repost-unavailable-meta {
+        margin-top: 0.4rem;
+        color: rgba(148, 163, 184, 0.86);
+        font-size: 0.84rem;
+        line-height: 1.5;
+    }
+
+    .repost-inline-composer {
+        margin-top: 0.7rem;
+        padding: 0.8rem 0.95rem;
+        border-radius: 1rem;
+        border: 1px solid rgba(56, 189, 248, 0.22);
+        background:
+            linear-gradient(180deg, rgba(8, 15, 28, 0.88), rgba(11, 19, 34, 0.92)),
+            radial-gradient(circle at top right, rgba(56, 189, 248, 0.14), transparent 42%);
+    }
+
+    .repost-inline-inner {
+        display: grid;
+        gap: 0.25rem;
+    }
+
+    .repost-inline-text {
+        resize: vertical;
+        min-height: 92px;
+    }
+
+    .variant-inline-composer {
+        margin-top: 0.7rem;
+        padding: 0.8rem 0.95rem;
+        border-radius: 1rem;
+        border: 1px solid rgba(245, 158, 11, 0.22);
+        background:
+            linear-gradient(180deg, rgba(34, 24, 10, 0.94), rgba(23, 17, 9, 0.96)),
+            radial-gradient(circle at top right, rgba(245, 158, 11, 0.14), transparent 42%);
+    }
+
+    .variant-inline-text {
+        resize: vertical;
+        min-height: 92px;
+    }
+
     .file-dropzone {
         border: 2px dashed var(--canopy-border);
         border-radius: 8px;
@@ -1229,29 +1516,64 @@
     .channel-header-right {
         display: flex;
         align-items: center;
-        gap: 0.25rem;
-        flex-wrap: nowrap;
+        gap: 0.32rem;
+        flex-wrap: wrap;
         justify-content: flex-end;
         min-width: 0;
-        flex: 0 1 auto;
+        flex: 1 1 420px;
     }
     .channel-header-actions,
     .channel-header-controls {
         display: flex;
         align-items: center;
-        gap: 0.22rem;
+        gap: 0.28rem;
         flex-wrap: nowrap;
         flex: 0 0 auto;
     }
     .channel-header-search {
         display: flex;
         align-items: center;
-        flex: 0 1 210px;
-        min-width: 110px;
-        max-width: 235px;
+        flex: 1 1 190px;
+        min-width: 130px;
+        max-width: 280px;
     }
     .channel-header .btn.btn-sm {
         padding: 0.2rem 0.44rem;
+    }
+    .channel-header-tool-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.32rem;
+        min-height: 2rem;
+        min-width: 2rem;
+        border-color: color-mix(in srgb, var(--canopy-border) 78%, var(--canopy-primary) 22%) !important;
+        background: color-mix(in srgb, var(--canopy-bg-card) 86%, var(--canopy-primary) 14%) !important;
+        color: var(--canopy-text-secondary) !important;
+        box-shadow: none !important;
+    }
+    .channel-header-tool-btn:hover,
+    .channel-header-tool-btn:focus-visible,
+    .channel-header .dropdown.show > .channel-header-tool-btn {
+        border-color: color-mix(in srgb, var(--canopy-primary) 42%, var(--canopy-border) 58%) !important;
+        background: color-mix(in srgb, var(--canopy-bg-tertiary) 70%, var(--canopy-primary) 30%) !important;
+        color: var(--canopy-text-primary) !important;
+    }
+    .channel-header-tool-btn .privacy-label,
+    .channel-header-tool-btn .channel-lifecycle-label,
+    .channel-header-tool-btn .channel-header-tool-label {
+        display: none !important;
+    }
+    .channel-header-tool-btn.dropdown-toggle::after {
+        display: none;
+    }
+    .channel-header-overflow-menu .dropdown-item i {
+        width: 1rem;
+    }
+    .channel-header-mobile-only,
+    .channel-header-search-toggle,
+    .channel-composer-more-mobile {
+        display: none;
     }
     .channel-header .channel-toggle-btn {
         flex: 0 0 auto;
@@ -1326,6 +1648,9 @@
             flex: 1 1 auto;
             flex-wrap: wrap;
             min-width: 0;
+        }
+        .channel-header-controls {
+            margin-left: auto;
         }
         .channel-header-search {
             order: 3;
@@ -1692,8 +2017,8 @@
             flex: 1;
             min-width: 0;
             display: flex;
-            flex-wrap: nowrap;
-            gap: 0.18rem;
+            flex-wrap: wrap;
+            gap: 0.24rem;
             align-items: center;
         }
         .channel-header-actions,
@@ -1702,12 +2027,10 @@
             flex: 0 0 auto;
         }
         .channel-header-search {
-            flex: 1 1 auto;
-            min-width: 74px;
+            order: 3;
+            flex: 1 1 100%;
+            min-width: 0;
             max-width: none;
-        }
-        .channel-post-policy-btn .privacy-label {
-            display: none;
         }
         #channel-search-bar {
             width: 100% !important;
@@ -1728,15 +2051,6 @@
             max-width: none;
             padding-left: 0.35rem;
             padding-right: 0.35rem;
-        }
-        .channel-privacy-btn .privacy-label {
-            display: none;
-        }
-        .channel-members-label {
-            display: none;
-        }
-        .copy-channel-id-label {
-            display: none;
         }
         #messages-container {
             padding: 0.6rem !important;
@@ -1769,13 +2083,16 @@
         #message-form .input-group {
             align-items: stretch;
             gap: 0.24rem;
+            flex-wrap: nowrap;
         }
         #message-form .input-group-append {
-            display: grid !important;
-            grid-template-columns: repeat(5, minmax(0, 1fr));
+            display: flex !important;
+            flex: 0 0 auto;
+            flex-wrap: nowrap;
+            align-items: stretch;
             gap: 0.2rem;
-            width: 100%;
-            margin-top: 0.24rem;
+            width: auto;
+            margin-top: 0;
         }
         #message-form .input-group .btn,
         #message-form .input-group-append .btn-group .btn {
@@ -1944,6 +2261,58 @@
         .channel-header-actions,
         .channel-header-controls {
             gap: 0.22rem;
+        }
+        .channel-header-actions {
+            display: none;
+        }
+        .channel-header-mobile-only {
+            display: list-item;
+        }
+        .channel-header-right {
+            gap: 0.18rem;
+        }
+        .channel-header-controls {
+            margin-left: auto;
+        }
+        .channel-header-search-toggle {
+            display: inline-flex !important;
+        }
+        .channel-header-search {
+            order: 2;
+            display: none;
+        }
+        .channel-header-search.mobile-open {
+            display: flex;
+        }
+        #message-form .input-group {
+            flex-wrap: nowrap;
+            gap: 0.16rem;
+        }
+        #message-form .input-group > .position-relative.flex-grow-1 {
+            min-width: 0;
+        }
+        #message-form .input-group-append {
+            display: flex !important;
+            flex: 0 0 auto;
+            width: auto;
+            margin-top: 0;
+            gap: 0.12rem;
+            align-items: stretch;
+            flex-wrap: nowrap;
+        }
+        .channel-composer-advanced-tool {
+            display: none !important;
+        }
+        .channel-composer-more-mobile {
+            display: inline-flex !important;
+        }
+        #message-form .input-group .btn,
+        #message-form .input-group-append .btn-group .btn,
+        #message-form .input-group-append > .btn {
+            min-width: 2rem;
+        }
+        #message-form button[type="submit"] {
+            min-width: 2.5rem;
         }
     }
 
@@ -2202,8 +2571,9 @@
         }
 
         .channel-header-search {
-            flex: 1 1 auto;
-            min-width: 70px;
+            order: 3;
+            flex: 1 1 100%;
+            min-width: 0;
         }
 
         .channel-header .btn.btn-sm {
@@ -2219,8 +2589,10 @@
         }
 
         #message-form .input-group-append {
-            gap: 0.16rem;
-            margin-top: 0.18rem;
+            display: flex !important;
+            gap: 0.12rem;
+            margin-top: 0;
+            width: auto;
         }
 
         #message-form .input-group .btn,
@@ -2482,7 +2854,7 @@
                     <div class="channel-header-right">
                         <div class="channel-header-actions">
                             <div class="dropdown">
-                                <button class="btn btn-outline-secondary btn-sm dropdown-toggle channel-post-policy-btn"
+                                <button class="btn btn-outline-secondary btn-sm dropdown-toggle channel-post-policy-btn channel-header-tool-btn"
                                         id="channel-post-policy-toggle" data-bs-toggle="dropdown" aria-expanded="false">
                                     <i class="bi bi-megaphone" id="channel-post-policy-icon"></i>
                                     <span class="privacy-label" id="channel-post-policy-label">Open</span>
@@ -2507,7 +2879,7 @@
                                 </div>
                             </div>
                             <div class="dropdown">
-                                <button class="btn btn-outline-secondary btn-sm dropdown-toggle channel-privacy-btn"
+                                <button class="btn btn-outline-secondary btn-sm dropdown-toggle channel-privacy-btn channel-header-tool-btn"
                                         id="channel-privacy-toggle" data-bs-toggle="dropdown" aria-expanded="false">
                                     <i class="bi bi-shield-check" id="channel-privacy-icon"></i>
                                     <span class="privacy-label" id="channel-privacy-label">Open</span>
@@ -2532,7 +2904,7 @@
                                 </ul>
                             </div>
                             <div class="dropdown">
-                                <button class="btn btn-outline-secondary btn-sm dropdown-toggle channel-lifecycle-btn"
+                                <button class="btn btn-outline-secondary btn-sm dropdown-toggle channel-lifecycle-btn channel-header-tool-btn"
                                         id="channel-lifecycle-toggle" data-bs-toggle="dropdown" aria-expanded="false">
                                     <i class="bi bi-clock-history" id="channel-lifecycle-icon"></i>
                                     <span class="channel-lifecycle-label" id="channel-lifecycle-label">Lifecycle</span>
@@ -2566,7 +2938,7 @@
                                     </div>
                                 </div>
                             </div>
-                            <button class="btn btn-outline-secondary btn-sm" id="channel-mute-toggle"
+                            <button class="btn btn-outline-secondary btn-sm channel-header-tool-btn" id="channel-mute-toggle"
                                     onclick="toggleChannelNotifications()" title="Mute notifications">
                                 <i class="bi bi-bell" id="channel-mute-icon"></i>
                             </button>
@@ -2576,32 +2948,125 @@
                                 <input type="text" class="form-control" id="search-input"
                                        placeholder="Search messages..."
                                        onkeydown="if(event.key==='Enter'){event.preventDefault();searchChannelMessages();}">
-                                <button class="btn btn-outline-secondary" onclick="searchChannelMessages()" title="Search">
+                                <button class="btn btn-outline-secondary channel-header-tool-btn" onclick="searchChannelMessages()" title="Search">
                                     <i class="bi bi-search"></i>
                                 </button>
-                                <button class="btn btn-outline-secondary" onclick="clearSearch()" title="Clear search" id="search-clear-btn" style="display:none;">
+                                <button class="btn btn-outline-secondary channel-header-tool-btn" onclick="clearSearch()" title="Clear search" id="search-clear-btn" style="display:none;">
                                     <i class="bi bi-x"></i>
                                 </button>
                             </div>
                         </div>
                         <div class="channel-header-controls">
-                            <button class="btn btn-outline-secondary btn-sm" id="channel-refresh-btn" onclick="refreshMessages()">
-                                <i class="bi bi-arrow-clockwise"></i>
+                            <button type="button"
+                                    class="btn btn-outline-secondary btn-sm channel-header-tool-btn channel-header-search-toggle"
+                                    id="channel-header-search-toggle"
+                                    onclick="toggleChannelHeaderSearch()"
+                                    aria-expanded="false"
+                                    aria-controls="channel-search-bar"
+                                    title="Search messages"
+                                    aria-label="Search messages">
+                                <i class="bi bi-search"></i>
                             </button>
-                            <button class="btn btn-outline-secondary btn-sm" id="channel-members-btn" onclick="openChannelMembersModal()">
-                                <i class="bi bi-people"></i>
-                                <span class="channel-members-label">Members</span>
-                                <span class="channel-members-count">({{ channels[0].member_count if channels else 0 }})</span>
-                            </button>
+                            <div class="dropdown">
+                                <button class="btn btn-outline-secondary btn-sm channel-header-tool-btn channel-header-overflow-toggle"
+                                        id="channel-header-more-toggle"
+                                        data-bs-toggle="dropdown"
+                                        aria-expanded="false"
+                                        title="More channel tools"
+                                        aria-label="More channel tools">
+                                    <i class="bi bi-three-dots"></i>
+                                    <span class="channel-header-tool-label">More</span>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end channel-header-overflow-menu" aria-labelledby="channel-header-more-toggle">
+                                    <li class="channel-header-mobile-only"><h6 class="dropdown-header">Posting</h6></li>
+                                    <li class="channel-header-mobile-only">
+                                        <button type="button" class="dropdown-item" onclick="setChannelPostPolicy('open')">
+                                            <i class="bi bi-unlock me-2"></i>Open posting
+                                        </button>
+                                    </li>
+                                    <li class="channel-header-mobile-only">
+                                        <button type="button" class="dropdown-item" onclick="setChannelPostPolicy('curated')">
+                                            <i class="bi bi-person-check me-2"></i>Curated posting
+                                        </button>
+                                    </li>
+                                    <li class="channel-header-mobile-only"><hr class="dropdown-divider"></li>
+                                    <li class="channel-header-mobile-only"><h6 class="dropdown-header">Privacy</h6></li>
+                                    <li class="channel-header-mobile-only">
+                                        <button type="button" class="dropdown-item" onclick="setChannelPrivacy('open')">
+                                            <i class="bi bi-wifi me-2"></i>Open privacy
+                                        </button>
+                                    </li>
+                                    <li class="channel-header-mobile-only">
+                                        <button type="button" class="dropdown-item" onclick="setChannelPrivacy('guarded')">
+                                            <i class="bi bi-shield-check me-2"></i>Guarded privacy
+                                        </button>
+                                    </li>
+                                    <li class="channel-header-mobile-only">
+                                        <button type="button" class="dropdown-item" onclick="setChannelPrivacy('private')">
+                                            <i class="bi bi-lock-fill me-2"></i>Private privacy
+                                        </button>
+                                    </li>
+                                    <li class="channel-header-mobile-only">
+                                        <button type="button" class="dropdown-item" onclick="setChannelPrivacy('confidential')">
+                                            <i class="bi bi-shield-lock me-2"></i>Confidential privacy
+                                        </button>
+                                    </li>
+                                    <li class="channel-header-mobile-only"><hr class="dropdown-divider"></li>
+                                    <li class="channel-header-mobile-only"><h6 class="dropdown-header">Lifecycle</h6></li>
+                                    <li class="channel-header-mobile-only">
+                                        <button type="button" class="dropdown-item" onclick="toggleChannelPreserve()">
+                                            <i class="bi bi-pin-angle me-2"></i>Toggle preserve
+                                        </button>
+                                    </li>
+                                    <li class="channel-header-mobile-only">
+                                        <button type="button" class="dropdown-item" onclick="setChannelLifecycleTtl(30)">
+                                            <i class="bi bi-clock-history me-2"></i>Auto-archive after 30d
+                                        </button>
+                                    </li>
+                                    <li class="channel-header-mobile-only">
+                                        <button type="button" class="dropdown-item" onclick="setChannelLifecycleTtl(90)">
+                                            <i class="bi bi-clock-history me-2"></i>Auto-archive after 90d
+                                        </button>
+                                    </li>
+                                    <li class="channel-header-mobile-only">
+                                        <button type="button" class="dropdown-item" onclick="setChannelLifecycleTtl(180)">
+                                            <i class="bi bi-clock-history me-2"></i>Auto-archive after 180d
+                                        </button>
+                                    </li>
+                                    <li class="channel-header-mobile-only">
+                                        <button type="button" class="dropdown-item" onclick="archiveCurrentChannel()">
+                                            <i class="bi bi-archive me-2"></i>Archive now
+                                        </button>
+                                    </li>
+                                    <li class="channel-header-mobile-only">
+                                        <button type="button" class="dropdown-item" onclick="restoreCurrentChannel()">
+                                            <i class="bi bi-arrow-counterclockwise me-2"></i>Restore channel
+                                        </button>
+                                    </li>
+                                    <li class="channel-header-mobile-only"><hr class="dropdown-divider"></li>
+                                    <li>
+                                        <button type="button" class="dropdown-item" id="channel-refresh-btn" onclick="refreshMessages()">
+                                            <i class="bi bi-arrow-clockwise me-2"></i>Refresh messages
+                                        </button>
+                                    </li>
+                                    <li>
+                                        <button type="button" class="dropdown-item" id="channel-members-btn" onclick="openChannelMembersModal()">
+                                            <i class="bi bi-people me-2"></i>Members
+                                            <span class="text-muted ms-1 channel-members-count">({{ channels[0].member_count if channels else 0 }})</span>
+                                        </button>
+                                    </li>
+                                    <li>
+                                        <button type="button" class="dropdown-item" id="copy-channel-id-btn" data-channel-id="" onclick="copyCurrentChannelId(this)">
+                                            <i class="bi bi-clipboard me-2"></i>Copy channel ID
+                                        </button>
+                                    </li>
+                                </ul>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <div class="px-3 pt-3">
-                {% include '_workspace_onboarding.html' %}
-            </div>
-            
             <!-- Messages Area -->
             <div class="flex-grow-1 overflow-auto p-3" id="messages-container">
                 <div id="new-messages-banner" class="alert alert-info py-1 px-2 mb-2" style="display: none; cursor: pointer;" onclick="applyPendingChannelMessages()">
@@ -2637,7 +3102,7 @@
                     <i class="bi bi-reply me-1"></i>
                     Replying to <strong id="reply-author"></strong>:
                     <span class="reply-preview" id="reply-preview"></span>
-                    <button type="button" class="btn-close btn-close-sm float-end" onclick="cancelReply()" style="font-size: 0.6rem;"></button>
+                    <button type="button" class="btn-close btn-close-sm float-end" onclick="cancelReply()" aria-label="Cancel reply" style="font-size: 0.6rem;"></button>
                 </div>
                 <form id="message-form" onsubmit="sendMessage(event)">
                     <div class="channel-lifespan-row mb-2">
@@ -2731,11 +3196,51 @@
                             <button type="button" class="btn btn-outline-secondary" id="emoji-toggle-btn" onclick="insertEmoji()">
                                 <i class="bi bi-emoji-smile"></i>
                             </button>
-                            <button type="button" class="btn btn-outline-secondary" id="channel-mention-builder-toggle"
+                            <div class="dropdown channel-composer-more-mobile">
+                                <button type="button"
+                                        class="btn btn-outline-secondary dropdown-toggle"
+                                        id="channel-composer-more-toggle"
+                                        data-bs-toggle="dropdown"
+                                        aria-expanded="false"
+                                        aria-label="More compose tools"
+                                        title="More compose tools">
+                                    <i class="bi bi-three-dots"></i>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="channel-composer-more-toggle">
+                                    <li>
+                                        <button type="button" class="dropdown-item" onclick="toggleChannelMentionBuilder()">
+                                            <i class="bi bi-people me-2"></i>Team mention builder
+                                        </button>
+                                    </li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><button type="button" class="dropdown-item" onclick="insertChannelStructuredTemplate('task')"><i class="bi bi-check2-square me-2"></i>Task block</button></li>
+                                    <li><button type="button" class="dropdown-item" onclick="insertChannelStructuredTemplate('request')"><i class="bi bi-question-circle me-2"></i>Request block</button></li>
+                                    <li><button type="button" class="dropdown-item" onclick="insertChannelStructuredTemplate('objective')"><i class="bi bi-bullseye me-2"></i>Objective block</button></li>
+                                    <li><button type="button" class="dropdown-item" onclick="insertChannelStructuredTemplate('handoff')"><i class="bi bi-arrow-left-right me-2"></i>Handoff block</button></li>
+                                    <li><button type="button" class="dropdown-item" onclick="insertChannelStructuredTemplate('signal')"><i class="bi bi-broadcast-pin me-2"></i>Signal block</button></li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li>
+                                        <button type="button" class="dropdown-item" onclick="openStreamCreateModal('audio_ops')">
+                                            <i class="bi bi-mic-fill me-2"></i>Start audio stream card
+                                        </button>
+                                    </li>
+                                    <li>
+                                        <button type="button" class="dropdown-item" onclick="openStreamCreateModal('video_ops')">
+                                            <i class="bi bi-camera-video-fill me-2"></i>Start video stream card
+                                        </button>
+                                    </li>
+                                    <li>
+                                        <button type="button" class="dropdown-item" onclick="openStreamCreateModal('telemetry_sensor')">
+                                            <i class="bi bi-cpu-fill me-2"></i>Prepare telemetry feed card
+                                        </button>
+                                    </li>
+                                </ul>
+                            </div>
+                            <button type="button" class="btn btn-outline-secondary channel-composer-advanced-tool" id="channel-mention-builder-toggle"
                                     title="Team mention builder" onclick="toggleChannelMentionBuilder()">
                                 <i class="bi bi-people"></i>
                             </button>
-                            <div class="btn-group structured-tool-trigger-group">
+                            <div class="btn-group structured-tool-trigger-group channel-composer-advanced-tool">
                                 <button type="button"
                                         class="btn btn-outline-secondary dropdown-toggle structured-tool-trigger"
                                         id="channel-structured-tools-toggle"
@@ -2755,7 +3260,7 @@
                                 </ul>
                             </div>
                             <div id="channel-mention-macro-buttons" class="mention-macro-buttons" style="display: none;"></div>
-                            <div class="btn-group">
+                            <div class="btn-group channel-composer-advanced-tool">
                                 <button type="button"
                                         class="btn btn-outline-danger dropdown-toggle"
                                         id="channel-stream-quick-toggle"
@@ -4700,6 +5205,7 @@ window.addEventListener('error', function(e) {
 });
 
 let currentChannelId = {% if channels %}{{ channels[0].id|tojson }}{% else %}null{% endif %};
+let currentChannelName = {% if channels %}{{ channels[0].name|tojson }}{% else %}''{% endif %};
 const currentUserId = {{ user_id|tojson }};
 const isAdmin = {{ (is_admin if is_admin is defined else False)|tojson }};
 const localPeerId = {{ (local_peer_id if local_peer_id else '')|tojson }};
@@ -4735,6 +5241,35 @@ let replyToAuthor = '';
 let isSearchActive = false;
 let currentChannelSearchQuery = '';
 let initialFocusMessageId = null;
+/** When true with focus_message, open antecedent deck after scroll (deep link / repost card). */
+let channelDeepLinkOpenDeck = false;
+
+/**
+ * Open antecedent deck via server redirect — does not require that message to be in the current DOM
+ * (fixes repost/variant Deck when the source is off-screen or not in the loaded page).
+ */
+function canopyNavigateChannelDeckForMessageId(sourceMessageId) {
+    const mid = String(sourceMessageId || '').trim();
+    if (!mid) return;
+    window.location.href = '/channels/locate?message_id=' + encodeURIComponent(mid) + '&open_deck=1';
+}
+function canopyOpenChannelAntecedentDeck(sourceMessageId) {
+    const mid = String(sourceMessageId || '').trim();
+    if (!mid) return false;
+    if (typeof window.openDeckForChannelAntecedentMessage === 'function') {
+        try {
+            return !!window.openDeckForChannelAntecedentMessage(mid);
+        } catch (_) {
+            /* ignore */
+        }
+    }
+    canopyNavigateChannelDeckForMessageId(mid);
+    return false;
+}
+if (typeof window !== 'undefined') {
+    window.canopyNavigateChannelDeckForMessageId = canopyNavigateChannelDeckForMessageId;
+    window.canopyOpenChannelAntecedentDeck = canopyOpenChannelAntecedentDeck;
+}
 let channelRefreshInFlight = false;
 let pendingChannelMessages = null;
 let activeChannelLoadToken = 0;
@@ -5180,6 +5715,7 @@ function selectChannel(channelId, channelName, options = {}) {
         if (backdrop) backdrop.classList.remove('show');
     }
     currentChannelId = channelId;
+    currentChannelName = String(channelName || '');
     currentChannelMemberIds = new Set();
     pendingChannelMessages = null;
     oldestLoadedMessageId = null;
@@ -5292,17 +5828,15 @@ function setChannelPrivacyUI(mode, canEdit, reason) {
 
     const normalized = (mode || 'open').toLowerCase();
     const configs = {
-        open: { text: 'Open', icon: 'bi-wifi', cls: 'btn-outline-secondary' },
-        guarded: { text: 'Guarded', icon: 'bi-shield-check', cls: 'btn-outline-warning' },
-        private: { text: 'Private', icon: 'bi-lock-fill', cls: 'btn-outline-success' },
-        confidential: { text: 'Confidential', icon: 'bi-shield-lock', cls: 'btn-outline-info' },
+        open: { text: 'Open', icon: 'bi-wifi' },
+        guarded: { text: 'Guarded', icon: 'bi-shield-check' },
+        private: { text: 'Private', icon: 'bi-lock-fill' },
+        confidential: { text: 'Confidential', icon: 'bi-shield-lock' },
     };
     const cfg = configs[normalized] || configs.open;
     label.textContent = cfg.text;
     icon.className = `bi ${cfg.icon}`;
-
-    btn.classList.remove('btn-outline-secondary', 'btn-outline-warning', 'btn-outline-success', 'btn-outline-info');
-    btn.classList.add(cfg.cls);
+    btn.dataset.privacyMode = normalized;
 
     if (canEdit) {
         btn.removeAttribute('disabled');
@@ -5384,8 +5918,7 @@ function applyChannelPostPolicyFromSelection(channelId) {
     const curated = currentChannelPostPolicy === 'curated';
     label.textContent = curated ? 'Curated' : 'Open';
     icon.className = `bi ${curated ? 'bi-person-check' : 'bi-megaphone'}`;
-    btn.classList.remove('btn-outline-secondary', 'btn-outline-warning');
-    btn.classList.add(curated ? 'btn-outline-warning' : 'btn-outline-secondary');
+    btn.dataset.postPolicy = curated ? 'curated' : 'open';
 
     badge.classList.remove('d-none', 'curated', 'open');
     badge.classList.add(curated ? 'curated' : 'open');
@@ -5655,10 +6188,9 @@ function setChannelLifecycleUI(lifecycle, permissions) {
     }
 
     const visual = getChannelLifecycleVisualState(lifecycle);
-    toggle.classList.remove('btn-outline-secondary', 'btn-outline-warning', 'btn-outline-info');
-    toggle.classList.add(visual.buttonClass);
     icon.className = `bi ${visual.buttonIcon}`;
     label.textContent = visual.buttonLabel;
+    toggle.dataset.lifecycleState = visual.badgeText ? visual.badgeText.toLowerCase() : 'default';
 
     const badgeVisible = !!visual.badgeText;
     badge.className = 'badge rounded-pill';
@@ -5820,10 +6352,9 @@ function updateChannelE2EBadge() {
 }
 
 function updateChannelMembersCount(count) {
-    const countEl = document.querySelector('.channel-members-count');
-    if (countEl) {
+    document.querySelectorAll('.channel-members-count').forEach((countEl) => {
         countEl.textContent = `(${count || 0})`;
-    }
+    });
     const selectedItem = currentChannelId ? document.querySelector(`[data-channel-id="${currentChannelId}"]`) : null;
     if (selectedItem) {
         selectedItem.setAttribute('data-member-count', String(count || 0));
@@ -5945,13 +6476,9 @@ function setChannelNotificationsUI(enabled, disabled) {
     btn.classList.remove('disabled');
     if (enabled) {
         icon.className = 'bi bi-bell';
-        btn.classList.remove('btn-outline-warning');
-        btn.classList.add('btn-outline-secondary');
         btn.setAttribute('title', 'Mute notifications');
     } else {
         icon.className = 'bi bi-bell-slash';
-        btn.classList.remove('btn-outline-secondary');
-        btn.classList.add('btn-outline-warning');
         btn.setAttribute('title', 'Unmute notifications');
     }
 }
@@ -6016,20 +6543,36 @@ function loadChannelMessages(channelId, options = {}) {
                 console.warn('Channel messages warning:', data.warning);
             }
             if (data.messages && data.messages.length > 0) {
-                displayMessages(data.messages, { forceScroll: !!options.forceScroll });
-            } else {
-                const hint = data.warning ? ` <small class="d-block mt-2 text-muted">${escapeHtml(String(data.warning).slice(0, 120))}</small>` : '';
-                messagesContainer.innerHTML = '<div class="text-center text-muted p-4">No messages yet' + hint + '</div>';
+                // Keep render failures separate from API failures — outer .catch is only for fetch/auth errors.
+                return displayMessages(data.messages, { forceScroll: !!options.forceScroll })
+                    .then(() => {
+                        if (loadToken !== activeChannelLoadToken || String(currentChannelId) !== requestedChannelId) {
+                            return;
+                        }
+                        if (data && data.marked_read && typeof window.requestCanopySidebarAttentionRefresh === 'function') {
+                            window.requestCanopySidebarAttentionRefresh({ force: true }).catch(() => {});
+                        }
+                    })
+                    .catch((renderErr) => {
+                        if (loadToken !== activeChannelLoadToken || String(currentChannelId) !== requestedChannelId) {
+                            return;
+                        }
+                        console.error('Channel message render failed:', renderErr);
+                        messagesContainer.innerHTML = '<div class="text-center text-danger p-4">Could not render messages. Check the browser console for details.</div>';
+                    });
             }
+            const hint = data.warning ? ` <small class="d-block mt-2 text-muted">${escapeHtml(String(data.warning).slice(0, 120))}</small>` : '';
+            messagesContainer.innerHTML = '<div class="text-center text-muted p-4">No messages yet' + hint + '</div>';
             if (data && data.marked_read && typeof window.requestCanopySidebarAttentionRefresh === 'function') {
                 window.requestCanopySidebarAttentionRefresh({ force: true }).catch(() => {});
             }
+            return undefined;
         })
         .catch(error => {
             if (loadToken !== activeChannelLoadToken || String(currentChannelId) !== requestedChannelId) {
                 return;
             }
-            console.error('Error loading messages:', error);
+            console.error('Error loading messages (network or server):', error);
             messagesContainer.innerHTML = '<div class="text-center text-danger p-4">Error loading messages</div>';
         })
         .finally(() => {
@@ -6061,6 +6604,10 @@ function clearInitialChannelFocusFromUrl() {
             url.searchParams.delete('channel');
             changed = true;
         }
+        if (url.searchParams.has('open_deck')) {
+            url.searchParams.delete('open_deck');
+            changed = true;
+        }
         if (changed) {
             window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
         }
@@ -6088,7 +6635,10 @@ function scrollMessageIntoContainer(msgEl, options = {}) {
 
 function focusMessageById(messageId, options = {}) {
     if (!messageId) return false;
-    const msgEl = document.querySelector(`.message-item[data-message-id="${messageId}"]`);
+    const esc = window.CSS && typeof window.CSS.escape === 'function'
+        ? window.CSS.escape(String(messageId))
+        : String(messageId).replace(/["\\]/g, '\\$&');
+    const msgEl = document.querySelector(`.message-item[data-message-id="${esc}"]`);
     if (!msgEl) return false;
     msgEl.classList.add('focus-flash');
     scrollMessageIntoContainer(msgEl, { align: 'center', behavior: options.behavior || 'smooth' });
@@ -6096,6 +6646,18 @@ function focusMessageById(messageId, options = {}) {
     setTimeout(() => scrollMessageIntoContainer(msgEl, { align: 'center', behavior: 'smooth' }), 850);
     setTimeout(() => msgEl.classList.remove('focus-flash'), 3200);
     return true;
+}
+
+/** Run source-layout compositor now and on next animation frame (after embed/DOM settle). */
+function scheduleChannelSourceLayouts(messagesContainer) {
+    const el = messagesContainer || document.getElementById('messages-list');
+    if (!el || typeof window.canopyApplySourceLayoutsInScope !== 'function') return;
+    window.canopyApplySourceLayoutsInScope(el);
+    requestAnimationFrame(function () {
+        if (typeof window.canopyApplySourceLayoutsInScope === 'function') {
+            window.canopyApplySourceLayoutsInScope(el);
+        }
+    });
 }
 
 function displayMessages(messages, options = {}) {
@@ -6182,91 +6744,293 @@ function displayMessages(messages, options = {}) {
         fetchUserDisplayInfo(userIds),
         fetchChannelMentionCandidates(currentChannelId)
     ]).then(([userInfo, candidates]) => {
-        const map = {};
-        (candidates || []).forEach(u => {
-            const dn = u.display_name || u.username || u.user_id;
-            map[u.user_id] = dn;
-            if (u.username && u.username !== u.user_id) map[u.username] = dn;
-        });
-        window.mentionDisplayMap = map;
-        let html = '';
+        try {
+            if (!messagesContainer) {
+                throw new Error('messages-list container missing');
+            }
+            const map = {};
+            (candidates || []).forEach(u => {
+                const dn = u.display_name || u.username || u.user_id;
+                map[u.user_id] = dn;
+                if (u.username && u.username !== u.user_id) map[u.username] = dn;
+            });
+            window.mentionDisplayMap = map;
+            let html = '';
 
-        rootMessages.forEach(message => {
-            html += renderMessage(message, userInfo, false);
+            rootMessages.forEach(message => {
+                html += renderMessage(message, userInfo, false);
 
-            // Render all threaded replies (including reply-to-reply) under the root
-            const replies = repliesByRoot[message.id];
-            if (replies && replies.length > 0) {
-                const showCount = 3;
-                const hidden = replies.length > showCount ? replies.length - showCount : 0;
-                if (hidden > 0) {
-                    html += `<div class="thread-toggle ms-5 mb-1" onclick="expandThread(this)" data-expanded="false">
+                // Render all threaded replies (including reply-to-reply) under the root
+                const replies = repliesByRoot[message.id];
+                if (replies && replies.length > 0) {
+                    const showCount = 3;
+                    const hidden = replies.length > showCount ? replies.length - showCount : 0;
+                    if (hidden > 0) {
+                        html += `<div class="thread-toggle ms-5 mb-1" onclick="expandThread(this)" data-expanded="false">
                         <i class="bi bi-chat-dots me-1"></i>${replies.length} replies &mdash; click to expand
                     </div>`;
-                    html += `<div class="thread-replies-hidden" style="display:none;">`;
-                    replies.slice(0, hidden).forEach(r => { html += renderMessage(r, userInfo, true); });
-                    html += `</div>`;
-                    replies.slice(hidden).forEach(r => { html += renderMessage(r, userInfo, true); });
-                } else {
-                    replies.forEach(r => { html += renderMessage(r, userInfo, true); });
+                        html += `<div class="thread-replies-hidden" style="display:none;">`;
+                        replies.slice(0, hidden).forEach(r => { html += renderMessage(r, userInfo, true); });
+                        html += `</div>`;
+                        replies.slice(hidden).forEach(r => { html += renderMessage(r, userInfo, true); });
+                    } else {
+                        replies.forEach(r => { html += renderMessage(r, userInfo, true); });
+                    }
                 }
-            }
-        });
+            });
 
-        // Render orphan replies whose thread root isn't in view (O(n) via Set)
-        const rootIdSet = new Set(rootMessages.map(m => m.id));
-        Object.keys(repliesByRoot).forEach(rid => {
-            if (!rootIdSet.has(rid)) {
-                repliesByRoot[rid].forEach(r => { html += renderMessage(r, userInfo, true); });
-            }
-        });
+            // Render orphan replies whose thread root isn't in view (O(n) via Set)
+            const rootIdSet = new Set(rootMessages.map(m => m.id));
+            Object.keys(repliesByRoot).forEach(rid => {
+                if (!rootIdSet.has(rid)) {
+                    repliesByRoot[rid].forEach(r => { html += renderMessage(r, userInfo, true); });
+                }
+            });
 
-		        // Prepend "Load older" banner if there may be more messages
-		        const olderBanner = noMoreOlderMessages ? '' :
-		            `<div id="load-older-banner" class="text-center py-2 mb-2">
+            // Prepend "Load older" banner if there may be more messages
+            const olderBanner = noMoreOlderMessages ? '' :
+                `<div id="load-older-banner" class="text-center py-2 mb-2">
 		                <button class="btn btn-sm btn-outline-secondary" onclick="loadOlderMessages()">
 		                    <i class="bi bi-arrow-up me-1"></i>Load older messages
 		                </button>
 		            </div>`;
-		        messagesContainer.innerHTML = olderBanner + html;
-		        
-		        formatTimestamps();
-                if (window.applyInlineTaskAvatars) {
-                    window.applyInlineTaskAvatars(messagesContainer);
-                }
-		        updateChannelExpiryBadges();
-		        clearNewMessagesBanner();
-		        
-		        // Hydrate X/Twitter embeds after injecting message HTML
-		        if (typeof hydrateXEmbeds === 'function') {
-		            hydrateXEmbeds(messagesContainer);
-		        }
+            messagesContainer.innerHTML = olderBanner + html;
+
+            formatTimestamps();
+            if (window.applyInlineTaskAvatars) {
+                window.applyInlineTaskAvatars(messagesContainer);
+            }
+            updateChannelExpiryBadges();
+            clearNewMessagesBanner();
+
+            // Hydrate X/Twitter embeds after injecting message HTML
+            if (typeof hydrateXEmbeds === 'function') {
+                hydrateXEmbeds(messagesContainer);
+            }
+            // Source layout compositor (feed uses full-page scan; channels inject HTML async — run explicitly)
+            scheduleChannelSourceLayouts(messagesContainer);
 
             const container = document.getElementById('messages-container');
             applyUserAvatarStacks(userInfo, messagesContainer);
+            /* Defer focus + deck until after compositor/layout frames — avoids empty deck queue and
+               reduces bogus DevTools 404s attributed to scroll (lazy images in the focused row). */
             if (initialFocusMessageId) {
-		            const focused = focusMessageById(initialFocusMessageId);
+                const focusId = String(initialFocusMessageId);
+                const openDeckAfterFocus = !!channelDeepLinkOpenDeck;
+                initialFocusMessageId = null;
+                const runFocusAndMaybeDeck = function () {
+                    const focused = focusMessageById(focusId);
                     if (focused) {
                         clearInitialChannelFocusFromUrl();
                     }
-		            initialFocusMessageId = null;
-		            if (!focused && container) {
-		                container.scrollTop = container.scrollHeight;
-		            }
-		        } else if (container && options.scrollToTop) {
-		            container.scrollTop = 0;
-		        } else if (container) {
-		            if (options.forceScroll || wasNearBottom) {
-		                container.scrollTop = container.scrollHeight;
-		            } else if (scrollContainer) {
-		                scrollContainer.scrollTop = prevScrollTop;
-		            }
-		        }
-
-                if (!options.ignoreSignature && currentChannelId) {
-                    channelMessageSignature[currentChannelId] = getMessagesSignature(messages);
+                    if (openDeckAfterFocus) {
+                        channelDeepLinkOpenDeck = false;
+                        if (typeof window.openDeckForChannelAntecedentMessage !== 'function') {
+                            try {
+                                window.location.href = '/channels/locate?message_id=' + encodeURIComponent(focusId) + '&open_deck=1';
+                            } catch (_) { /* ignore */ }
+                        } else if (typeof window.openDeckForChannelAntecedentMessage === 'function') {
+                            const runDeck = function () {
+                                try {
+                                    if (typeof window.openDeckForChannelAntecedentMessage === 'function') {
+                                        window.openDeckForChannelAntecedentMessage(focusId);
+                                    }
+                                } catch (_) { /* ignore */ }
+                            };
+                            if (focused) {
+                                requestAnimationFrame(function () {
+                                    requestAnimationFrame(runDeck);
+                                });
+                            } else {
+                                requestAnimationFrame(runDeck);
+                            }
+                        }
+                    }
+                    if (!focused && container) {
+                        container.scrollTop = container.scrollHeight;
+                    }
+                };
+                requestAnimationFrame(function () {
+                    requestAnimationFrame(runFocusAndMaybeDeck);
+                });
+            } else if (container && options.scrollToTop) {
+                container.scrollTop = 0;
+            } else if (container) {
+                if (options.forceScroll || wasNearBottom) {
+                    container.scrollTop = container.scrollHeight;
+                } else if (scrollContainer) {
+                    scrollContainer.scrollTop = prevScrollTop;
                 }
-		    });
+            }
+
+            if (!options.ignoreSignature && currentChannelId) {
+                channelMessageSignature[currentChannelId] = getMessagesSignature(messages);
+            }
+        } catch (renderBlockErr) {
+            console.error('displayMessages render block failed:', renderBlockErr);
+            if (messagesContainer) {
+                messagesContainer.innerHTML = '<div class="text-center text-danger p-4">Could not render one or more messages (see console).</div>';
+            }
+            // Do not rethrow — avoids double error banners; loadChannelMessages inner .catch also handles rejects.
+        }
+    });
+}
+
+function renderChannelRepostCard(message) {
+    const ref = (message && message.repost_reference && typeof message.repost_reference === 'object') ? message.repost_reference : null;
+    if (!ref) return '';
+    const hrefRaw = String(ref.href || (ref.source_id ? `/channels/locate?message_id=${encodeURIComponent(ref.source_id)}` : '#'));
+    const href = escapeHtml(hrefRaw);
+    const available = !!ref.available;
+    const authorLabel = escapeHtml(String(ref.author_display || ref.author_id || 'Unknown author'));
+    const messageType = escapeHtml(String(ref.message_type || 'message').replace(/_/g, ' '));
+    const createdAt = escapeHtml(String(ref.created_at || ''));
+    const bodyHtml = ref.body_text
+        ? `<div class="post-repost-body">${escapeHtml(String(ref.body_text)).replace(/\n/g, '<br>')}</div>`
+        : (ref.preview_text ? `<div class="post-repost-preview">${escapeHtml(String(ref.preview_text))}</div>` : '');
+    const embed = (ref.embed && typeof ref.embed === 'object') ? ref.embed : {};
+    let thumbGrid = '';
+    if (Array.isArray(embed.attachment_images) && embed.attachment_images.length) {
+        thumbGrid = `
+            <div class="post-repost-thumb-grid mt-2">
+                ${embed.attachment_images.map((img) => `
+                    <a href="${href}" class="post-repost-thumb-link" title="View original message">
+                        <img src="${escapeHtml(String(img.url || ''))}" alt="${escapeHtml(String(img.name || 'Image'))}" loading="lazy">
+                    </a>
+                `).join('')}
+            </div>`;
+    }
+    let embedLinkOrVideo = '';
+    let ytIds = [];
+    if (Array.isArray(embed.youtube_video_ids) && embed.youtube_video_ids.length) {
+        ytIds = embed.youtube_video_ids.map((id) => String(id || '').replace(/[^0-9A-Za-z_-]/g, '')).filter((id) => id.length === 11);
+    } else if (embed.youtube_video_id) {
+        const single = String(embed.youtube_video_id).replace(/[^0-9A-Za-z_-]/g, '');
+        if (single.length === 11) ytIds = [single];
+    }
+    if (ytIds.length) {
+        embedLinkOrVideo = `
+            <div class="post-repost-thumb-grid mt-2">
+                ${ytIds.map((ytId) => `
+                    <a href="${href}" class="post-repost-thumb-link" title="View original message">
+                        <img src="https://img.youtube.com/vi/${ytId}/hqdefault.jpg" alt="" class="img-fluid rounded post-repost-embed-img" loading="lazy">
+                    </a>
+                `).join('')}
+            </div>`;
+    } else if (embed.link_url) {
+        const linkUrl = escapeHtml(String(embed.link_url));
+        const linkTitle = escapeHtml(String(embed.link_title || embed.link_url));
+        embedLinkOrVideo = `
+            <div class="post-repost-embed-link mt-2">
+                <a href="${linkUrl}" target="_blank" rel="noopener noreferrer" class="text-decoration-none d-inline-flex align-items-start gap-2">
+                    <i class="bi bi-link-45deg flex-shrink-0" aria-hidden="true"></i>
+                    <span>${linkTitle}</span>
+                </a>
+            </div>`;
+    } else if (embed.video_url) {
+        const vSrc = escapeHtml(String(embed.video_url));
+        embedLinkOrVideo = `
+            <div class="post-repost-embed-media mt-2 text-center">
+                <video controls class="img-fluid rounded post-repost-embed-video" preload="metadata">
+                    <source src="${vSrc}" type="video/mp4">
+                </video>
+            </div>`;
+    }
+    if (!available) {
+        return `
+            <div class="post-repost-shell post-repost-shell--streamlined" data-repost-wrapper="1">
+                <div class="post-repost-card is-unavailable">
+                    <div class="post-repost-head">
+                        <span class="post-repost-eyebrow"><i class="bi bi-repeat"></i> Original source</span>
+                    </div>
+                    <div class="post-repost-unavailable">${escapeHtml(String(ref.unavailable_label || 'Original source unavailable'))}</div>
+                    <div class="post-repost-unavailable-meta">
+                        This repost keeps attribution to the original source, but the source no longer renders here.
+                    </div>
+                </div>
+            </div>`;
+    }
+    return `
+        <div class="post-repost-shell post-repost-shell--streamlined" data-repost-wrapper="1">
+            <div class="post-repost-card">
+                <div class="post-repost-head">
+                    <span class="post-repost-eyebrow"><i class="bi bi-repeat"></i> Original source</span>
+                </div>
+                <div class="post-repost-meta">
+                    <strong>${authorLabel}</strong>
+                    <span>•</span>
+                    <span>${messageType}</span>
+                    <span>•</span>
+                    <span class="text-muted" data-timestamp="${createdAt}">${createdAt}</span>
+                </div>
+                <div class="post-repost-quote">
+                    ${bodyHtml}
+                    ${ref.body_truncated ? `
+                        <div class="small text-muted mt-1">
+                            <i class="bi bi-scissors"></i> Truncated for the card — open original for the full message.
+                        </div>` : ''}
+                    ${thumbGrid}
+                    ${embedLinkOrVideo}
+                </div>
+                <div class="post-repost-actions d-flex flex-wrap gap-2 align-items-center">
+                    <a class="btn btn-sm btn-outline-primary" href="${href}">
+                        <i class="bi bi-box-arrow-up-right me-1" aria-hidden="true"></i>Open original
+                    </a>
+                    ${ref.source_id && ref.available !== false && ref.has_source_layout !== false ? `
+                    <button type="button" class="btn btn-sm btn-outline-primary"
+                        onclick="canopyOpenChannelAntecedentDeck('${escapeHtml(String(ref.source_id)).replace(/'/g, '\\&#39;')}'); return false;"
+                        title="Open the original source deck here">
+                        <i class="bi bi-grid-1x2 me-1" aria-hidden="true"></i>Deck
+                    </button>` : ''}
+                </div>
+            </div>
+        </div>`;
+}
+
+function renderChannelVariantCard(message) {
+    const ref = (message && message.variant_reference && typeof message.variant_reference === 'object') ? message.variant_reference : null;
+    if (!ref) return '';
+    const hrefRaw = String(ref.href || (ref.source_id ? `/channels/locate?message_id=${encodeURIComponent(ref.source_id)}` : '#'));
+    const href = escapeHtml(hrefRaw);
+    const available = !!ref.available;
+    const authorLabel = escapeHtml(String(ref.author_display || ref.author_id || ''));
+    const relationshipLabel = escapeHtml(String(ref.relationship_label || 'Variant'));
+    const createdAt = escapeHtml(String(ref.created_at || ''));
+    const deltaHtml = ref.module_param_delta
+        ? `<div class="post-variant-param-delta"><span class="delta-label">Δ</span>${escapeHtml(String(ref.module_param_delta))}</div>`
+        : '';
+    const antecedentAuthor = authorLabel
+        ? ` <span class="text-muted">(${authorLabel})</span>`
+        : '';
+    if (!available) {
+        return `
+            <div class="post-variant-shell post-variant-shell--minimal" data-variant-wrapper="1">
+                ${deltaHtml}
+                <div class="post-lineage-bar" role="note" aria-label="Lineage provenance">
+                    <span class="badge rounded-pill text-bg-secondary post-lineage-badge">
+                        <i class="bi bi-bezier2 me-1" aria-hidden="true"></i>${relationshipLabel}
+                    </span>
+                    <span class="text-warning">${escapeHtml(String(ref.unavailable_label || 'Antecedent unavailable'))}</span>
+                </div>
+            </div>`;
+    }
+    return `
+        <div class="post-variant-shell post-variant-shell--minimal" data-variant-wrapper="1">
+            ${deltaHtml}
+            <div class="post-lineage-bar" role="note" aria-label="Lineage provenance">
+                <span class="badge rounded-pill text-bg-secondary post-lineage-badge" title="Derivative with preserved lineage">
+                    <i class="bi bi-bezier2 me-1" aria-hidden="true"></i>${relationshipLabel}
+                </span>
+                <a class="link-light link-underline-opacity-50 link-underline-opacity-100-hover" href="${href}" title="Open the antecedent message">Antecedent${antecedentAuthor}</a>
+                ${createdAt ? `<span class="text-muted" data-timestamp="${createdAt}">${createdAt}</span>` : ''}
+                ${ref.source_id && ref.has_source_layout !== false ? `
+                <button type="button" class="btn btn-sm btn-outline-primary"
+                    onclick="canopyOpenChannelAntecedentDeck('${escapeHtml(String(ref.source_id)).replace(/'/g, '\\&#39;')}'); return false;"
+                    title="Open the antecedent deck here">
+                    <i class="bi bi-grid-1x2 me-1" aria-hidden="true"></i>Deck
+                </button>` : ''}
+            </div>
+        </div>`;
 }
 
 function renderMessage(message, userInfo, isReply) {
@@ -6323,6 +7087,8 @@ function renderMessage(message, userInfo, isReply) {
     const circleHtml = message.circles ? renderCircleCards(message) : '';
     const skillHtml = message.skills ? renderSkillCards(message) : '';
     const notesHtml = renderCommunityNotesBlock('channel_message', message.id, message.community_notes || []);
+    const repostHtml = message.is_repost ? renderChannelRepostCard(message) : '';
+    const variantHtml = message.is_variant ? renderChannelVariantCard(message) : '';
     const displayContent = (message.display_content !== undefined && message.display_content !== null) ? message.display_content : (message.content || '');
     const replyPreview = escapeHtml(String(message.content || '').replace(/\s+/g, ' ').trim().slice(0, 80) || '(attachment)');
     const replyAuthor = escapeHtml(user.display_name || user.username || message.user_id || 'Unknown');
@@ -6344,6 +7110,9 @@ function renderMessage(message, userInfo, isReply) {
     } else if (channelIsE2E && (cs === 'plaintext' || !cs)) {
         cryptoBadge = `<span class="badge bg-success-subtle text-success border rounded-pill" title="End-to-end encrypted"><i class="bi bi-shield-lock-fill"></i></span>`;
     }
+    const sourceLayoutAttr = message.source_layout
+        ? ` data-canopy-source-layout="${String(JSON.stringify(message.source_layout || {})).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}"`
+        : '';
 
     return `
     <div class="message-item message-card ${replyClass}" data-message-id="${message.id}">
@@ -6371,7 +7140,7 @@ function renderMessage(message, userInfo, isReply) {
                     ${expiryBadge}
                     ${cryptoBadge}
                 </div>
-                <div class="message-content">
+                <div class="message-content"${sourceLayoutAttr}>
                     ${objectiveHtml}
                     ${requestHtml}
                     ${signalHtml}
@@ -6380,24 +7149,16 @@ function renderMessage(message, userInfo, isReply) {
                     ${handoffHtml}
                     ${circleHtml}
                     ${skillHtml}
-                    ${message.poll ? pollHtml : (displayContent ? renderRichContent(displayContent) : '')}
-                    ${message.attachments ? displayAttachments(message.attachments) : ''}
+                    ${(message.poll || displayContent) ? `<div data-canopy-source-ref="content:lede">${message.poll ? pollHtml : renderRichContent(displayContent)}</div>` : ''}
+                    ${variantHtml}
+                    ${repostHtml}
+                    ${message.attachments ? displayAttachments(message.attachments, message.source_layout) : ''}
                     ${notesHtml}
                 </div>
                 
                 <!-- Message Actions -->
                 <div class="message-actions mt-1" style="font-size: 0.85rem;">
                     <div class="d-flex gap-2 flex-wrap">
-                        <button class="btn btn-sm icon-action-btn ${message.user_has_liked ? 'btn-primary' : 'btn-outline-primary'} like-btn" 
-                                onclick="toggleLike('${message.id}')"
-                                data-item-id="${message.id}"
-                                data-liked="${message.user_has_liked ? 'true' : 'false'}"
-                                title="${message.user_has_liked ? 'Unlike message' : 'Like message'}"
-                                aria-label="${message.user_has_liked ? 'Unlike message' : 'Like message'}">
-                            <i class="bi bi-heart${message.user_has_liked ? '-fill' : ''}"></i> 
-                            <span class="like-text action-label">${message.user_has_liked ? 'Liked' : 'Like'}</span> 
-                            <span class="like-count action-count">${message.like_count || 0}</span>
-                        </button>
                         <button class="btn btn-sm btn-outline-secondary icon-action-btn"
                                 onclick="setReplyFromButton(this)"
                                 data-reply-message-id="${message.id}"
@@ -6407,71 +7168,444 @@ function renderMessage(message, userInfo, isReply) {
                                 aria-label="Reply in thread">
                             <i class="bi bi-reply"></i><span class="action-label">Reply</span>
                         </button>
-                        <button class="btn btn-sm btn-outline-secondary icon-action-btn"
-                                onclick="toggleThreadInboxSubscription('${message.id}')"
-                                title="Toggle thread inbox notifications"
-                                aria-label="Toggle thread inbox notifications">
-                            <i class="bi bi-bell-slash"></i><span class="action-label">Thread inbox</span>
+                        <button class="btn btn-sm btn-outline-secondary icon-action-btn like-btn${message.user_has_liked ? ' is-liked' : ''}"
+                                onclick="toggleLike('${message.id}')"
+                                data-item-id="${message.id}"
+                                data-liked="${message.user_has_liked ? 'true' : 'false'}"
+                                title="${message.user_has_liked ? 'Unlike message' : 'Like message'}"
+                                aria-label="${message.user_has_liked ? 'Unlike message' : 'Like message'}">
+                            <i class="bi bi-heart${message.user_has_liked ? '-fill' : ''}"></i>
+                            <span class="action-label like-text">${message.user_has_liked ? 'Liked' : 'Like'}</span>
+                            <span class="action-count like-count">${message.like_count || 0}</span>
                         </button>
-                        ${(message.content || '').trim() ? `
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-secondary dropdown-toggle icon-action-btn"
+                        <button type="button" class="btn btn-sm btn-outline-info icon-action-btn repost-trigger-btn"
+                                id="channel-repost-trigger-${message.id}"
+                                onclick="toggleChannelRepostComposer('${message.id}')"
+                                title="Repost in this channel — add optional note below"
+                                aria-expanded="false"
+                                aria-controls="channel-repost-compose-${message.id}"
+                                aria-label="Repost source in this channel">
+                            <i class="bi bi-repeat"></i><span class="action-label">Repost</span>
+                        </button>
+                        ${message.is_repost && message.repost_reference && message.repost_reference.source_id && message.repost_reference.available !== false && message.repost_reference.has_source_layout !== false ? `
+                        <button type="button" class="btn btn-sm btn-outline-secondary icon-action-btn"
+                                onclick="canopyOpenChannelAntecedentDeck('${escapeHtml(String(message.repost_reference.source_id))}'); return false;"
+                                title="Open the original source deck here"
+                                aria-label="Open deck for original source">
+                            <i class="bi bi-grid-1x2"></i><span class="action-label">Deck</span>
+                        </button>` : ''}
+                        <button class="btn btn-sm icon-action-btn bookmark-action-btn${message.is_bookmarked ? ' is-saved' : ''}"
+                                data-bookmark-button="1"
+                                data-source-type="channel_message"
+                                data-source-id="${message.id}"
+                                data-bookmarked="${message.is_bookmarked ? 'true' : 'false'}"
+                                title="${message.is_bookmarked ? 'Remove bookmark' : 'Save bookmark'}"
+                                aria-label="${message.is_bookmarked ? 'Remove bookmark' : 'Save bookmark'}">
+                            <i class="bi bi-bookmark${message.is_bookmarked ? '-fill' : ''}"></i><span class="action-label" data-bookmark-label>${message.is_bookmarked ? 'Saved' : 'Save'}</span>
+                        </button>
+                        <div class="dropdown">
+                            <button class="btn btn-sm btn-outline-secondary icon-action-btn"
                                     type="button"
                                     data-bs-toggle="dropdown"
                                     aria-expanded="false"
-                                    title="Promote into structured tool"
-                                    aria-label="Promote into structured tool">
-                                <i class="bi bi-magic"></i><span class="action-label">Promote</span>
+                                    title="More message actions"
+                                    aria-label="More message actions">
+                                <i class="bi bi-three-dots"></i><span class="action-label">More</span>
                             </button>
                             <ul class="dropdown-menu dropdown-menu-end">
+                                <li>
+                                    <a class="dropdown-item" href="#" onclick="toggleThreadInboxSubscription('${message.id}'); return false;">
+                                        <i class="bi bi-bell-slash me-2"></i>Thread inbox
+                                    </a>
+                                </li>
+                                <li>
+                                    <a class="dropdown-item" href="#" onclick="toggleChannelVariantComposer('${message.id}'); return false;">
+                                        <i class="bi bi-bezier2 me-2"></i>Variant
+                                    </a>
+                                </li>
+                                ${(message.content || '').trim() ? `
+                                <li><hr class="dropdown-divider"></li>
                                 <li><h6 class="dropdown-header">Promote to tool</h6></li>
                                 <li><a class="dropdown-item" href="#" onclick="promoteMessageToTool('${message.id}', 'task'); return false;">Task</a></li>
                                 <li><a class="dropdown-item" href="#" onclick="promoteMessageToTool('${message.id}', 'request'); return false;">Request</a></li>
                                 <li><a class="dropdown-item" href="#" onclick="promoteMessageToTool('${message.id}', 'objective'); return false;">Objective</a></li>
                                 <li><a class="dropdown-item" href="#" onclick="promoteMessageToTool('${message.id}', 'handoff'); return false;">Handoff</a></li>
-                                <li><a class="dropdown-item" href="#" onclick="promoteMessageToTool('${message.id}', 'signal'); return false;">Signal</a></li>
+                                <li><a class="dropdown-item" href="#" onclick="promoteMessageToTool('${message.id}', 'signal'); return false;">Signal</a></li>` : ''}
+                                <li><hr class="dropdown-divider"></li>
+                                ${message.user_id === currentUserId ? `
+                                <li>
+                                    <a class="dropdown-item" href="#" onclick="editChannelMessage('${message.id}'); return false;">
+                                        <i class="bi bi-pencil me-2"></i>Edit
+                                    </a>
+                                </li>` : ''}
+                                <li>
+                                    <a class="dropdown-item" href="#" onclick="copyToClipboard(this, \`${escapeHtml(message.content || '').replace(/`/g, "'")}\`); return false;">
+                                        <i class="bi bi-clipboard me-2"></i>Copy
+                                    </a>
+                                </li>
+                                <li>
+                                    <a class="dropdown-item" href="#" onclick="openContentContextModalFromAction('channel_message', '${message.id}'); return false;">
+                                        <i class="bi bi-file-earmark-text me-2"></i>Context
+                                    </a>
+                                </li>
+                                <li>
+                                    <a class="dropdown-item" href="#" onclick="openCommunityNoteModal('channel_message', '${message.id}'); return false;">
+                                        <i class="bi bi-journal-check me-2"></i>Notes <span class="text-muted">(${message.community_notes_count || 0})</span>
+                                    </a>
+                                </li>
+                                ${message.user_id === currentUserId ? `
+                                <li>
+                                    <a class="dropdown-item text-danger" href="#" onclick="deleteChannelMessage('${message.id}'); return false;">
+                                        <i class="bi bi-trash me-2"></i>Delete
+                                    </a>
+                                </li>` : ''}
                             </ul>
-                        </div>` : ''}
-                        ${message.user_id === currentUserId ? `
-                        <button class="btn btn-sm btn-outline-secondary icon-action-btn"
-                                onclick="editChannelMessage('${message.id}')"
-                                title="Edit message"
-                                aria-label="Edit message">
-                            <i class="bi bi-pencil"></i><span class="action-label">Edit</span>
-                        </button>` : ''}
-                        <button class="btn btn-sm btn-outline-secondary copy-btn icon-action-btn"
-                                onclick="copyToClipboard(this, \`${escapeHtml(message.content || '').replace(/`/g, "'")}\`)"
-                                title="Copy message"
-                                aria-label="Copy message">
-                            <i class="bi bi-clipboard"></i>
-                        </button>
-                        <button class="btn btn-sm btn-outline-secondary context-insight-trigger icon-action-btn"
-                                onclick="openContentContextModalFromAction('channel_message', '${message.id}'); return false;"
-                                title="Open context insights"
-                                aria-label="Open context insights">
-                            <i class="bi bi-file-earmark-text"></i><span class="action-label">Context</span>
-                        </button>
-                        <button class="btn btn-sm btn-outline-info community-note-trigger icon-action-btn"
-                                onclick="openCommunityNoteModal('channel_message', '${message.id}')"
-                                title="Open community notes"
-                                aria-label="Open community notes">
-                            <i class="bi bi-journal-check"></i>
-                            <span class="action-label">Notes</span>
-                            <span class="action-count">${message.community_notes_count || 0}</span>
-                        </button>
-                        ${message.user_id === currentUserId ? `
-                        <button class="btn btn-sm btn-outline-danger delete-btn icon-action-btn"
-                                onclick="deleteChannelMessage('${message.id}')"
-                                title="Delete message"
-                                aria-label="Delete message">
-                            <i class="bi bi-trash"></i>
-                        </button>` : ''}
+                        </div>
+                    </div>
+                </div>
+                <div class="repost-inline-composer" id="channel-repost-compose-${message.id}" data-channel-repost-compose="1" style="display: none;" hidden>
+                    <div class="repost-inline-inner">
+                        <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                            <i class="bi bi-repeat text-info" aria-hidden="true"></i>
+                            <span class="small fw-semibold">Repost in #${escapeHtml(String(currentChannelName || 'channel'))}</span>
+                            <span class="text-muted small ms-md-auto">Optional note · <kbd class="small px-1">Esc</kbd> close · <kbd class="small px-1">⌘</kbd>/<kbd class="small px-1">Ctrl</kbd>+<kbd class="small px-1">Enter</kbd> send</span>
+                        </div>
+                        <label class="visually-hidden" for="channel-repost-text-${message.id}">Optional repost note</label>
+                        <textarea class="form-control form-control-sm repost-inline-text"
+                                  id="channel-repost-text-${message.id}"
+                                  rows="3"
+                                  maxlength="5000"
+                                  placeholder="Add a short note (optional)…"></textarea>
+                        <div class="d-flex justify-content-between align-items-center mt-2 gap-2 flex-wrap">
+                            <small class="text-muted repost-inline-counter">0 / 5000</small>
+                            <div class="d-flex gap-2">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="closeChannelRepostComposer('${message.id}')">Cancel</button>
+                                <button type="button" class="btn btn-sm btn-primary" id="channel-repost-submit-${message.id}" onclick="submitChannelRepostInline('${message.id}')">
+                                    <i class="bi bi-repeat me-1"></i>Repost
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="variant-inline-composer" id="channel-variant-compose-${message.id}" data-channel-variant-compose="1" style="display: none;" hidden>
+                    <div class="repost-inline-inner">
+                        <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                            <i class="bi bi-bezier2 text-warning" aria-hidden="true"></i>
+                            <span class="small fw-semibold">Create a lineage variant in #${escapeHtml(String(currentChannelName || 'channel'))}</span>
+                            <span class="text-muted small ms-md-auto">Optional note + explicit relationship metadata</span>
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-md-4">
+                                <label class="form-label form-label-sm mb-1" for="channel-variant-relationship-${message.id}">Relationship</label>
+                                <select class="form-select form-select-sm variant-inline-relationship" id="channel-variant-relationship-${message.id}">
+                                    <option value="curated_recomposition">Curated recomposition</option>
+                                    <option value="module_variant">Module variant</option>
+                                    <option value="parameterized_variant">Parameterized variant</option>
+                                </select>
+                            </div>
+                            <div class="col-md-8">
+                                <label class="form-label form-label-sm mb-1" for="channel-variant-delta-${message.id}">Parameter delta</label>
+                                <input type="text"
+                                       class="form-control form-control-sm variant-inline-delta"
+                                       id="channel-variant-delta-${message.id}"
+                                       maxlength="500"
+                                       placeholder="Optional: new chart, higher tempo, compact practice loop…">
+                            </div>
+                        </div>
+                        <label class="visually-hidden" for="channel-variant-text-${message.id}">Optional variant note</label>
+                        <textarea class="form-control form-control-sm variant-inline-text"
+                                  id="channel-variant-text-${message.id}"
+                                  rows="3"
+                                  maxlength="5000"
+                                  placeholder="Add a short note about how this variant changes the source…"></textarea>
+                        <div class="d-flex justify-content-between align-items-center mt-2 gap-2 flex-wrap">
+                            <small class="text-muted variant-inline-counter">0 / 5000</small>
+                            <div class="d-flex gap-2">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="closeChannelVariantComposer('${message.id}')">Cancel</button>
+                                <button type="button" class="btn btn-sm btn-warning" id="channel-variant-submit-${message.id}" onclick="submitChannelVariantInline('${message.id}')">
+                                    <i class="bi bi-bezier2 me-1"></i>Create variant
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>`;
 }
+
+let _openChannelRepostComposeMessageId = null;
+let _openChannelVariantComposeMessageId = null;
+
+function _updateChannelRepostInlineCounter(textareaEl) {
+    if (!textareaEl) return;
+    const panel = textareaEl.closest('[data-channel-repost-compose="1"]');
+    const counter = panel ? panel.querySelector('.repost-inline-counter') : null;
+    if (counter) counter.textContent = `${(textareaEl.value || '').length} / 5000`;
+}
+
+function _setChannelRepostTriggerOpen(messageId, open) {
+    const trig = document.getElementById('channel-repost-trigger-' + messageId);
+    if (!trig) return;
+    trig.classList.toggle('is-repost-open', !!open);
+    trig.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function closeAllChannelRepostComposers() {
+    document.querySelectorAll('[data-channel-repost-compose="1"]').forEach((panel) => {
+        panel.style.display = 'none';
+        panel.setAttribute('hidden', 'hidden');
+        const mid = (panel.id || '').replace(/^channel-repost-compose-/, '');
+        if (mid) _setChannelRepostTriggerOpen(mid, false);
+    });
+    _openChannelRepostComposeMessageId = null;
+}
+
+function closeChannelRepostComposer(messageId) {
+    const panel = document.getElementById('channel-repost-compose-' + messageId);
+    if (panel) {
+        panel.style.display = 'none';
+        panel.setAttribute('hidden', 'hidden');
+    }
+    _setChannelRepostTriggerOpen(messageId, false);
+    if (_openChannelRepostComposeMessageId === messageId) _openChannelRepostComposeMessageId = null;
+}
+
+function toggleChannelRepostComposer(messageId) {
+    const panel = document.getElementById('channel-repost-compose-' + messageId);
+    if (!panel) return;
+    const textarea = document.getElementById('channel-repost-text-' + messageId);
+    const isVisible = panel.style.display !== 'none' && !panel.hasAttribute('hidden');
+    if (isVisible) {
+        closeChannelRepostComposer(messageId);
+        return;
+    }
+    closeAllChannelRepostComposers();
+    if (typeof closeAllChannelVariantComposers === 'function') closeAllChannelVariantComposers();
+    panel.style.display = 'block';
+    panel.removeAttribute('hidden');
+    _setChannelRepostTriggerOpen(messageId, true);
+    _openChannelRepostComposeMessageId = messageId;
+    if (textarea) {
+        textarea.value = '';
+        _updateChannelRepostInlineCounter(textarea);
+        setTimeout(() => {
+            textarea.focus();
+            try { panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}
+        }, 0);
+    }
+}
+
+function submitChannelRepostInline(messageId) {
+    if (!currentChannelId) {
+        showAlert('Select a channel before reposting.', 'warning');
+        return;
+    }
+    const textarea = document.getElementById('channel-repost-text-' + messageId);
+    const submitBtn = document.getElementById('channel-repost-submit-' + messageId);
+    const comment = (textarea && textarea.value) ? textarea.value.trim() : '';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status"></span> …';
+    }
+    apiCall('/ajax/repost_channel_message', {
+        method: 'POST',
+        body: JSON.stringify({ channel_id: currentChannelId, message_id: messageId, comment })
+    })
+    .then((data) => {
+        if (data && data.success) {
+            closeChannelRepostComposer(messageId);
+            showAlert('Repost created.', 'success');
+            if (typeof requestChannelThreadRefresh === 'function') {
+                requestChannelThreadRefresh();
+            }
+        } else {
+            showAlert((data && data.error) || 'Failed to repost message', 'danger');
+        }
+    })
+    .catch((err) => {
+        showAlert('Repost failed: ' + (err.message || err), 'danger');
+    })
+    .finally(() => {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="bi bi-repeat me-1"></i>Repost';
+        }
+    });
+}
+
+function _wireChannelRepostComposerGlobalsOnce() {
+    if (document.body.dataset.channelRepostComposerWired === '1') return;
+    document.body.dataset.channelRepostComposerWired = '1';
+    document.addEventListener('input', (e) => {
+        const target = e.target;
+        if (target && target.classList && target.classList.contains('repost-inline-text')) {
+            _updateChannelRepostInlineCounter(target);
+        }
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape' || !_openChannelRepostComposeMessageId) return;
+        const panel = document.getElementById('channel-repost-compose-' + _openChannelRepostComposeMessageId);
+        const active = document.activeElement;
+        if (panel && active && typeof active.closest === 'function' && panel.contains(active)) {
+            e.preventDefault();
+            closeChannelRepostComposer(_openChannelRepostComposeMessageId);
+        }
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || (!e.ctrlKey && !e.metaKey)) return;
+        const textarea = document.activeElement;
+        if (!textarea || !textarea.classList || !textarea.classList.contains('repost-inline-text')) return;
+        const match = /^channel-repost-text-(.+)$/.exec(textarea.id || '');
+        if (!match) return;
+        e.preventDefault();
+        submitChannelRepostInline(match[1]);
+    }, true);
+}
+
+_wireChannelRepostComposerGlobalsOnce();
+
+function _updateChannelVariantInlineCounter(textareaEl) {
+    if (!textareaEl) return;
+    const panel = textareaEl.closest('[data-channel-variant-compose="1"]');
+    const counter = panel ? panel.querySelector('.variant-inline-counter') : null;
+    if (counter) counter.textContent = `${(textareaEl.value || '').length} / 5000`;
+}
+
+function _setChannelVariantTriggerOpen(messageId, open) {
+    const trig = document.getElementById('channel-variant-trigger-' + messageId);
+    if (!trig) return;
+    trig.classList.toggle('is-variant-open', !!open);
+    trig.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function closeAllChannelVariantComposers() {
+    document.querySelectorAll('[data-channel-variant-compose="1"]').forEach((panel) => {
+        panel.style.display = 'none';
+        panel.setAttribute('hidden', 'hidden');
+        const mid = (panel.id || '').replace(/^channel-variant-compose-/, '');
+        if (mid) _setChannelVariantTriggerOpen(mid, false);
+    });
+    _openChannelVariantComposeMessageId = null;
+}
+
+function closeChannelVariantComposer(messageId) {
+    const panel = document.getElementById('channel-variant-compose-' + messageId);
+    if (panel) {
+        panel.style.display = 'none';
+        panel.setAttribute('hidden', 'hidden');
+    }
+    _setChannelVariantTriggerOpen(messageId, false);
+    if (_openChannelVariantComposeMessageId === messageId) _openChannelVariantComposeMessageId = null;
+}
+
+function toggleChannelVariantComposer(messageId) {
+    const panel = document.getElementById('channel-variant-compose-' + messageId);
+    if (!panel) return;
+    const textarea = document.getElementById('channel-variant-text-' + messageId);
+    const relationship = document.getElementById('channel-variant-relationship-' + messageId);
+    const delta = document.getElementById('channel-variant-delta-' + messageId);
+    const isVisible = panel.style.display !== 'none' && !panel.hasAttribute('hidden');
+    if (isVisible) {
+        closeChannelVariantComposer(messageId);
+        return;
+    }
+    closeAllChannelRepostComposers();
+    closeAllChannelVariantComposers();
+    panel.style.display = 'block';
+    panel.removeAttribute('hidden');
+    _setChannelVariantTriggerOpen(messageId, true);
+    _openChannelVariantComposeMessageId = messageId;
+    if (relationship) relationship.value = 'curated_recomposition';
+    if (delta) delta.value = '';
+    if (textarea) {
+        textarea.value = '';
+        _updateChannelVariantInlineCounter(textarea);
+        setTimeout(() => {
+            textarea.focus();
+            try { panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}
+        }, 0);
+    }
+}
+
+function submitChannelVariantInline(messageId) {
+    if (!currentChannelId) {
+        showAlert('Select a channel before creating a variant.', 'warning');
+        return;
+    }
+    const textarea = document.getElementById('channel-variant-text-' + messageId);
+    const relationship = document.getElementById('channel-variant-relationship-' + messageId);
+    const delta = document.getElementById('channel-variant-delta-' + messageId);
+    const submitBtn = document.getElementById('channel-variant-submit-' + messageId);
+    const comment = (textarea && textarea.value) ? textarea.value.trim() : '';
+    const relationshipKind = (relationship && relationship.value) ? relationship.value : 'curated_recomposition';
+    const moduleParamDelta = (delta && delta.value) ? delta.value.trim() : '';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status"></span> …';
+    }
+    apiCall('/ajax/variant_channel_message', {
+        method: 'POST',
+        body: JSON.stringify({
+            channel_id: currentChannelId,
+            message_id: messageId,
+            comment,
+            relationship_kind: relationshipKind,
+            module_param_delta: moduleParamDelta
+        })
+    })
+    .then((data) => {
+        if (data && data.success) {
+            closeChannelVariantComposer(messageId);
+            showAlert('Variant created.', 'success');
+            if (typeof requestChannelThreadRefresh === 'function') {
+                requestChannelThreadRefresh();
+            }
+        } else {
+            showAlert((data && data.error) || 'Failed to create variant', 'danger');
+        }
+    })
+    .catch((err) => {
+        showAlert('Variant failed: ' + (err.message || err), 'danger');
+    })
+    .finally(() => {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="bi bi-bezier2 me-1"></i>Create variant';
+        }
+    });
+}
+
+function _wireChannelVariantComposerGlobalsOnce() {
+    if (document.body.dataset.channelVariantComposerWired === '1') return;
+    document.body.dataset.channelVariantComposerWired = '1';
+    document.addEventListener('input', (e) => {
+        const target = e.target;
+        if (target && target.classList && target.classList.contains('variant-inline-text')) {
+            _updateChannelVariantInlineCounter(target);
+        }
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape' || !_openChannelVariantComposeMessageId) return;
+        const panel = document.getElementById('channel-variant-compose-' + _openChannelVariantComposeMessageId);
+        const active = document.activeElement;
+        if (panel && active && typeof active.closest === 'function' && panel.contains(active)) {
+            e.preventDefault();
+            closeChannelVariantComposer(_openChannelVariantComposeMessageId);
+        }
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || (!e.ctrlKey && !e.metaKey)) return;
+        const textarea = document.activeElement;
+        if (!textarea || !textarea.classList || !textarea.classList.contains('variant-inline-text')) return;
+        const match = /^channel-variant-text-(.+)$/.exec(textarea.id || '');
+        if (!match) return;
+        e.preventDefault();
+        submitChannelVariantInline(match[1]);
+    }, true);
+}
+
+_wireChannelVariantComposerGlobalsOnce();
 
 function renderCircleCards(message) {
     const circles = message.circles || [];
@@ -7846,7 +8980,13 @@ function getMessagesSignature(messages) {
     const last = messages[messages.length - 1];
     let hash = 2166136261; // FNV-1a 32-bit basis
     messages.forEach(m => {
-        const token = `${m.id || ''}|${m.parent_message_id || ''}|${m.created_at || ''}|${m.edited_at || ''}`;
+        let layoutToken = '';
+        try {
+            layoutToken = m && m.source_layout != null ? JSON.stringify(m.source_layout) : '';
+        } catch (err) {
+            layoutToken = '';
+        }
+        const token = `${m.id || ''}|${m.parent_message_id || ''}|${m.created_at || ''}|${m.edited_at || ''}|${layoutToken}`;
         for (let i = 0; i < token.length; i += 1) {
             hash ^= token.charCodeAt(i);
             hash = Math.imul(hash, 16777619);
@@ -8030,6 +9170,7 @@ function appendNewMessages(allMessages) {
         if (typeof hydrateXEmbeds === 'function') {
             hydrateXEmbeds(messagesContainer);
         }
+        scheduleChannelSourceLayouts(messagesContainer);
 
         // Scroll to bottom if user was near bottom
         const container = document.getElementById('messages-container');
@@ -8193,6 +9334,7 @@ function loadOlderMessages() {
                 if (typeof hydrateXEmbeds === 'function') {
                     hydrateXEmbeds(messagesContainer);
                 }
+                scheduleChannelSourceLayouts(messagesContainer);
             });
         })
         .catch(err => {
@@ -8676,6 +9818,21 @@ function applyChannelSidebarEventItems(items) {
     }
 }
 
+/** Parse JSON body safely (empty or non-JSON → {}) to avoid SyntaxError from res.json() on 200 + empty. */
+function canopyParseEventsPollJson(res) {
+    return res.text().then(function (text) {
+        const t = String(text || '').trim();
+        if (!t) {
+            return {};
+        }
+        try {
+            return JSON.parse(t);
+        } catch (_) {
+            return {};
+        }
+    });
+}
+
 function pollChannelSidebarEvents() {
     if (channelSidebarEventPollInFlight) {
         return;
@@ -8699,7 +9856,7 @@ function pollChannelSidebarEvents() {
             if (!res.ok) {
                 throw new Error(`Channel sidebar event poll failed (${res.status})`);
             }
-            return res.json();
+            return canopyParseEventsPollJson(res);
         })
         .then((data) => {
             if (!data || typeof data !== 'object') return;
@@ -8842,7 +9999,7 @@ function pollChannelThreadEvents() {
             if (!res.ok) {
                 throw new Error(`Channel thread event poll failed (${res.status})`);
             }
-            return res.json();
+            return canopyParseEventsPollJson(res);
         })
         .then((data) => {
             if (!data || typeof data !== 'object') return;
@@ -9003,9 +10160,11 @@ function buildMediaGrid(images, layoutHint = '') {
         const img = images[i];
         const hasUrl = img.url && String(img.url).trim();
         const isLast = (i === show - 1) && extraCount > 0 && !showAll;
+        const imageFileId = String((img && (img.id || img.file_id || img.origin_file_id)) || '').trim();
+        const sourceRefAttr = imageFileId ? ` data-canopy-source-ref="attachment:${imageFileId.replace(/"/g, '&quot;')}"` : '';
         if (hasUrl) {
             const thumbUrl = img.url + '/thumb';
-            cells += `<div class="mg-cell" onclick="openLightbox(${i}, '${urlsAttr}')">
+            cells += `<div class="mg-cell"${sourceRefAttr} onclick="openLightbox(${i}, '${urlsAttr}')">
                 <img src="${thumbUrl}" alt="${(img.name || '').replace(/"/g, '&quot;')}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling&&this.nextElementSibling.classList.remove('d-none');">
                 <div class="mg-placeholder d-none small text-muted p-2">Image unavailable</div>
                 <a class="mg-download" href="${img.url}" download="${(img.name || 'image').replace(/"/g, '&quot;')}" title="Download full resolution" onclick="event.stopPropagation();">
@@ -9014,7 +10173,7 @@ function buildMediaGrid(images, layoutHint = '') {
                 ${isLast ? `<div class="mg-more-overlay">+${extraCount}</div>` : ''}
             </div>`;
         } else {
-            cells += `<div class="mg-cell mg-cell-unavailable d-flex align-items-center justify-content-center p-2" style="min-height:80px;background:var(--canopy-bg-tertiary, #f0f0f0);border-radius:8px;">
+            cells += `<div class="mg-cell mg-cell-unavailable d-flex align-items-center justify-content-center p-2"${sourceRefAttr} style="min-height:80px;background:var(--canopy-bg-tertiary, #f0f0f0);border-radius:8px;">
                 <span class="small text-muted text-center">${(img.name || 'Image').replace(/</g, '&lt;')}<br><span class="opacity-75">Not on this device yet — will appear when synced</span></span>
         </div>`;
         }
@@ -9245,7 +10404,42 @@ function endorseSkill(skillId) {
     });
 }
 
-function displayAttachments(attachments) {
+/**
+ * When source_layout references 2+ distinct image attachment refs, render each image in its own
+ * `.media-grid` so the compositor can move hero / side / strip cells without sharing one grid.
+ */
+function shouldSplitChannelImageGridsForSourceLayout(sourceLayout, images) {
+    if (!sourceLayout || typeof sourceLayout !== 'object' || !Array.isArray(images) || images.length < 2) {
+        return false;
+    }
+    const fileRef = (att) => {
+        const id = String((att && (att.id || att.file_id || att.origin_file_id)) || '').trim();
+        return id ? `attachment:${id}` : '';
+    };
+    const want = new Set();
+    const push = (raw) => {
+        const r = String(raw || '').trim();
+        if (r.startsWith('attachment:')) want.add(r);
+    };
+    try {
+        if (sourceLayout.hero && sourceLayout.hero.ref) push(sourceLayout.hero.ref);
+        if (Array.isArray(sourceLayout.supporting)) {
+            sourceLayout.supporting.forEach((e) => push(e && e.ref));
+        }
+        if (sourceLayout.deck && sourceLayout.deck.default_ref) push(sourceLayout.deck.default_ref);
+    } catch (_) {
+        return false;
+    }
+    if (want.size < 2) return false;
+    let matched = 0;
+    for (let i = 0; i < images.length; i++) {
+        const ref = fileRef(images[i]);
+        if (ref && want.has(ref)) matched++;
+    }
+    return matched >= 2;
+}
+
+function displayAttachments(attachments, sourceLayout) {
     if (!attachments || attachments.length === 0) return '';
 
     const extOf = (value) => {
@@ -9255,8 +10449,106 @@ function displayAttachments(attachments) {
         return (parts.pop() || '').toLowerCase();
     };
 
-    // Separate stream cards, images, audio, video, and other files
+    /** HTML attachments that should get a deck-capable module surface (matches feed parity). */
+    const isChannelHtmlDeckAttachment = (att) => {
+        const mime = String((att && att.type) || '').toLowerCase();
+        const nameLc = String((att && att.name) || '').toLowerCase();
+        const ext = extOf((att && att.name) || (att && att.url) || '');
+        if (mime === 'text/html' && (nameLc.endsWith('.canopy-module.html') || nameLc.endsWith('.canopy-module.htm'))) {
+            return true;
+        }
+        if (mime.startsWith('text/html') || mime === 'application/xhtml+xml') return true;
+        if (ext === 'html' || ext === 'htm') return true;
+        if (nameLc.endsWith('.html') || nameLc.endsWith('.htm')) return true;
+        return false;
+    };
+
+    const humanizeModuleTitle = (att) => {
+        const raw = String((att && att.name) || 'canopy-module')
+            .replace(/\.canopy-module\.html?$/i, '')
+            .replace(/\.html?$/i, '');
+        return raw
+            .replace(/[-_]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .replace(/\b\w/g, (ch) => ch.toUpperCase()) || 'Canopy Module';
+    };
+
+    const fileIdFromAttachmentUrl = (att) => {
+        const raw = String((att && att.url) || '').trim();
+        if (!raw || raw.indexOf('/files/') === -1) return '';
+        try {
+            const path = raw.split(/[?#]/)[0];
+            const idx = path.indexOf('/files/');
+            if (idx < 0) return '';
+            const rest = path.slice(idx + '/files/'.length);
+            const seg = rest.split('/').filter(Boolean)[0] || '';
+            return String(seg).trim();
+        } catch (_) {
+            return '';
+        }
+    };
+    const buildAttachmentSourceRefAttr = (att) => {
+        const fileId = String((att && (att.id || att.file_id || att.origin_file_id)) || fileIdFromAttachmentUrl(att) || '').trim();
+        return fileId ? ` data-canopy-source-ref="attachment:${_escapeAttr(fileId)}"` : '';
+    };
+
+    const buildModuleAttachmentManifest = (att) => {
+        const fileId = String((att && (att.id || att.file_id || att.origin_file_id)) || fileIdFromAttachmentUrl(att) || '').trim();
+        const bundleUrl = fileId ? `/files/${encodeURIComponent(fileId)}` : '';
+        if (!bundleUrl) return null;
+        const title = humanizeModuleTitle(att);
+        return {
+            version: 1,
+            key: `module:${fileId || title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+            widget_type: 'module_surface',
+            render_mode: 'module_runtime',
+            title,
+            subtitle: 'Safe executable lesson or station logic bound to this source.',
+            provider_label: 'Canopy Module',
+            icon: 'bi-box-fill',
+            body_text: 'Single-file module bundle executed inside the Canopy Module Runtime.',
+            badges: ['Module', 'Sandboxed', 'Source-bound'],
+            details: [
+                { label: 'File', value: String(att.name || 'module bundle') },
+                { label: 'Format', value: 'Single HTML bundle' },
+            ],
+            station_surface: {
+                kind: 'station_surface',
+                domain: 'education',
+                label: `${title} Surface`,
+                summary: 'Executable lesson or station logic remains bound to this source while capabilities stay brokered.',
+                recurring: false,
+                scope: 'source',
+            },
+            action_policy: {
+                bounded: true,
+                max_risk: 'view',
+                human_gate: 'none',
+                audit_label: 'Bounded runtime',
+            },
+            source_binding: {
+                binding_type: 'message_attachment',
+                source_scope: 'source',
+                return_label: 'Return to source',
+            },
+            module_runtime: {
+                format: 'single_html',
+                bundle_file_id: fileId,
+                bundle_url: bundleUrl,
+                module_type: title,
+                runtime_label: 'Canopy Module',
+                capabilities: {
+                    required: ['source.read', 'deck.return'],
+                    optional: ['clipboard.write', 'module.storage.local'],
+                },
+            },
+        };
+    };
+
+    // Separate stream cards, modules, images, audio, video, and other files
     const streamCards = [];
+    const moduleBundles = [];
     const images = [];
     const audioFiles = [];
     const videoFiles = [];
@@ -9273,6 +10565,8 @@ function displayAttachments(attachments) {
 
         if (isStream) {
             streamCards.push(att);
+        } else if (isChannelHtmlDeckAttachment(att)) {
+            moduleBundles.push(att);
         } else if (isImage) {
             images.push(att);
         } else if (isAudio) {
@@ -9315,6 +10609,75 @@ function displayAttachments(attachments) {
         const actionLabel = streamKind === 'telemetry' ? 'Open workspace' : (mediaKind === 'video' ? 'Watch live' : 'Listen live');
         const isOwner = att.created_by && att.created_by === currentUserId;
         const scenarioLabel = _streamScenarioLabel(domain, streamKind, mediaKind);
+        const stationLabel = streamKind === 'telemetry'
+            ? `${scenarioLabel} Station`
+            : `${scenarioLabel} Surface`;
+        const widgetManifest = streamId ? {
+            version: 1,
+            key: `stream:${streamId}`,
+            widget_type: streamKind === 'telemetry' ? 'telemetry_panel' : 'media_stream',
+            render_mode: 'stream_summary',
+            title: att.title || att.name || 'Live stream',
+            subtitle: att.description || scenarioLabel,
+            provider_label: streamKind === 'telemetry'
+                ? 'Telemetry'
+                : (mediaKind === 'video' ? 'Live video' : 'Live audio'),
+            icon: `bi-${icon}`,
+            body_text: streamId ? `Stream ID ${streamId}` : '',
+            badges: [
+                streamKind === 'telemetry' ? 'Telemetry' : (mediaKind === 'video' ? 'Video' : 'Audio'),
+                scenarioLabel,
+                att.relay_allowed ? 'Relay ready' : '',
+                statusLabel,
+            ].filter(Boolean),
+            details: [
+                { label: 'Status', value: statusLabel },
+                { label: 'Scenario', value: scenarioLabel },
+                { label: 'Domain', value: domain || 'media' },
+                { label: 'Transport', value: String(att.protocol || (streamKind === 'telemetry' ? 'events-json' : 'hls')) },
+            ],
+            station_surface: {
+                kind: streamKind === 'telemetry' ? 'telemetry_station' : 'stream_station',
+                domain: domain || (streamKind === 'telemetry' ? 'sensor' : 'media'),
+                label: stationLabel,
+                summary: streamKind === 'telemetry'
+                    ? 'Telemetry, operator context, and bounded follow-up actions remain attached to this source.'
+                    : 'Live media, operator context, and bounded follow-up actions remain attached to this source.',
+                recurring: true,
+                scope: 'station',
+            },
+            action_policy: {
+                bounded: true,
+                max_risk: 'low',
+                human_gate: 'none',
+                audit_label: 'Bounded actions',
+            },
+            source_binding: {
+                binding_type: 'message_attachment',
+                source_scope: 'source',
+                return_label: 'Return to source',
+            },
+            actions: [
+                {
+                    kind: 'callback',
+                    handler: 'open_stream_workspace',
+                    label: actionLabel,
+                    icon: 'bi-play-fill',
+                    risk: 'low',
+                    scope: 'station',
+                    args: { streamId, mediaKind, slotId, streamKind },
+                },
+                {
+                    kind: 'clipboard',
+                    label: 'Copy stream ID',
+                    icon: 'bi-clipboard',
+                    risk: 'view',
+                    scope: 'source',
+                    text: streamId,
+                },
+            ],
+        } : null;
+        const widgetManifestAttr = widgetManifest ? _escapeAttr(JSON.stringify(widgetManifest)) : '';
         const goLiveBtn = isOwner && streamId && streamKind !== 'telemetry'
             ? `<button class="btn btn-sm btn-outline-warning" onclick="openBroadcasterPanel('${streamId.replace(/'/g, "\\'")}', '${mediaKind}', '${slotId}')">
                     <i class="bi bi-broadcast"></i> Go Live
@@ -9331,7 +10694,7 @@ function displayAttachments(attachments) {
                </button>`
             : `<span class="small text-muted">Stream metadata incomplete</span>`;
         html += `
-            <div class="attachment-item stream-card mb-2 p-3 rounded">
+            <div class="attachment-item stream-card mb-2 p-3 rounded"${buildAttachmentSourceRefAttr(att)}${widgetManifestAttr ? ` data-canopy-widget-manifest="${widgetManifestAttr}"` : ''}>
                 <div class="stream-card-header">
                     <div class="stream-card-identity">
                         <div class="stream-card-icon">
@@ -9363,11 +10726,61 @@ function displayAttachments(attachments) {
         `;
     });
 
+    moduleBundles.forEach((att, idx) => {
+        const fileId = String((att && (att.id || att.file_id || att.origin_file_id)) || fileIdFromAttachmentUrl(att) || '').trim();
+        const manifest = buildModuleAttachmentManifest(att);
+        const manifestAttr = manifest ? _escapeAttr(JSON.stringify(manifest)) : '';
+        const manifestKeyAttr = manifest && manifest.key ? ` data-canopy-widget-key="${_escapeAttr(manifest.key)}"` : '';
+        const bundleIdAttr = fileId ? ` data-canopy-module-bundle-id="${_escapeAttr(fileId)}" data-canopy-module-bundle-name="${_escapeAttr(att.name || '')}"` : '';
+        const widgetSourceRefAttr = manifest && manifest.key
+            ? ` data-canopy-source-ref="widget:${_escapeAttr(manifest.key)}"`
+            : buildAttachmentSourceRefAttr(att);
+        const safeName = _escapeHtml(att.name || 'module bundle');
+        const safeTitle = _escapeHtml(humanizeModuleTitle(att));
+        const escapedUrl = att.url ? String(att.url).replace(/"/g, '&quot;') : '';
+        html += `
+            <div class="attachment-item stream-card mb-2 p-3 rounded" data-canopy-module-card="1"${widgetSourceRefAttr}${manifestAttr ? ` data-canopy-widget-manifest="${manifestAttr}"` : ''}${manifestKeyAttr}${bundleIdAttr}>
+                <div class="stream-card-header">
+                    <div class="stream-card-identity">
+                        <div class="stream-card-icon">
+                            <i class="bi bi-box-fill"></i>
+                        </div>
+                        <div>
+                            <div class="stream-card-title">${safeTitle}</div>
+                            <div class="stream-card-subtitle">Safe executable module bundle attached to this source.</div>
+                            <div class="stream-meta-row mt-2">
+                                <span class="stream-meta-chip">Module</span>
+                                <span class="stream-meta-chip">Sandboxed</span>
+                                <span class="stream-meta-chip">Source-bound</span>
+                            </div>
+                        </div>
+                    </div>
+                    <span class="stream-meta-chip" data-state="telemetry">Canopy Module</span>
+                </div>
+                <div class="d-flex align-items-center justify-content-between mt-3 gap-2 flex-wrap">
+                    <span class="small text-muted">${safeName}</span>
+                    <div class="stream-card-actions">
+                        <button type="button" class="btn btn-sm btn-outline-success" onclick="openMediaDeckForManifestNode(this)">
+                            <i class="bi bi-grid-1x2"></i> Open module
+                        </button>
+                        ${escapedUrl ? `<a href="${escapedUrl}" class="btn btn-sm btn-outline-primary" download="${safeName}"><i class="bi bi-download"></i> Download</a>` : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+
     const imageLayout = resolveAttachmentLayoutHint(images);
 
-    // Render image grid
+    // Render image grid(s)
     if (images.length > 0) {
-        html += buildMediaGrid(images, imageLayout);
+        if (shouldSplitChannelImageGridsForSourceLayout(sourceLayout, images)) {
+            images.forEach((img) => {
+                html += buildMediaGrid([img], resolveAttachmentLayoutHint([img]));
+            });
+        } else {
+            html += buildMediaGrid(images, imageLayout);
+        }
     }
 
     const escapeAttr = (value) => String(value || '').replace(/"/g, '&quot;');
@@ -9407,7 +10820,7 @@ function displayAttachments(attachments) {
             : notOnDeviceMsg(att);
         const audioPlayer = hasUrl ? `<audio controls preload="metadata" class="mt-1 w-100" style="max-width:100%;"><source src="${att.url.replace(/"/g, '&quot;')}" type="${(att.type || 'audio/mpeg').replace(/"/g, '&quot;')}">Your browser does not support the audio element.</audio>` : '';
         html += `
-            <div class="attachment-item mb-2 p-2 border rounded">
+            <div class="attachment-item mb-2 p-2 border rounded"${buildAttachmentSourceRefAttr(att)}>
                 <div class="d-flex align-items-center flex-wrap">
                     <i class="bi bi-${getFileIcon(att.type, att.name)} me-2"></i>
                     <div class="flex-grow-1">
@@ -9440,7 +10853,7 @@ function displayAttachments(attachments) {
                </video>`
             : '';
         html += `
-            <div class="attachment-item mb-2 p-2 border rounded">
+            <div class="attachment-item mb-2 p-2 border rounded"${buildAttachmentSourceRefAttr(att)}>
                 <div class="d-flex align-items-center flex-wrap">
                     <i class="bi bi-camera-video me-2"></i>
                     <div class="flex-grow-1">
@@ -9478,7 +10891,7 @@ function displayAttachments(attachments) {
                 </div>
             ` : notOnDeviceMsg(att);
             html += `
-                <div class="attachment-item mb-2 p-2 border rounded">
+                <div class="attachment-item mb-2 p-2 border rounded"${buildAttachmentSourceRefAttr(att)}>
                     <div class="d-flex align-items-center">
                         <i class="bi bi-${getFileIcon(att.type, att.name)} me-2"></i>
                         <div class="flex-grow-1">
@@ -9500,7 +10913,7 @@ function displayAttachments(attachments) {
                 </div>
             ` : notOnDeviceMsg(att);
             html += `
-                <div class="attachment-item mb-2 p-2 border rounded">
+                <div class="attachment-item mb-2 p-2 border rounded"${buildAttachmentSourceRefAttr(att)}>
                     <div class="d-flex align-items-center">
                         <i class="bi bi-${getFileIcon(att.type, att.name)} me-2"></i>
                         <div class="flex-grow-1">
@@ -12824,18 +14237,15 @@ function updateLikeButton(messageId, liked, interactions) {
     const icon = button.querySelector('i');
     
     button.dataset.liked = liked ? 'true' : 'false';
+    button.classList.toggle('is-liked', !!liked);
     
     if (liked) {
-        button.classList.remove('btn-outline-primary');
-        button.classList.add('btn-primary');
         if (likeText) likeText.textContent = 'Liked';
         button.setAttribute('title', 'Unlike message');
         button.setAttribute('aria-label', 'Unlike message');
         icon.classList.remove('bi-heart');
         icon.classList.add('bi-heart-fill');
     } else {
-        button.classList.remove('btn-primary');
-        button.classList.add('btn-outline-primary');
         if (likeText) likeText.textContent = 'Like';
         button.setAttribute('title', 'Like message');
             button.setAttribute('aria-label', 'Like message');
@@ -12916,6 +14326,7 @@ function searchChannelMessages(options = {}) {
     isSearchActive = true;
     currentChannelSearchQuery = query;
     document.getElementById('search-clear-btn').style.display = '';
+    syncChannelHeaderSearchUI(true);
 
     if (!Object.prototype.hasOwnProperty.call(opts, 'query')) {
         const searchInput = document.getElementById('search-input');
@@ -12973,11 +14384,49 @@ function rerunActiveChannelSearch(options = {}) {
     return true;
 }
 
+function isNarrowMobileChannelLayout() {
+    return window.innerWidth <= 575;
+}
+
+function syncChannelHeaderSearchUI(forceOpen) {
+    const searchWrap = document.querySelector('.channel-header-search');
+    const toggleBtn = document.getElementById('channel-header-search-toggle');
+    if (!searchWrap || !toggleBtn) return;
+
+    const explicitOpen = typeof forceOpen === 'boolean'
+        ? forceOpen
+        : (searchWrap.dataset.mobileOpen === 'true');
+    const hasQuery = String(currentChannelSearchQuery || '').trim().length > 0;
+    const shouldOpen = !isNarrowMobileChannelLayout() || explicitOpen || isSearchActive || hasQuery;
+
+    searchWrap.dataset.mobileOpen = shouldOpen ? 'true' : 'false';
+    searchWrap.classList.toggle('mobile-open', shouldOpen);
+    toggleBtn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+    toggleBtn.classList.toggle('active', shouldOpen && isNarrowMobileChannelLayout());
+
+    if (shouldOpen && isNarrowMobileChannelLayout()) {
+        const searchInput = document.getElementById('search-input');
+        if (searchInput && document.activeElement !== searchInput) {
+            requestAnimationFrame(() => searchInput.focus());
+        }
+    }
+}
+
+function toggleChannelHeaderSearch(forceOpen) {
+    const searchWrap = document.querySelector('.channel-header-search');
+    if (!searchWrap) return;
+    const nextOpen = typeof forceOpen === 'boolean'
+        ? forceOpen
+        : !(searchWrap.dataset.mobileOpen === 'true');
+    syncChannelHeaderSearchUI(nextOpen);
+}
+
 function clearSearch() {
     isSearchActive = false;
     currentChannelSearchQuery = '';
     document.getElementById('search-input').value = '';
     document.getElementById('search-clear-btn').style.display = 'none';
+    syncChannelHeaderSearchUI(false);
     if (currentChannelId) loadChannelMessages(currentChannelId, { forceScroll: true });
 }
 
@@ -12989,18 +14438,22 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('Selected files array:', selectedFiles);
         updateCurrentChannelIdUI(currentChannelId);
         syncChannelViewportMetrics();
+        syncChannelHeaderSearchUI(false);
         window.addEventListener('resize', () => {
             syncChannelViewportMetrics();
             scheduleChannelNameOverflowSync();
+            syncChannelHeaderSearchUI();
         });
         window.addEventListener('orientationchange', () => setTimeout(() => {
             syncChannelViewportMetrics();
             scheduleChannelNameOverflowSync();
+            syncChannelHeaderSearchUI();
         }, 120));
         if (window.visualViewport) {
             window.visualViewport.addEventListener('resize', () => {
                 syncChannelViewportMetrics();
                 scheduleChannelNameOverflowSync();
+                syncChannelHeaderSearchUI();
             });
         }
         const navbarCollapse = document.getElementById('navbarNav');
@@ -13116,6 +14569,8 @@ document.addEventListener('DOMContentLoaded', function() {
 	        const focusChannelId = params.get('channel') || params.get('focus_channel');
             const pendingChannelId = localStorage.getItem('pendingChannelId');
 	        initialFocusMessageId = params.get('focus_message');
+	        const _od = (params.get('open_deck') || '').trim().toLowerCase();
+	        channelDeepLinkOpenDeck = (_od === '1' || _od === 'true' || _od === 'yes');
 	        let didSelectFocus = false;
 
 	        if (pendingChannelId) {
