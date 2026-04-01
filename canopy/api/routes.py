@@ -173,6 +173,16 @@ _GENERIC_UPLOAD_FILENAMES = {
     'unnamed_file',
 }
 _VALID_ATTACHMENT_LAYOUT_HINTS = {'grid', 'hero', 'strip', 'stack'}
+_STREAM_PROXY_SAFE_SEGMENT_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,127}$")
+_ALLOWED_STREAM_PROXY_SEGMENT_CONTENT_TYPES = {
+    'video/mp2t',
+    'video/mp4',
+    'audio/aac',
+    'audio/mpeg',
+    'audio/mp4',
+    'application/mp4',
+    'application/octet-stream',
+}
 
 
 def _is_generic_upload_metadata(filename: Any, content_type: Any) -> bool:
@@ -184,6 +194,21 @@ def _is_generic_upload_metadata(filename: Any, content_type: Any) -> bool:
         or stem in _GENERIC_UPLOAD_FILENAMES
         or not os.path.splitext(name)[1]
     )
+
+
+def _sanitize_stream_proxy_segment_name(value: Any) -> str:
+    """Allow only simple HLS segment filenames in the proxy path."""
+    candidate = str(value or '').strip()
+    if (
+        not candidate
+        or '/' in candidate
+        or '\\' in candidate
+        or '?' in candidate
+        or '#' in candidate
+        or not _STREAM_PROXY_SAFE_SEGMENT_NAME.match(candidate)
+    ):
+        return ''
+    return candidate
 
 
 def _normalize_channel_attachments(raw_attachments: Any, file_manager: Any) -> list[dict[str, Any]]:
@@ -441,6 +466,167 @@ def create_api_blueprint() -> Blueprint:
             
             return decorated_function
         return decorator
+
+    def _cleanup_forgotten_peer_runtime_state(p2p_manager: Any, peer_id: str, *, remove_introduced: bool) -> dict[str, int]:
+        counts = {
+            'introduced_removed': 0,
+            'routes_removed': 0,
+            'relay_entries_removed': 0,
+            'reconnect_tasks_cancelled': 0,
+            'discovered_removed': 0,
+        }
+        if not p2p_manager or not peer_id:
+            return counts
+
+        if remove_introduced and hasattr(p2p_manager, '_introduced_peers'):
+            try:
+                if p2p_manager._introduced_peers.pop(peer_id, None) is not None:
+                    counts['introduced_removed'] += 1
+            except Exception:
+                pass
+
+        try:
+            p2p_manager.peer_versions.pop(peer_id, None)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(p2p_manager, '_active_relays'):
+                removed = 1 if p2p_manager._active_relays.pop(peer_id, None) is not None else 0
+                relay_destinations = [dest for dest, relay in list(p2p_manager._active_relays.items()) if relay == peer_id]
+                for dest in relay_destinations:
+                    p2p_manager._active_relays.pop(dest, None)
+                    removed += 1
+                counts['relay_entries_removed'] += removed
+        except Exception:
+            pass
+
+        try:
+            router = getattr(p2p_manager, 'message_router', None)
+            if router and hasattr(router, 'remove_route'):
+                if router.remove_route(peer_id):
+                    counts['routes_removed'] += 1
+        except Exception:
+            pass
+
+        try:
+            reconnect_tasks = getattr(p2p_manager, '_reconnect_tasks', None)
+            if reconnect_tasks is not None:
+                task = reconnect_tasks.pop(peer_id, None)
+                if task is not None:
+                    try:
+                        if hasattr(task, 'cancel'):
+                            task.cancel()
+                    except Exception:
+                        pass
+                    counts['reconnect_tasks_cancelled'] += 1
+        except Exception:
+            pass
+
+        try:
+            discovery = getattr(p2p_manager, 'discovery', None)
+            discovered = getattr(discovery, 'discovered_peers', None) if discovery else None
+            if isinstance(discovered, dict) and discovered.pop(peer_id, None) is not None:
+                counts['discovered_removed'] += 1
+        except Exception:
+            pass
+
+        return counts
+
+    def _forget_peer_with_cleanup(
+        db_manager: Any,
+        p2p_manager: Any,
+        peer_id: str,
+        *,
+        remove_introduced: bool = True,
+        purge_residue: bool = True,
+        remove_shadow_users: bool = True,
+    ) -> dict[str, Any]:
+        clean_peer_id = str(peer_id or '').strip()
+        if not clean_peer_id:
+            return {'success': False, 'error': 'peer_id required'}
+        if not p2p_manager or not getattr(p2p_manager, 'identity_manager', None):
+            return {'success': False, 'error': 'P2P not running'}
+
+        import asyncio
+
+        disconnected = False
+        disconnect_failed = False
+        try:
+            if (
+                getattr(p2p_manager, 'connection_manager', None)
+                and p2p_manager.connection_manager.is_connected(clean_peer_id)
+            ):
+                ev_loop = getattr(p2p_manager, '_event_loop', None)
+                if ev_loop and not ev_loop.is_closed():
+                    future = asyncio.run_coroutine_threadsafe(
+                        p2p_manager.connection_manager.disconnect_peer(clean_peer_id),
+                        ev_loop
+                    )
+                    future.result(timeout=10.0)
+                    disconnected = True
+        except Exception as e:
+            logger.warning(f"Disconnect during forget failed for {clean_peer_id}: {e}")
+            disconnect_failed = True
+
+        removed_known = False
+        try:
+            removed_known = bool(p2p_manager.identity_manager.remove_known_peer(clean_peer_id))
+        except Exception as e:
+            logger.warning(f"remove_known_peer failed for {clean_peer_id}: {e}")
+
+        runtime_cleanup = _cleanup_forgotten_peer_runtime_state(
+            p2p_manager,
+            clean_peer_id,
+            remove_introduced=remove_introduced,
+        )
+
+        residue_cleanup: dict[str, Any] = {'success': False, 'skipped': True}
+        if purge_residue and db_manager and hasattr(db_manager, 'forget_peer_residue'):
+            residue_cleanup = db_manager.forget_peer_residue(
+                clean_peer_id,
+                remove_shadow_users=remove_shadow_users,
+            )
+        elif not purge_residue:
+            residue_cleanup = {'success': True, 'skipped': True}
+
+        if p2p_manager and hasattr(p2p_manager, 'clear_peer_profile_cache'):
+            try:
+                p2p_manager.clear_peer_profile_cache(clean_peer_id)
+            except Exception as cache_err:
+                logger.warning(
+                    "clear_peer_profile_cache failed for %s: %s",
+                    clean_peer_id,
+                    cache_err,
+                )
+
+        try:
+            p2p_manager.record_activity_event({
+                'id': f"conn_forget_{clean_peer_id}_{int(time.time() * 1000)}",
+                'peer_id': clean_peer_id,
+                'kind': 'connection',
+                'timestamp': time.time(),
+                'status': 'forgotten',
+                'detail': 'Peer removed from known list and local residue cleaned up' if purge_residue else 'Peer removed from known list',
+            })
+        except Exception:
+            pass
+
+        success = bool(removed_known or residue_cleanup.get('success'))
+        status = 'forgotten' if success else 'not_found'
+        if disconnect_failed and not success:
+            status = 'failed'
+
+        return {
+            'success': success,
+            'status': status,
+            'peer_id': clean_peer_id,
+            'removed_known_peer': removed_known,
+            'disconnected': disconnected,
+            'disconnect_failed': disconnect_failed,
+            'runtime_cleanup': runtime_cleanup,
+            'residue_cleanup': residue_cleanup,
+        }
 
     def _get_bookmark_manager() -> Any:
         return current_app.config.get('BOOKMARK_MANAGER')
@@ -1362,6 +1548,23 @@ def create_api_blueprint() -> Blueprint:
         context['summary_text'] = '\n\n'.join(summary_parts).strip()
         return context
 
+    def _fetch_youtube_oembed_metadata(video_id: str) -> dict[str, str]:
+        vid = (video_id or '').strip()
+        if not _YT_ID_PATTERN.match(vid):
+            raise ValueError('Invalid YouTube video id')
+        canonical_url = f"https://www.youtube.com/watch?v={vid}"
+        oembed_url = f"https://www.youtube.com/oembed?url={quote_plus(canonical_url)}&format=json"
+        raw = _http_get_text(oembed_url, timeout=6, max_bytes=128_000)
+        obj = json.loads(raw)
+        return {
+            'video_id': vid,
+            'title': str(obj.get('title') or '').strip(),
+            'author': str(obj.get('author_name') or '').strip(),
+            'provider_name': str(obj.get('provider_name') or '').strip(),
+            'thumbnail_url': str(obj.get('thumbnail_url') or '').strip(),
+            'canonical_url': canonical_url,
+        }
+
     def _extract_external_context(url: str) -> dict:
         """Best-effort extraction of text context for agents/humans."""
         candidate = (url or '').strip()
@@ -2261,10 +2464,11 @@ def create_api_blueprint() -> Blueprint:
         accounts programmatically. Each agent on each machine should use a 
         unique username (e.g., 'cursor-agent@macmini', 'claude@laptop').
         
-        Returns the user_id and a full-permission API key for the new account.
+        Returns the user_id and an API key scoped to the default agent permissions
+        (read_messages, write_messages, read_feed, write_feed).
         """
         import secrets as _secrets
-        db_manager, api_key_manager, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
+        db_manager, api_key_manager, _, _, channel_manager, _, _, _, _, _, _ = _get_app_components_any(current_app)
         
         try:
             data = request.get_json()
@@ -2277,9 +2481,11 @@ def create_api_blueprint() -> Blueprint:
             account_type = (data.get('account_type') or 'human').strip().lower()
             if account_type not in ('human', 'agent'):
                 account_type = 'human'
-            # Optional: auto-approve agent accounts (set CANOPY_AUTO_APPROVE_AGENTS=1)
+            # All API-registered accounts start pending until an admin approves
+            # them.  The web UI register form (which calls create_user directly)
+            # is the only path that auto-activates humans.
             auto_approve = (os.getenv('CANOPY_AUTO_APPROVE_AGENTS') or '').strip().lower() in ('1', 'true', 'yes')
-            status = 'active' if (account_type == 'agent' and auto_approve) else ('pending_approval' if account_type == 'agent' else 'active')
+            status = 'active' if auto_approve else 'pending_approval'
 
             if not username or len(username) < 2:
                 return jsonify({'error': 'username required (min 2 chars)'}), 400
@@ -2342,20 +2548,38 @@ def create_api_blueprint() -> Blueprint:
             db_manager.store_user_keys(user_id, ed25519_pub_b58, ed25519_priv_b58,
                                        x25519_pub_b58, x25519_priv_b58)
             
-            # Add to general channel
+            quarantine_channel_id = None
+            quarantine_ready = True
+            # Apply default channel placement.
             try:
-                with db_manager.get_connection() as conn:
-                    conn.execute("""
-                        INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
-                        VALUES ('general', ?, 'member')
-                    """, (user_id,))
-                    conn.commit()
-            except Exception:
-                pass
+                if account_type == 'agent':
+                    quarantine_channel_id = getattr(channel_manager, 'AGENT_START_CHANNEL_ID', 'agent-start-here')
+                    quarantine_ready = bool(
+                        channel_manager
+                        and channel_manager.ensure_agent_quarantine_assignment(
+                            user_id,
+                            updated_by='system',
+                        )
+                    )
+                    if not quarantine_ready and status == 'active':
+                        db_manager.set_user_status(user_id, 'pending_approval')
+                        status = 'pending_approval'
+                else:
+                    with db_manager.get_connection() as conn:
+                        conn.execute("""
+                            INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
+                            VALUES ('general', ?, 'member')
+                        """, (user_id,))
+                        conn.commit()
+            except Exception as placement_err:
+                logger.error(f"Default channel placement failed for {user_id}: {placement_err}", exc_info=True)
+                quarantine_ready = False
+                if account_type == 'agent' and status == 'active':
+                    db_manager.set_user_status(user_id, 'pending_approval')
+                    status = 'pending_approval'
             
-            # Generate a full-permission API key for the agent
-            all_permissions = [p for p in Permission]
-            api_key = api_key_manager.generate_key(user_id, all_permissions)
+            # New registrations start with the conservative default agent scope.
+            api_key = api_key_manager.generate_key(user_id, _default_agent_api_permissions())
             
             logger.info(f"Registered new agent/user: '{username}' ({user_id})")
             
@@ -2367,8 +2591,18 @@ def create_api_blueprint() -> Blueprint:
                 'status': status,
                 'api_key': api_key,
                 'public_key': ed25519_pub_b58,
+                'quarantine_channel_id': quarantine_channel_id if (account_type == 'agent' and quarantine_ready) else None,
                 'message': f'Account created. Use the api_key for MCP/API authentication.'
-                    + (' Poll GET /api/auth/status until status is "active".' if status == 'pending_approval' else '')
+                    + (
+                        ' Poll GET /api/auth/status until status is "active". '
+                        'Once approved, you will start in the private #agent-start-here channel until an admin expands your access.'
+                        if status == 'pending_approval'
+                        else (
+                            ' Your account is active, but it starts in the private #agent-start-here channel until an admin expands your access.'
+                            if account_type == 'agent'
+                            else ''
+                        )
+                    )
             }), 201
             
         except Exception as e:
@@ -2477,6 +2711,7 @@ def create_api_blueprint() -> Blueprint:
         try:
             public_host = request.args.get('public_host')
             public_port = request.args.get('public_port', type=int)
+            external_endpoint = request.args.get('external_endpoint', type=str)
             mesh_port = config.network.mesh_port if config else 7771
 
             invite = generate_invite(
@@ -2484,6 +2719,7 @@ def create_api_blueprint() -> Blueprint:
                 mesh_port,
                 public_host=public_host,
                 public_port=public_port,
+                external_endpoint=external_endpoint,
             )
             return jsonify({
                 'invite_code': invite.encode(),
@@ -2491,6 +2727,9 @@ def create_api_blueprint() -> Blueprint:
                 'endpoints': invite.endpoints,
                 'raw': invite.to_dict(),
             })
+        except ValueError as e:
+            logger.warning(f"Invalid invite generation request: {e}")
+            return jsonify({'error': str(e)}), 400
         except Exception as e:
             logger.error(f"Failed to generate invite: {e}", exc_info=True)
             return jsonify({'error': 'Failed to generate invite'}), 500
@@ -2500,7 +2739,7 @@ def create_api_blueprint() -> Blueprint:
     def import_p2p_invite():
         """Import an invite code and attempt to connect to the peer."""
         import asyncio
-        from ..network.invite import InviteCode, import_invite
+        from ..network.invite import InviteCode, import_invite, parse_invite_endpoint
         *_, p2p_manager = _get_app_components_any(current_app)
 
         if not p2p_manager or not p2p_manager.identity_manager.local_identity:
@@ -2530,10 +2769,10 @@ def create_api_blueprint() -> Blueprint:
                             detail='Invite connection attempt',
                             endpoint=ep,
                         )
-                        # Parse ws://host:port
-                        addr = ep.replace('ws://', '').replace('wss://', '')
-                        host, port_str = addr.rsplit(':', 1)
-                        port = int(port_str)
+                        parsed = parse_invite_endpoint(ep)
+                        if not parsed:
+                            continue
+                        host, port, scheme = parsed
 
                         # Schedule connection on the P2P manager's event loop
                         # so the WebSocket stays on the persistent loop
@@ -2541,7 +2780,7 @@ def create_api_blueprint() -> Blueprint:
                         if ev_loop and not ev_loop.is_closed():
                             future = asyncio.run_coroutine_threadsafe(
                                 p2p_manager.connection_manager.connect_to_peer(
-                                    invite.peer_id, host, port
+                                    invite.peer_id, host, port, scheme=scheme
                                 ),
                                 ev_loop
                             )
@@ -2651,6 +2890,8 @@ def create_api_blueprint() -> Blueprint:
         if not ev_loop or ev_loop.is_closed():
             return jsonify({'error': 'P2P event loop unavailable'}), 500
 
+        from ..network.invite import parse_invite_endpoint
+
         direct_attempt_count = 0
         if force_broker:
             _record_connection_event(
@@ -2670,12 +2911,13 @@ def create_api_blueprint() -> Blueprint:
                         detail='Introduced peer connect attempt',
                         endpoint=ep,
                     )
-                    addr = ep.replace('ws://', '').replace('wss://', '')
-                    host, port_str = addr.rsplit(':', 1)
-                    port = int(port_str)
+                    parsed = parse_invite_endpoint(ep)
+                    if not parsed:
+                        continue
+                    host, port, scheme = parsed
                     future = asyncio.run_coroutine_threadsafe(
                         p2p_manager.connection_manager.connect_to_peer(
-                            peer_id, host, port),
+                            peer_id, host, port, scheme=scheme),
                         ev_loop
                     )
                     connected = future.result(timeout=10.0)
@@ -2856,6 +3098,8 @@ def create_api_blueprint() -> Blueprint:
         if not ev_loop or ev_loop.is_closed():
             return jsonify({'error': 'P2P event loop unavailable'}), 500
 
+        from ..network.invite import parse_invite_endpoint
+
         for ep in endpoints:
             try:
                 _record_connection_event(
@@ -2865,12 +3109,13 @@ def create_api_blueprint() -> Blueprint:
                     detail='Reconnect attempt',
                     endpoint=ep,
                 )
-                addr = ep.replace('ws://', '').replace('wss://', '')
-                host, port_str = addr.rsplit(':', 1)
-                port = int(port_str)
+                parsed = parse_invite_endpoint(ep)
+                if not parsed:
+                    continue
+                host, port, scheme = parsed
                 future = asyncio.run_coroutine_threadsafe(
                     p2p_manager.connection_manager.connect_to_peer(
-                        peer_id, host, port),
+                        peer_id, host, port, scheme=scheme),
                     ev_loop
                 )
                 connected = future.result(timeout=10.0)
@@ -2949,52 +3194,35 @@ def create_api_blueprint() -> Blueprint:
     @api.route('/p2p/forget', methods=['POST'])
     @require_auth(allow_session=True)
     def forget_peer():
-        """Forget a known peer (remove from stored endpoints)."""
-        import asyncio
-        *_, p2p_manager = _get_app_components_any(current_app)
-        if not p2p_manager or not p2p_manager.identity_manager:
-            return jsonify({'error': 'P2P not running'}), 500
+        """Forget a peer and clean up stored residue."""
+        db_manager, _, _, _, _, _, _, _, _, _, p2p_manager = _get_app_components_any(current_app)
+        key_info = getattr(g, 'api_key_info', None)
+        if key_info is not None:
+            permissions = set(getattr(key_info, 'permissions', set()) or set())
+            if Permission.DELETE_DATA not in permissions:
+                return jsonify({'error': 'Invalid or insufficient permissions'}), 403
 
         data = request.get_json() or {}
         peer_id = data.get('peer_id')
         remove_introduced = data.get('remove_introduced', True)
+        purge_residue = data.get('purge_residue', True)
+        remove_shadow_users = data.get('remove_shadow_users', True)
         if not peer_id:
             return jsonify({'error': 'peer_id required'}), 400
 
-        # Disconnect if currently connected
-        try:
-            if p2p_manager.connection_manager and p2p_manager.connection_manager.is_connected(peer_id):
-                ev_loop = p2p_manager._event_loop
-                if ev_loop and not ev_loop.is_closed():
-                    future = asyncio.run_coroutine_threadsafe(
-                        p2p_manager.connection_manager.disconnect_peer(peer_id),
-                        ev_loop
-                    )
-                    future.result(timeout=10.0)
-        except Exception as e:
-            logger.warning(f"Disconnect during forget failed for {peer_id}: {e}")
-
-        removed = p2p_manager.identity_manager.remove_known_peer(peer_id)
-
-        if remove_introduced and hasattr(p2p_manager, '_introduced_peers'):
-            try:
-                p2p_manager._introduced_peers.pop(peer_id, None)
-            except Exception:
-                pass
-
-        try:
-            p2p_manager.record_activity_event({
-                'id': f"conn_forget_{peer_id}_{int(time.time() * 1000)}",
-                'peer_id': peer_id,
-                'kind': 'connection',
-                'timestamp': time.time(),
-                'status': 'forgotten',
-                'detail': 'Peer removed from known list',
-            })
-        except Exception:
-            pass
-
-        return jsonify({'status': 'forgotten' if removed else 'not_found', 'peer_id': peer_id})
+        result = _forget_peer_with_cleanup(
+            db_manager,
+            p2p_manager,
+            peer_id,
+            remove_introduced=bool(remove_introduced),
+            purge_residue=bool(purge_residue),
+            remove_shadow_users=bool(remove_shadow_users),
+        )
+        if not result.get('success') and result.get('error'):
+            error = str(result.get('error') or 'Could not forget peer')
+            status = 500 if error == 'P2P not running' else 400
+            return jsonify({'error': error}), status
+        return jsonify(result)
 
     # ------------------------------------------------------------------ #
     #  Relay / brokering status and policy                                 #
@@ -3053,15 +3281,18 @@ def create_api_blueprint() -> Blueprint:
                 'message': 'No known endpoints for direct connection attempt',
             }), 400
 
+        from ..network.invite import parse_invite_endpoint
+
         # Try each endpoint
         for ep in endpoints:
             try:
-                addr = ep.replace('ws://', '').replace('wss://', '')
-                host, port_str = addr.rsplit(':', 1)
-                port = int(port_str)
+                parsed = parse_invite_endpoint(ep)
+                if not parsed:
+                    continue
+                host, port, scheme = parsed
                 future = _asyncio.run_coroutine_threadsafe(
                     p2p_manager.connection_manager.connect_to_peer(
-                        peer_id, host, port),
+                        peer_id, host, port, scheme=scheme),
                     ev_loop,
                 )
                 connected = future.result(timeout=10.0)
@@ -3234,12 +3465,15 @@ def create_api_blueprint() -> Blueprint:
         data = request.get_json()
         if not data:
             return jsonify({'error': 'JSON body required'}), 400
-        ok = set_device_profile(
-            display_name=data.get('display_name'),
-            description=data.get('description'),
-            avatar_b64=data.get('avatar_b64'),
-            avatar_mime=data.get('avatar_mime'),
-        )
+        try:
+            ok = set_device_profile(
+                display_name=data.get('display_name'),
+                description=data.get('description'),
+                avatar_b64=data.get('avatar_b64'),
+                avatar_mime=data.get('avatar_mime'),
+            )
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
         if ok:
             # Broadcast updated device profile to connected peers
             *_, p2p_manager = _get_app_components_any(current_app)
@@ -4971,6 +5205,39 @@ def create_api_blueprint() -> Blueprint:
         except Exception as e:
             logger.error(f"Extract content context failed: {e}")
             return jsonify({'error': 'Failed to extract content context'}), 500
+
+    @api.route('/deck/youtube-title', methods=['GET'])
+    @require_auth(allow_session=True)
+    def deck_youtube_title_api():
+        try:
+            video_id = str(request.args.get('video_id') or '').strip()
+            if not video_id:
+                return jsonify({'error': 'video_id is required'}), 400
+            metadata = _fetch_youtube_oembed_metadata(video_id)
+            if not metadata.get('title'):
+                return jsonify({'error': 'YouTube title unavailable'}), 404
+            return jsonify({
+                'video_id': metadata.get('video_id') or video_id,
+                'title': metadata.get('title') or '',
+                'author': metadata.get('author') or '',
+                'provider_name': metadata.get('provider_name') or 'YouTube',
+                'thumbnail_url': metadata.get('thumbnail_url') or '',
+                'canonical_url': metadata.get('canonical_url') or '',
+            })
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        except HTTPError as e:
+            if getattr(e, 'code', None) == 404:
+                logger.info(
+                    "Deck YouTube title unavailable for %s: upstream returned 404",
+                    request.args.get('video_id'),
+                )
+                return jsonify({'error': 'YouTube title unavailable'}), 404
+            logger.error(f"Deck YouTube title lookup failed for {request.args.get('video_id')}: {e}")
+            return jsonify({'error': 'Failed to resolve YouTube title'}), 502
+        except Exception as e:
+            logger.error(f"Deck YouTube title lookup failed for {request.args.get('video_id')}: {e}")
+            return jsonify({'error': 'Failed to resolve YouTube title'}), 502
 
     @api.route('/content-contexts', methods=['GET'])
     @require_auth(Permission.READ_FEED)
@@ -9092,34 +9359,121 @@ def create_api_blueprint() -> Blueprint:
     def _find_stream_remote_base(self_stream_id: str) -> Optional[str]:
         """Find a reachable remote base URL for a stream by trying all host_addrs."""
         from urllib.request import urlopen as _urlopen
-        from urllib.error import URLError as _URLError
         import json as _json
+
+        def _normalize_base_url(base_url: Any) -> str:
+            candidate = str(base_url or '').strip()
+            if not candidate:
+                return ''
+            parsed = urlparse(candidate)
+            scheme = (parsed.scheme or '').lower()
+            if scheme not in ('http', 'https'):
+                return ''
+            host = (parsed.hostname or '').strip()
+            if not host:
+                return ''
+            try:
+                port = parsed.port
+            except ValueError:
+                return ''
+            default_port = 443 if scheme == 'https' else 80
+            netloc = f"{host}:{port or default_port}"
+            return f"{scheme}://{netloc}"
+
+        def _stream_candidate_allowed_for_peer(base_url: Any, origin_peer: str, p2p_manager: Any) -> bool:
+            normalized = _normalize_base_url(base_url)
+            if not normalized:
+                return False
+            safe, _reason = _is_safe_external_url(normalized)
+            if safe:
+                return True
+            if not origin_peer or not p2p_manager:
+                return False
+
+            allowed: set[str] = set()
+
+            def _add_host_port(host: str, port: Optional[int], scheme: str = 'http') -> None:
+                clean_host = str(host or '').strip().lstrip('/')
+                if not clean_host:
+                    return
+                default_port = 443 if scheme == 'https' else 80
+                allowed.add(f"{scheme}://{clean_host}:{port or default_port}")
+
+            identity_manager = getattr(p2p_manager, 'identity_manager', None)
+            if identity_manager:
+                peer_endpoints = getattr(identity_manager, 'peer_endpoints', {}) or {}
+                for endpoint in peer_endpoints.get(origin_peer, []) or []:
+                    try:
+                        parts = str(endpoint).rsplit(':', 1)
+                        host = parts[0].lstrip('/')
+                        port = int(parts[1]) if len(parts) > 1 else 7771
+                        http_port = port - 1 if port > 7770 else 7770
+                        _add_host_port(host, http_port, 'http')
+                    except Exception:
+                        continue
+
+            discovery = getattr(p2p_manager, 'discovery', None)
+            if discovery and hasattr(discovery, 'get_peer'):
+                try:
+                    peer = discovery.get_peer(origin_peer)
+                except Exception:
+                    peer = None
+                if peer is not None:
+                    try:
+                        _add_host_port(getattr(peer, 'address', ''), getattr(peer, 'port', None), 'http')
+                    except Exception:
+                        pass
+
+            return normalized in allowed
+
         cached = _get_cached_stream_remote_base(self_stream_id)
         if cached:
             return cached
-        db_manager = _get_db_manager()
+        db_manager, _, _, _, _, _, _, _, _, _, p2p_manager = _get_app_components_any(current_app)
         if not db_manager:
             return None
         candidates: list[str] = []
+        origin_peer = ''
         with db_manager.get_connection() as conn:
             rows = conn.execute(
-                "SELECT attachments FROM channel_messages "
+                "SELECT origin_peer, attachments FROM channel_messages "
                 "WHERE attachments IS NOT NULL AND attachments != '[]' "
                 "ORDER BY created_at DESC LIMIT 300"
             ).fetchall()
         for row in rows:
             try:
-                atts = _json.loads(row[0] if not hasattr(row, 'keys') else row['attachments'])
+                atts = _json.loads(row[1] if not hasattr(row, 'keys') else row['attachments'])
             except Exception:
                 continue
             for att in atts:
                 if not isinstance(att, dict):
                     continue
                 if str(att.get('stream_id') or '') == self_stream_id:
+                    origin_peer = str(row[0] if not hasattr(row, 'keys') else row['origin_peer'] or '').strip()
                     candidates = [str(a).rstrip('/') for a in (att.get('host_addrs') or [])]
                     break
             if candidates:
                 break
+        identity_manager = getattr(p2p_manager, 'identity_manager', None)
+        if origin_peer and identity_manager:
+            peer_endpoints = getattr(identity_manager, 'peer_endpoints', {}) or {}
+            for endpoint in peer_endpoints.get(origin_peer, []) or []:
+                try:
+                    parts = str(endpoint).rsplit(':', 1)
+                    host = parts[0].lstrip('/')
+                    port = int(parts[1]) if len(parts) > 1 else 7771
+                    http_port = port - 1 if port > 7770 else 7770
+                    candidates.append(f"http://{host}:{http_port}")
+                except Exception:
+                    continue
+        filtered_candidates: list[str] = []
+        for base in candidates:
+            if _stream_candidate_allowed_for_peer(base, origin_peer, p2p_manager):
+                filtered_candidates.append(base)
+        candidates = filtered_candidates
+        cached = _get_cached_stream_remote_base(self_stream_id)
+        if cached and _stream_candidate_allowed_for_peer(cached, origin_peer, p2p_manager):
+            return cached
         for base in candidates:
             try:
                 test_url = f"{base}/api/v1/streams/{self_stream_id}/manifest.m3u8"
@@ -9135,6 +9489,7 @@ def create_api_blueprint() -> Blueprint:
         return None
 
     @api.route('/stream-proxy/<stream_id>/manifest.m3u8', methods=['GET'])
+    @require_auth(allow_session=True)
     def stream_proxy_manifest_api(stream_id):
         """Server-side proxy for remote peer streams — fetches manifest from origin peer and rewrites segment URLs."""
         from urllib.request import urlopen as _urlopen
@@ -9186,19 +9541,26 @@ def create_api_blueprint() -> Blueprint:
             return jsonify({'error': 'Internal server error'}), 500
 
     @api.route('/stream-proxy/<stream_id>/segments/<segment_name>', methods=['GET'])
+    @require_auth(allow_session=True)
     def stream_proxy_segment_api(stream_id, segment_name):
         """Server-side proxy for remote peer stream segments."""
         from urllib.request import urlopen as _urlopen
         from urllib.error import URLError as _URLError
+        safe_segment_name = _sanitize_stream_proxy_segment_name(segment_name)
+        if not safe_segment_name:
+            return jsonify({'error': 'Invalid segment name'}), 400
         try:
             remote_base = _find_stream_remote_base(stream_id)
             if not remote_base:
                 return jsonify({'error': 'Not found'}), 404
-            remote_url = f"{remote_base}/api/v1/streams/{stream_id}/segments/{segment_name}"
+            remote_url = f"{remote_base}/api/v1/streams/{stream_id}/segments/{safe_segment_name}"
             try:
                 with _urlopen(remote_url, timeout=_stream_remote_fetch_timeout_seconds) as resp:
                     data = resp.read()
-                    content_type = resp.headers.get('Content-Type', 'application/octet-stream')
+                    raw_content_type = str(resp.headers.get('Content-Type', 'application/octet-stream') or 'application/octet-stream')
+                    content_type = raw_content_type.split(';', 1)[0].strip().lower() or 'application/octet-stream'
+                    if content_type not in _ALLOWED_STREAM_PROXY_SEGMENT_CONTENT_TYPES:
+                        content_type = 'application/octet-stream'
                 _set_cached_stream_remote_base(stream_id, remote_base)
             except _URLError as e:
                 _set_cached_stream_remote_base(stream_id, None)

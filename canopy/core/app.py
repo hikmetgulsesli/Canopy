@@ -73,6 +73,7 @@ from .large_attachments import (
     LARGE_ATTACHMENT_DOWNLOAD_AUTO,
     LARGE_ATTACHMENT_DOWNLOAD_MANUAL,
     LARGE_ATTACHMENT_DOWNLOAD_PAUSED,
+    coerce_remote_attachment_reference,
     get_attachment_origin_file_id,
     get_attachment_source_peer_id,
     get_large_attachment_download_mode,
@@ -261,6 +262,16 @@ def create_app(config: Optional[Config] = None) -> Flask:
     app.config['DEBUG'] = config.debug
     app.config['TESTING'] = config.testing
     app.config['GOOGLE_MAPS_EMBED_API_KEY'] = os.getenv('CANOPY_GOOGLE_MAPS_EMBED_API_KEY', '').strip()
+
+    # Harden session cookies: HTTPOnly prevents JS access; Lax SameSite blocks
+    # most CSRF vectors; Secure is enabled only when TLS is configured so that
+    # plain-HTTP local deployments still work.
+    app.config['SESSION_COOKIE_HTTPONLY'] = True
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    app.config['SESSION_COOKIE_SECURE'] = bool(
+        os.getenv('CANOPY_SESSION_COOKIE_SECURE', '').strip().lower() in ('1', 'true', 'yes')
+        or (config.network.enable_tls)
+    )
     
     # Store config in app for access in routes
     app.config['CANOPY_CONFIG'] = config
@@ -331,7 +342,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
         )
 
         logger.info("Initializing feed manager...")
-        feed_manager = FeedManager(db_manager, api_key_manager)
+        feed_manager = FeedManager(db_manager, api_key_manager, trust_manager=trust_manager)
         feed_manager.workspace_events = workspace_event_manager
         app.config['FEED_MANAGER'] = feed_manager
         logger.info("Feed manager initialized successfully")
@@ -651,10 +662,15 @@ def create_app(config: Optional[Config] = None) -> Flask:
                 except Exception as save_err:
                     logger.debug("Failed to save inline attachment: %s", save_err)
 
-            if is_large_attachment_reference(attachment):
-                source_peer_id = get_attachment_source_peer_id(attachment) or str(default_source_peer_id or '').strip()
-                origin_file_id = get_attachment_origin_file_id(attachment) or str(attachment.get('id') or '').strip()
-                checksum = str(attachment.get('checksum') or '').strip()
+            remote_attachment = coerce_remote_attachment_reference(
+                attachment,
+                default_source_peer_id=default_source_peer_id,
+            )
+
+            if remote_attachment and is_large_attachment_reference(remote_attachment):
+                source_peer_id = get_attachment_source_peer_id(remote_attachment) or str(default_source_peer_id or '').strip()
+                origin_file_id = get_attachment_origin_file_id(remote_attachment) or str(remote_attachment.get('id') or '').strip()
+                checksum = str(remote_attachment.get('checksum') or '').strip()
                 if source_peer_id and origin_file_id:
                     transfer = file_manager.get_remote_attachment_transfer(source_peer_id, origin_file_id)
                     local_file_id = str((transfer or {}).get('local_file_id') or '').strip()
@@ -677,17 +693,17 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     file_manager.upsert_remote_attachment_transfer(
                         origin_peer_id=source_peer_id,
                         origin_file_id=origin_file_id,
-                        file_name=attachment.get('name'),
-                        content_type=attachment.get('type'),
-                        size=attachment.get('size'),
+                        file_name=remote_attachment.get('name'),
+                        content_type=remote_attachment.get('type'),
+                        size=remote_attachment.get('size'),
                         checksum=checksum or None,
                         status='pending',
                         error=None,
                     )
                     normalized = {
-                        'name': attachment.get('name', 'file'),
-                        'type': attachment.get('type', 'application/octet-stream'),
-                        'size': attachment.get('size', 0),
+                        'name': remote_attachment.get('name', 'file'),
+                        'type': remote_attachment.get('type', 'application/octet-stream'),
+                        'size': remote_attachment.get('size', 0),
                         'checksum': checksum,
                         'origin_file_id': origin_file_id,
                         'source_peer_id': source_peer_id,
@@ -972,11 +988,30 @@ def create_app(config: Optional[Config] = None) -> Flask:
         def _retry_pending_large_attachments_for_peer(peer_id: str) -> None:
             if not peer_id:
                 return
-            if get_large_attachment_download_mode(db_manager) != LARGE_ATTACHMENT_DOWNLOAD_AUTO:
+            download_mode = get_large_attachment_download_mode(db_manager)
+            if download_mode == LARGE_ATTACHMENT_DOWNLOAD_PAUSED:
                 return
+            if p2p_manager.connection_manager and p2p_manager.connection_manager.is_connected(peer_id):
+                if not p2p_manager.peer_supports_capability(peer_id, LARGE_ATTACHMENT_CAPABILITY):
+                    for transfer in file_manager.list_pending_remote_attachment_transfers(
+                        origin_peer_id=peer_id,
+                        statuses=['pending', 'requested'],
+                        limit=500,
+                    ):
+                        origin_file_id = str(transfer.get('origin_file_id') or '').strip()
+                        if not origin_file_id:
+                            continue
+                        file_manager.upsert_remote_attachment_transfer(
+                            origin_peer_id=peer_id,
+                            origin_file_id=origin_file_id,
+                            status='error',
+                            error='source_peer_missing_large_attachment_capability',
+                        )
+                    return
+            statuses = ['requested'] if download_mode != LARGE_ATTACHMENT_DOWNLOAD_AUTO else ['pending', 'requested', 'error']
             for transfer in file_manager.list_pending_remote_attachment_transfers(
                 origin_peer_id=peer_id,
-                statuses=['pending', 'error'],
+                statuses=statuses,
                 limit=500,
             ):
                 attachment = {
@@ -1191,6 +1226,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
             display_name: Optional[str],
             from_peer: str,
             *,
+            account_type: Optional[str] = None,
             allow_origin_reassign: bool = False,
         ) -> None:
             """Create/update a shadow user safely, avoiding username collisions."""
@@ -1199,15 +1235,27 @@ def create_app(config: Optional[Config] = None) -> Flask:
             try:
                 existing = db_manager.get_user(user_id)
                 shadow_display = display_name or f"peer-{from_peer[:8]}"
+                shadow_account_type = str(account_type or '').strip().lower()
+                if shadow_account_type not in {'human', 'agent'}:
+                    shadow_account_type = 'human'
 
                 if existing:
                     try:
                         current_display = existing.get('display_name', '')
+                        current_account_type = str(existing.get('account_type') or '').strip().lower()
+                        updates = []
+                        params: list[Any] = []
                         if display_name and (current_display.startswith('peer-') or current_display == user_id):
+                            updates.append("display_name = ?")
+                            params.append(display_name)
+                        if shadow_account_type and shadow_account_type != current_account_type:
+                            updates.append("account_type = ?")
+                            params.append(shadow_account_type)
+                        if updates:
                             with db_manager.get_connection() as conn:
                                 conn.execute(
-                                    "UPDATE users SET display_name = ? WHERE id = ?",
-                                    (display_name, user_id)
+                                    f"UPDATE users SET {', '.join(updates)} WHERE id = ?",
+                                    (*params, user_id)
                                 )
                                 conn.commit()
                     except Exception:
@@ -1241,11 +1289,12 @@ def create_app(config: Optional[Config] = None) -> Flask:
                             public_key='',
                             password_hash=None,
                             display_name=shadow_display,
+                            account_type=shadow_account_type,
                             origin_peer=from_peer
                         ):
                             created = True
                             logger.info(
-                                f"Created shadow user {user_id} (username={cand}, display_name={shadow_display})"
+                                f"Created shadow user {user_id} (username={cand}, display_name={shadow_display}, account_type={shadow_account_type})"
                             )
                             break
                     except Exception:
@@ -1259,6 +1308,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                             public_key='',
                             password_hash=None,
                             display_name=shadow_display,
+                            account_type=shadow_account_type,
                             origin_peer=from_peer
                         )
                     except Exception as e:
@@ -1340,6 +1390,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                                      repost_policy: Optional[str] = None,
                                      message_type: str = 'text',
                                      display_name: Optional[str] = None, expires_at: Optional[str] = None,
+                                     account_type: Optional[str] = None,
                                      ttl_seconds: Optional[int] = None, ttl_mode: Optional[str] = None,
                                      update_only: bool = False,
                                      origin_peer: Optional[str] = None,
@@ -1359,6 +1410,22 @@ def create_app(config: Optional[Config] = None) -> Flask:
             images and files natively.
             """
             try:
+                if not _peer_is_trusted_for_content(from_peer):
+                    logger.info(
+                        "Ignoring channel message %s in %s from untrusted peer %s",
+                        message_id,
+                        channel_id,
+                        from_peer,
+                    )
+                    return
+                if _is_foreign_agent_quarantine_channel(channel_id):
+                    logger.info(
+                        "Ignoring foreign agent quarantine message %s in %s from %s",
+                        message_id,
+                        channel_id,
+                        from_peer,
+                    )
+                    return
                 existing_msg = None
                 if message_id:
                     try:
@@ -1462,6 +1529,15 @@ def create_app(config: Optional[Config] = None) -> Flask:
 
                 effective_origin_peer = origin_peer or from_peer
 
+                if channel_manager.is_channel_retired_by_vote(channel_id):
+                    logger.info(
+                        "Ignoring channel message %s for retired channel %s from %s",
+                        message_id,
+                        channel_id,
+                        from_peer,
+                    )
+                    return
+
                 # Ensure remote user exists as a shadow account so FK works.
                 # IMPORTANT: shadow users are created per user_id (not per
                 # peer) so that different users on the same peer device
@@ -1470,6 +1546,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     user_id,
                     display_name,
                     effective_origin_peer,
+                    account_type=account_type,
                     allow_origin_reassign=True,
                 )
 
@@ -2531,6 +2608,20 @@ def create_app(config: Optional[Config] = None) -> Flask:
             channels, all local human users are added as before.
             """
             try:
+                if not _peer_is_trusted_for_content(from_peer):
+                    logger.info(
+                        "Ignoring channel announce %s from untrusted peer %s",
+                        channel_id,
+                        from_peer,
+                    )
+                    return
+                if _is_foreign_agent_quarantine_channel(channel_id, name):
+                    logger.info(
+                        "Ignoring foreign agent quarantine channel announce %s from %s",
+                        channel_id,
+                        from_peer,
+                    )
+                    return
                 mode = str(privacy_mode or '').strip().lower()
                 channel_type_norm = str(channel_type or '').strip().lower()
                 if mode not in {'open', 'guarded', 'private', 'confidential'}:
@@ -2551,6 +2642,13 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     True if allow_member_replies is None else bool(allow_member_replies),
                     len([uid for uid in (allowed_poster_user_ids or []) if str(uid or '').strip()]),
                 )
+                if channel_manager.is_channel_retired_by_vote(channel_id):
+                    logger.info(
+                        "Ignoring channel announce for retired channel %s from %s",
+                        channel_id,
+                        from_peer,
+                    )
+                    return
 
                 # SECURITY: Strip initial_members from non-targeted channel announces
                 if initial_members and not is_targeted:
@@ -2660,13 +2758,28 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     pass
 
                 creator_hint = str(created_by_user_id or '').strip() or None
+                public_authority_peer = str(created_by_peer or from_peer or '').strip() or str(from_peer or '').strip()
+                pending_key = (str(channel_id or '').strip(), public_authority_peer)
+                pending_reconcile = _pending_placeholder_reconciles.get(pending_key)
+                if pending_reconcile:
+                    logger.info(
+                        "Placeholder reconcile response received for %s from %s "
+                        "(authority=%s request_id=%s incoming_name=%s incoming_type=%s incoming_privacy=%s)",
+                        channel_id,
+                        from_peer,
+                        public_authority_peer,
+                        pending_reconcile.get('request_id') or 'none',
+                        str(name or '').strip() or 'unknown',
+                        str(channel_type or '').strip() or 'unknown',
+                        mode,
+                    )
                 merge_result = channel_manager.merge_or_adopt_channel(
                     remote_id=channel_id,
                     remote_name=name,
                     remote_type=channel_type,
                     remote_desc=description,
                     local_user_id=creator_hint or local_user,
-                    from_peer=from_peer,
+                    from_peer=public_authority_peer,
                     privacy_mode=mode,
                     post_policy=post_policy,
                     allow_member_replies=True if allow_member_replies is None else bool(allow_member_replies),
@@ -2683,6 +2796,50 @@ def create_app(config: Optional[Config] = None) -> Flask:
                 else:
                     logger.debug(f"Channel announce from {from_peer}: "
                                  f"'{name}' ({channel_id}) already exists, skipped")
+                if pending_reconcile:
+                    try:
+                        with db_manager.get_connection() as conn:
+                            row = conn.execute(
+                                "SELECT name, channel_type, privacy_mode FROM channels WHERE id = ?",
+                                (channel_id,),
+                            ).fetchone()
+                        final_name = str((row['name'] if row and hasattr(row, 'keys') else (row[0] if row else '')) or '').strip()
+                        final_type = str((row['channel_type'] if row and hasattr(row, 'keys') else (row[1] if row else '')) or '').strip()
+                        final_privacy = str((row['privacy_mode'] if row and hasattr(row, 'keys') else (row[2] if row else '')) or '').strip()
+                        finalized = bool(
+                            row
+                            and final_name
+                            and not final_name.startswith('peer-channel-')
+                        )
+                        if finalized:
+                            logger.info(
+                                "Placeholder reconcile finalized for %s "
+                                "(request_id=%s final_name=%s final_type=%s final_privacy=%s)",
+                                channel_id,
+                                pending_reconcile.get('request_id') or 'none',
+                                final_name,
+                                final_type or 'unknown',
+                                final_privacy or 'unknown',
+                            )
+                            _pending_placeholder_reconciles.pop(pending_key, None)
+                        else:
+                            logger.warning(
+                                "Placeholder reconcile finalize incomplete for %s "
+                                "(request_id=%s final_name=%s final_type=%s final_privacy=%s)",
+                                channel_id,
+                                pending_reconcile.get('request_id') or 'none',
+                                final_name or 'missing',
+                                final_type or 'unknown',
+                                final_privacy or 'unknown',
+                            )
+                    except Exception as finalize_err:
+                        logger.warning(
+                            "Placeholder reconcile finalize readback failed for %s "
+                            "(request_id=%s): %s",
+                            channel_id,
+                            pending_reconcile.get('request_id') or 'none',
+                            finalize_err,
+                        )
             except Exception as e:
                 logger.error(f"Failed to handle channel announce: {e}",
                              exc_info=True)
@@ -2723,6 +2880,21 @@ def create_app(config: Optional[Config] = None) -> Flask:
             the specified user.
             """
             try:
+                if not _peer_is_trusted_for_content(from_peer):
+                    logger.info(
+                        "Ignoring member sync %s for %s from untrusted peer %s",
+                        action,
+                        channel_id,
+                        from_peer,
+                    )
+                    return
+                if _is_foreign_agent_quarantine_channel(channel_id, channel_name):
+                    logger.info(
+                        "Ignoring foreign agent quarantine member sync for %s from %s",
+                        channel_id,
+                        from_peer,
+                    )
+                    return
                 channel_id = str(channel_id or '').strip()
                 target_user_id = str(target_user_id or '').strip()
                 action = str(action or '').strip().lower()
@@ -2739,6 +2911,23 @@ def create_app(config: Optional[Config] = None) -> Flask:
                         channel_id=channel_id or None,
                         target_user_id=target_user_id or None,
                         action=action or None,
+                    )
+                    return
+
+                if channel_manager.is_channel_retired_by_vote(channel_id):
+                    logger.info(
+                        "Ignoring member sync for retired channel %s from %s",
+                        channel_id,
+                        from_peer,
+                    )
+                    _send_member_sync_ack(
+                        sync_id=sync_id,
+                        to_peer=from_peer,
+                        status='error',
+                        error='channel_retired_by_vote',
+                        channel_id=channel_id,
+                        target_user_id=target_user_id,
+                        action=action,
                     )
                     return
 
@@ -2919,6 +3108,178 @@ def create_app(config: Optional[Config] = None) -> Flask:
 
         p2p_manager.on_member_sync_ack = _on_member_sync_ack
 
+        def _on_channel_removal_proposal(
+            proposal_id,
+            channel_id,
+            channel_name,
+            channel_origin_peer,
+            channel_privacy_mode,
+            initiator_peer_id,
+            initiator_user_id,
+            electorate_peer_ids,
+            threshold_count,
+            opened_at,
+            from_peer,
+        ):
+            try:
+                initiator_peer = str(initiator_peer_id or '').strip() or str(from_peer or '').strip()
+                if str(from_peer or '').strip() and initiator_peer != str(from_peer).strip():
+                    logger.warning(
+                        "SECURITY: Ignoring channel removal proposal %s for %s from %s "
+                        "(initiator mismatch %s)",
+                        proposal_id,
+                        channel_id,
+                        from_peer,
+                        initiator_peer_id,
+                    )
+                    return
+                trusted_peers = set()
+                try:
+                    trusted_peers = {
+                        str(peer_id or '').strip()
+                        for peer_id in (trust_manager.get_trusted_peers() or [])
+                        if str(peer_id or '').strip()
+                    }
+                except Exception:
+                    trusted_peers = set()
+                if trusted_peers and initiator_peer not in trusted_peers:
+                    logger.warning(
+                        "SECURITY: Ignoring channel removal proposal %s for %s from untrusted peer %s",
+                        proposal_id,
+                        channel_id,
+                        initiator_peer,
+                    )
+                    return
+                channel_manager.receive_channel_removal_proposal(
+                    proposal_id=proposal_id,
+                    channel_id=channel_id,
+                    channel_name=channel_name,
+                    channel_origin_peer=channel_origin_peer,
+                    channel_privacy_mode=channel_privacy_mode,
+                    initiator_peer_id=initiator_peer,
+                    initiator_user_id=initiator_user_id,
+                    electorate_peer_ids=electorate_peer_ids,
+                    threshold_count=int(threshold_count or 0),
+                    opened_at=opened_at,
+                    trusted_peer_ids=list(trusted_peers),
+                )
+            except Exception as e:
+                logger.error(f"Failed to handle channel removal proposal: {e}", exc_info=True)
+
+        p2p_manager.on_channel_removal_proposal = _on_channel_removal_proposal
+
+        def _on_channel_removal_vote(
+            proposal_id,
+            channel_id,
+            voter_peer_id,
+            voter_user_id,
+            vote,
+            reason,
+            cast_at,
+            from_peer,
+        ):
+            try:
+                voter_peer = str(voter_peer_id or '').strip() or str(from_peer or '').strip()
+                if str(from_peer or '').strip() and voter_peer != str(from_peer).strip():
+                    logger.warning(
+                        "SECURITY: Ignoring channel removal vote %s for %s from %s "
+                        "(voter mismatch %s)",
+                        proposal_id,
+                        channel_id,
+                        from_peer,
+                        voter_peer_id,
+                    )
+                    return
+                trusted_peers = set()
+                try:
+                    trusted_peers = {
+                        str(peer_id or '').strip()
+                        for peer_id in (trust_manager.get_trusted_peers() or [])
+                        if str(peer_id or '').strip()
+                    }
+                except Exception:
+                    trusted_peers = set()
+                if trusted_peers and voter_peer not in trusted_peers:
+                    logger.warning(
+                        "SECURITY: Ignoring channel removal vote %s for %s from untrusted peer %s",
+                        proposal_id,
+                        channel_id,
+                        voter_peer,
+                    )
+                    return
+                channel_manager.receive_channel_removal_vote(
+                    proposal_id=proposal_id,
+                    channel_id=channel_id,
+                    voter_peer_id=voter_peer,
+                    voter_user_id=voter_user_id,
+                    vote=vote,
+                    reason=reason,
+                    cast_at=cast_at,
+                    trusted_peer_ids=list(trusted_peers),
+                )
+            except Exception as e:
+                logger.error(f"Failed to handle channel removal vote: {e}", exc_info=True)
+
+        p2p_manager.on_channel_removal_vote = _on_channel_removal_vote
+
+        def _on_channel_removal_result(
+            proposal_id,
+            channel_id,
+            result,
+            electorate_peer_ids,
+            threshold_count,
+            finalizing_peer_id,
+            finalizing_user_id,
+            tombstone_id,
+            finalized_at,
+            from_peer,
+        ):
+            try:
+                finalizer_peer = str(finalizing_peer_id or '').strip() or str(from_peer or '').strip()
+                if str(from_peer or '').strip() and finalizer_peer != str(from_peer).strip():
+                    logger.warning(
+                        "SECURITY: Ignoring channel removal result %s for %s from %s "
+                        "(finalizer mismatch %s)",
+                        proposal_id,
+                        channel_id,
+                        from_peer,
+                        finalizing_peer_id,
+                    )
+                    return
+                trusted_peers = set()
+                try:
+                    trusted_peers = {
+                        str(peer_id or '').strip()
+                        for peer_id in (trust_manager.get_trusted_peers() or [])
+                        if str(peer_id or '').strip()
+                    }
+                except Exception:
+                    trusted_peers = set()
+                if trusted_peers and finalizer_peer not in trusted_peers:
+                    logger.warning(
+                        "SECURITY: Ignoring channel removal result %s for %s from untrusted peer %s",
+                        proposal_id,
+                        channel_id,
+                        finalizer_peer,
+                    )
+                    return
+                channel_manager.apply_channel_removal_result(
+                    proposal_id=proposal_id,
+                    channel_id=channel_id,
+                    result=result,
+                    electorate_peer_ids=electorate_peer_ids,
+                    threshold_count=int(threshold_count or 0),
+                    finalizing_peer_id=finalizer_peer,
+                    finalizing_user_id=finalizing_user_id,
+                    tombstone_id=tombstone_id,
+                    finalized_at=finalized_at,
+                    trusted_peer_ids=list(trusted_peers),
+                )
+            except Exception as e:
+                logger.error(f"Failed to handle channel removal result: {e}", exc_info=True)
+
+        p2p_manager.on_channel_removal_result = _on_channel_removal_result
+
         def _normalize_channel_crypto_mode(raw_mode: Any) -> str:
             mode = str(raw_mode or '').strip().lower()
             if mode in {'e2e_optional', 'e2e_enforced', 'legacy_plaintext'}:
@@ -2929,15 +3290,229 @@ def create_app(config: Optional[Config] = None) -> Flask:
             sec = getattr(config, 'security', None) if config else None
             return bool(getattr(sec, 'e2e_private_channels', False))
 
+        def _peer_is_trusted_for_content(peer_id: Any) -> bool:
+            clean_peer = str(peer_id or '').strip()
+            if not clean_peer or not trust_manager:
+                return False
+            try:
+                if hasattr(trust_manager, 'has_explicit_trust_score') and not trust_manager.has_explicit_trust_score(clean_peer):
+                    return False
+            except Exception:
+                return False
+            try:
+                return bool(trust_manager.is_peer_trusted(clean_peer))
+            except Exception:
+                return False
+
+        def _channel_definition_is_public(channel_type: Any, privacy_mode: Any) -> bool:
+            if not channel_manager:
+                return False
+            try:
+                return bool(channel_manager._is_public_channel(channel_type, privacy_mode))
+            except Exception:
+                return False
+
+        def _is_foreign_agent_quarantine_channel(channel_id: Any, channel_name: Any = None) -> bool:
+            if not channel_manager:
+                return False
+            clean_id = str(channel_id or '').strip()
+            clean_name = str(channel_name or '').strip()
+            return (
+                channel_manager.is_agent_quarantine_channel(clean_id, clean_name)
+                and clean_id != channel_manager.get_agent_quarantine_channel_id()
+            )
+
         def _channel_targets_e2e(privacy_mode: str, crypto_mode: str) -> bool:
             return (
                 str(privacy_mode or '').strip().lower() in {'private', 'confidential'}
                 and str(crypto_mode or '').strip().lower() in {'e2e_optional', 'e2e_enforced'}
             )
 
-        def _on_channel_membership_query(query_id, local_user_ids, limit, from_peer):
+        def _get_active_local_registered_user_ids(conn) -> list[str]:
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT id
+                    FROM users
+                    WHERE id NOT IN ('system', 'local_user')
+                      AND (origin_peer IS NULL OR origin_peer = '' OR origin_peer = ?)
+                      AND password_hash IS NOT NULL
+                      AND password_hash != ''
+                      AND COALESCE(status, 'active') = 'active'
+                    ORDER BY created_at ASC, id ASC
+                    """
+                    ,
+                    (str((p2p_manager.get_peer_id() if p2p_manager else '') or '').strip(),),
+                ).fetchall()
+            except Exception:
+                rows = []
+            return [
+                str(row['id'] if hasattr(row, 'keys') and 'id' in row.keys() else row[0] or '').strip()
+                for row in (rows or [])
+                if str(row['id'] if hasattr(row, 'keys') and 'id' in row.keys() else row[0] or '').strip()
+            ]
+
+        def _owner_shares_local_principal(conn, owner_user_id: str, alias_user_ids: list[str]) -> bool:
+            clean_owner = str(owner_user_id or '').strip()
+            clean_aliases = [str(uid or '').strip() for uid in (alias_user_ids or []) if str(uid or '').strip()]
+            if not clean_owner or not clean_aliases:
+                return False
+            if not (identity_portability_manager and identity_portability_manager.enabled):
+                return False
+            placeholders = ",".join("?" for _ in clean_aliases)
+            try:
+                row = conn.execute(
+                    f"""
+                    SELECT 1
+                    FROM mesh_principal_links owner_link
+                    JOIN mesh_principal_links alias_link
+                      ON alias_link.principal_id = owner_link.principal_id
+                    WHERE owner_link.local_user_id = ?
+                      AND alias_link.local_user_id IN ({placeholders})
+                      AND alias_link.local_user_id != owner_link.local_user_id
+                    LIMIT 1
+                    """,
+                    (clean_owner, *clean_aliases),
+                ).fetchone()
+                return bool(row)
+            except Exception:
+                return False
+
+        def _maybe_add_private_membership_continuity_owner(
+            conn,
+            *,
+            channel_id: str,
+            local_member_ids: list[str],
+            source: str,
+            require_existing_activity: bool = False,
+        ) -> list[str]:
+            clean_channel_id = str(channel_id or '').strip()
+            normalized_local_members = [
+                str(uid or '').strip() for uid in (local_member_ids or []) if str(uid or '').strip()
+            ]
+            if not clean_channel_id or not normalized_local_members:
+                return []
+
+            owner_user_id = str(db_manager.get_instance_owner_user_id() or '').strip()
+            if not owner_user_id or owner_user_id in normalized_local_members:
+                return []
+
+            active_local_registered_ids = _get_active_local_registered_user_ids(conn)
+            if owner_user_id not in active_local_registered_ids:
+                return []
+
+            try:
+                existing_owner = conn.execute(
+                    "SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?",
+                    (clean_channel_id, owner_user_id),
+                ).fetchone()
+            except Exception:
+                existing_owner = None
+            if existing_owner:
+                return []
+
+            if require_existing_activity:
+                try:
+                    has_activity = conn.execute(
+                        "SELECT 1 FROM channel_messages WHERE channel_id = ? LIMIT 1",
+                        (clean_channel_id,),
+                    ).fetchone()
+                except Exception:
+                    has_activity = None
+                if not has_activity:
+                    return []
+
+            alias_user_ids = [
+                uid for uid in normalized_local_members
+                if uid and uid != owner_user_id
+            ]
+            if not alias_user_ids:
+                return []
+
+            if _owner_shares_local_principal(conn, owner_user_id, alias_user_ids):
+                logger.info(
+                    "Private membership continuity rebind for %s: added instance owner %s via shared principal (%s)",
+                    clean_channel_id,
+                    owner_user_id,
+                    source,
+                )
+                return [owner_user_id]
+
+            logger.info(
+                "Private membership continuity rebind for %s: added instance owner %s from stale local membership alias(es) %s (%s)",
+                clean_channel_id,
+                owner_user_id,
+                ",".join(alias_user_ids),
+                source,
+            )
+            return [owner_user_id]
+
+        def _repair_private_membership_visibility_continuity() -> int:
+            repaired = 0
+            try:
+                with db_manager.get_connection() as conn:
+                    rows = conn.execute(
+                        """
+                        SELECT c.id
+                        FROM channels c
+                        WHERE COALESCE(c.privacy_mode, 'open') IN ('private', 'confidential')
+                        ORDER BY c.created_at ASC, c.id ASC
+                        """
+                    ).fetchall()
+                    for row in rows or []:
+                        channel_id = str(row['id'] if hasattr(row, 'keys') and 'id' in row.keys() else row[0] or '').strip()
+                        if not channel_id:
+                            continue
+                        member_rows = conn.execute(
+                            """
+                            SELECT cm.user_id
+                            FROM channel_members cm
+                            JOIN users u ON u.id = cm.user_id
+                            WHERE cm.channel_id = ?
+                              AND (u.origin_peer IS NULL OR u.origin_peer = '' OR u.origin_peer = ?)
+                            ORDER BY cm.user_id ASC
+                            """,
+                            (channel_id, str((p2p_manager.get_peer_id() if p2p_manager else '') or '').strip()),
+                        ).fetchall()
+                        local_member_ids = [
+                            str(mr['user_id'] if hasattr(mr, 'keys') and 'user_id' in mr.keys() else mr[0] or '').strip()
+                            for mr in (member_rows or [])
+                            if str(mr['user_id'] if hasattr(mr, 'keys') and 'user_id' in mr.keys() else mr[0] or '').strip()
+                        ]
+                        continuity_targets = _maybe_add_private_membership_continuity_owner(
+                            conn,
+                            channel_id=channel_id,
+                            local_member_ids=local_member_ids,
+                            source='startup_private_visibility_repair',
+                            require_existing_activity=True,
+                        )
+                        for target_user_id in continuity_targets:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO channel_members (channel_id, user_id, role) VALUES (?, ?, 'member')",
+                                (channel_id, target_user_id),
+                            )
+                            repaired += 1
+                    if repaired:
+                        conn.commit()
+            except Exception as repair_err:
+                logger.debug("Private membership continuity repair failed: %s", repair_err)
+            if repaired:
+                logger.info(
+                    "Private membership continuity repaired %d membership row(s)",
+                    repaired,
+                )
+            return repaired
+
+        def _on_channel_membership_query(query_id, local_user_ids, limit, from_peer, username_hints=None):
             """Respond with private-channel metadata for querying peer users."""
             try:
+                if not _peer_is_trusted_for_content(from_peer):
+                    logger.info(
+                        "Ignoring channel membership query %s from untrusted peer %s",
+                        query_id,
+                        from_peer,
+                    )
+                    return
                 qid = str(query_id or '').strip() or None
                 user_ids = []
                 seen_users = set()
@@ -2953,12 +3528,19 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     max_channels = max(1, min(int(limit or 200), 300))
                 except Exception:
                     max_channels = 200
+                clean_username_hints = {}
+                for user_id, username in dict(username_hints or {}).items():
+                    user_id_s = str(user_id or '').strip()
+                    username_s = str(username or '').strip()
+                    if user_id_s and username_s:
+                        clean_username_hints[user_id_s] = username_s
 
                 payload = channel_manager.get_private_channel_recovery_payload(
                     query_user_ids=user_ids,
                     requester_peer_id=str(from_peer or '').strip(),
                     limit=max_channels,
                     max_members_per_channel=250,
+                    query_username_hints=clean_username_hints,
                 )
                 channels_payload = list(payload.get('channels') or [])
                 truncated = bool(payload.get('truncated'))
@@ -2977,15 +3559,37 @@ def create_app(config: Optional[Config] = None) -> Flask:
         def _on_channel_membership_response(query_id, channels, truncated, from_peer):
             """Recover missing private-channel metadata/membership after reconnect."""
             try:
+                if not _peer_is_trusted_for_content(from_peer):
+                    logger.info(
+                        "Ignoring channel membership response %s from untrusted peer %s",
+                        query_id,
+                        from_peer,
+                    )
+                    return
                 local_peer = str((p2p_manager.get_peer_id() if p2p_manager else '') or '').strip()
                 imported_channels = 0
                 for item in (channels or []):
                     if not isinstance(item, dict):
                         continue
                     channel_id = str(item.get('channel_id') or '').strip()
+                    channel_name = str(item.get('name') or '').strip()
                     if not channel_id:
                         continue
-                    name = str(item.get('name') or f'private-{channel_id[:8]}').strip() or f'private-{channel_id[:8]}'
+                    if _is_foreign_agent_quarantine_channel(channel_id, channel_name):
+                        logger.info(
+                            "Ignoring foreign agent quarantine recovery %s from %s",
+                            channel_id,
+                            from_peer,
+                        )
+                        continue
+                    if channel_manager.is_channel_retired_by_vote(channel_id):
+                        logger.info(
+                            "Ignoring membership recovery for retired channel %s from %s",
+                            channel_id,
+                            from_peer,
+                        )
+                        continue
+                    name = channel_name or f'private-{channel_id[:8]}'
                     channel_type = str(item.get('channel_type') or 'private').strip().lower() or 'private'
                     description = str(item.get('description') or '')
                     origin_peer = str(item.get('origin_peer') or from_peer or '').strip() or str(from_peer or '').strip()
@@ -3019,6 +3623,18 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     # Ignore responses that do not include any local users.
                     if not local_member_ids:
                         continue
+                    with db_manager.get_connection() as conn:
+                        continuity_targets = _maybe_add_private_membership_continuity_owner(
+                            conn,
+                            channel_id=channel_id,
+                            local_member_ids=local_member_ids,
+                            source='membership_recovery_response',
+                            require_existing_activity=False,
+                        )
+                    for continuity_user_id in continuity_targets:
+                        if continuity_user_id not in seen_local:
+                            seen_local.add(continuity_user_id)
+                            local_member_ids.append(continuity_user_id)
                     if str(from_peer or '').strip() and not sender_is_member and origin_peer != str(from_peer).strip():
                         logger.info(
                             "Membership recovery for %s from %s (sender not in member list — "
@@ -3709,12 +4325,30 @@ def create_app(config: Optional[Config] = None) -> Flask:
             if not peer_id:
                 return
 
+            try:
+                stale_keys = [key for key in _seen_profile_hashes if key[0] == peer_id]
+                for key in stale_keys:
+                    del _seen_profile_hashes[key]
+                if stale_keys:
+                    logger.info(
+                        "profile_hash_cache_cleared_on_reconnect peer=%s entries=%d",
+                        peer_id,
+                        len(stale_keys),
+                    )
+            except Exception as hash_clear_err:
+                logger.debug(
+                    "Failed to clear profile hash cache for %s: %s",
+                    peer_id,
+                    hash_clear_err,
+                )
+
             def _worker() -> None:
                 try:
                     _mark_stale_pending_decrypt()
                     _retry_member_sync_delivery_for_peer(peer_id)
                     _retry_channel_key_delivery_for_peer(peer_id)
                     _retry_pending_large_attachments_for_peer(peer_id)
+                    _reconcile_existing_public_placeholders_for_peer(peer_id)
                 except Exception as retry_err:
                     logger.debug(
                         "Peer-connect retry worker failed for %s: %s",
@@ -3730,11 +4364,18 @@ def create_app(config: Optional[Config] = None) -> Flask:
 
         p2p_manager.on_peer_connected = _on_peer_connected
         _mark_stale_pending_decrypt()
+        _repair_private_membership_visibility_continuity()
 
         # --- Channel sync callback ---
         def _on_channel_sync(channels, from_peer):
             """Handle a CHANNEL_SYNC (bulk list) from a connected peer."""
             try:
+                trusted_content = _peer_is_trusted_for_content(from_peer)
+                if not trusted_content:
+                    logger.info(
+                        "Applying channel sync from untrusted peer %s in public-only mode",
+                        from_peer,
+                    )
                 local_user = 'local_user'
                 try:
                     with db_manager.get_connection() as conn:
@@ -3754,6 +4395,8 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     ch_type = ch.get('type', 'public')
                     ch_desc = ch.get('desc', '')
                     ch_privacy = ch.get('privacy_mode') or 'open'
+                    if not trusted_content and not _channel_definition_is_public(ch_type, ch_privacy):
+                        continue
                     ch_last_activity_at = ch.get('last_activity_at')
                     ch_ttl_days = ch.get('lifecycle_ttl_days')
                     ch_preserved = bool(ch.get('lifecycle_preserved'))
@@ -3807,6 +4450,12 @@ def create_app(config: Optional[Config] = None) -> Flask:
 
         p2p_manager.get_channel_latest_timestamps = _get_channel_latest_timestamps
 
+        def _get_channel_history_bounds():
+            """Return oldest/latest/count hints for bounded catch-up repair."""
+            return channel_manager.get_channel_history_bounds()
+
+        p2p_manager.get_channel_history_bounds = _get_channel_history_bounds
+
         def _get_channel_sync_digests(
             channel_ids: Optional[list[str]] = None,
             max_channels: int = 200,
@@ -3850,13 +4499,205 @@ def create_app(config: Optional[Config] = None) -> Flask:
 
         denied_catchup_audit_ts: dict[tuple[str, str], float] = {}
         denied_catchup_audit_interval_s = 120.0
+        _placeholder_reconcile_last_requested: dict[tuple[str, str], float] = {}
+        _pending_placeholder_reconciles: dict[tuple[str, str], dict[str, Any]] = {}
+        _PLACEHOLDER_RECONCILE_COOLDOWN_S = 120.0
+
+        def _request_public_placeholder_reconcile(
+            *,
+            channel_id: str,
+            origin_peer: str,
+            observed_from_peer: Optional[str] = None,
+            remote_name: Optional[str] = None,
+            remote_type: Optional[str] = None,
+            privacy_mode: Optional[str] = None,
+        ) -> bool:
+            clean_channel_id = str(channel_id or '').strip()
+            clean_origin_peer = str(origin_peer or '').strip()
+            clean_observed_from = str(observed_from_peer or '').strip()
+            if not clean_channel_id or not clean_origin_peer or not p2p_manager:
+                return False
+            try:
+                if hasattr(p2p_manager, 'connection_manager') and p2p_manager.connection_manager:
+                    if not p2p_manager.connection_manager.is_connected(clean_origin_peer):
+                        logger.info(
+                            "Placeholder reconcile deferred for %s: origin %s not connected "
+                            "(observed_from=%s, incoming_name=%s, incoming_type=%s, incoming_privacy=%s)",
+                            clean_channel_id,
+                            clean_origin_peer,
+                            clean_observed_from or 'unknown',
+                            str(remote_name or '').strip() or 'unknown',
+                            str(remote_type or '').strip() or 'unknown',
+                            str(privacy_mode or '').strip() or 'unknown',
+                        )
+                        return False
+            except Exception:
+                pass
+
+            now = time.time()
+            key = (clean_channel_id, clean_origin_peer)
+            last_requested = float(_placeholder_reconcile_last_requested.get(key, 0.0) or 0.0)
+            pending_state = _pending_placeholder_reconciles.get(key) or {}
+            if pending_state and now - float(pending_state.get('requested_at', 0.0) or 0.0) >= _PLACEHOLDER_RECONCILE_COOLDOWN_S:
+                logger.warning(
+                    "Placeholder reconcile timed out waiting for authoritative metadata for %s via %s "
+                    "(last_requested_at=%s, last_incoming_name=%s)",
+                    clean_channel_id,
+                    clean_origin_peer,
+                    pending_state.get('requested_at'),
+                    pending_state.get('incoming_name') or 'unknown',
+                )
+            if now - last_requested < _PLACEHOLDER_RECONCILE_COOLDOWN_S:
+                return False
+            _placeholder_reconcile_last_requested[key] = now
+            request_id = f"reconcile-{clean_channel_id[:12]}-{int(now)}"
+            _pending_placeholder_reconciles[key] = {
+                'channel_id': clean_channel_id,
+                'origin_peer': clean_origin_peer,
+                'observed_from': clean_observed_from or 'unknown',
+                'incoming_name': str(remote_name or '').strip(),
+                'incoming_type': str(remote_type or '').strip(),
+                'incoming_privacy': str(privacy_mode or '').strip(),
+                'requested_at': now,
+                'request_id': request_id,
+            }
+
+            logger.info(
+                "Placeholder reconcile started for %s via origin %s "
+                "(observed_from=%s, incoming_name=%s, incoming_type=%s, incoming_privacy=%s)",
+                clean_channel_id,
+                clean_origin_peer,
+                clean_observed_from or 'unknown',
+                str(remote_name or '').strip() or 'unknown',
+                str(remote_type or '').strip() or 'unknown',
+                str(privacy_mode or '').strip() or 'unknown',
+            )
+
+            send_metadata_request = getattr(p2p_manager, 'send_channel_metadata_request', None)
+            if callable(send_metadata_request):
+                try:
+                    sent = bool(send_metadata_request(
+                        clean_origin_peer,
+                        [clean_channel_id],
+                        request_id=request_id,
+                        reason='placeholder_reconcile',
+                    ))
+                    logger.info(
+                        "Placeholder reconcile request sent for %s to %s "
+                        "(request_id=%s sent=%s)",
+                        clean_channel_id,
+                        clean_origin_peer,
+                        request_id,
+                        sent,
+                    )
+                    if sent:
+                        return True
+                except Exception as reconcile_err:
+                    logger.warning(
+                        "Placeholder reconcile request failed for %s via %s: %s",
+                        clean_channel_id,
+                        clean_origin_peer,
+                        reconcile_err,
+                    )
+            trigger_sync = getattr(p2p_manager, 'trigger_peer_sync', None)
+            if callable(trigger_sync):
+                try:
+                    fallback = bool(trigger_sync(clean_origin_peer))
+                    logger.info(
+                        "Placeholder reconcile fell back to generic peer sync for %s via %s "
+                        "(request_id=%s sent=%s)",
+                        clean_channel_id,
+                        clean_origin_peer,
+                        request_id,
+                        fallback,
+                    )
+                    return fallback
+                except Exception as reconcile_err:
+                    logger.warning(
+                        "Placeholder reconcile trigger failed for %s via %s: %s",
+                        clean_channel_id,
+                        clean_origin_peer,
+                        reconcile_err,
+                    )
+            return False
+
+        def _on_channel_metadata_request(
+            request_id: Optional[str],
+            channel_ids: list[str],
+            reason: Optional[str],
+            from_peer: Optional[str],
+        ) -> None:
+            clean_peer = str(from_peer or '').strip()
+            normalized_ids = [
+                str(channel_id or '').strip()
+                for channel_id in (channel_ids or [])
+                if str(channel_id or '').strip()
+            ]
+            if not clean_peer or not normalized_ids or not p2p_manager:
+                return
+            logger.info(
+                "Received public channel metadata request from %s "
+                "(request_id=%s reason=%s ids=%s)",
+                clean_peer,
+                str(request_id or '').strip() or 'none',
+                str(reason or '').strip() or 'unknown',
+                normalized_ids,
+            )
+            replay_metadata = getattr(p2p_manager, 'replay_public_channel_metadata_to_peer', None)
+            if callable(replay_metadata):
+                sent = bool(replay_metadata(
+                    clean_peer,
+                    channel_ids=normalized_ids,
+                    reason='metadata_request_response',
+                    request_id=str(request_id or '').strip() or None,
+                ))
+                logger.info(
+                    "Responded to public channel metadata request from %s "
+                    "(request_id=%s sent=%s ids=%s)",
+                    clean_peer,
+                    str(request_id or '').strip() or 'none',
+                    sent,
+                    normalized_ids,
+                )
+
+        def _reconcile_existing_public_placeholders_for_peer(peer_id: str) -> int:
+            clean_peer = str(peer_id or '').strip()
+            if not clean_peer or not channel_manager:
+                return 0
+            started = 0
+            for candidate in channel_manager.list_public_placeholder_reconcile_candidates(limit=256):
+                candidate_origin = str(candidate.get('origin_peer') or '').strip()
+                if candidate_origin != clean_peer:
+                    continue
+                if _request_public_placeholder_reconcile(
+                    channel_id=str(candidate.get('id') or '').strip(),
+                    origin_peer=candidate_origin,
+                    observed_from_peer='startup_repair_scan',
+                    remote_name=str(candidate.get('name') or '').strip(),
+                    remote_type=str(candidate.get('channel_type') or '').strip(),
+                    privacy_mode=str(candidate.get('privacy_mode') or '').strip(),
+                ):
+                    started += 1
+            if started:
+                logger.info(
+                    "Started %d placeholder reconcile request(s) for connected origin peer %s",
+                    started,
+                    clean_peer,
+                )
+            return started
+
+        channel_manager.public_placeholder_reconcile_callback = _request_public_placeholder_reconcile
+        p2p_manager.on_channel_metadata_request = _on_channel_metadata_request
+        if getattr(p2p_manager, 'message_router', None):
+            p2p_manager.message_router.on_channel_metadata_request = _on_channel_metadata_request
 
         # --- Catch-up request handler ---
         def _on_catchup_request(channel_timestamps, from_peer,
                                 feed_latest=None, circle_entries_latest=None,
                                 circle_votes_latest=None, circles_latest=None,
                                 tasks_latest=None,
-                                digest=None):
+                                digest=None,
+                                channel_ranges=None):
             """A peer is asking us for messages it missed.
 
             For each channel, query messages newer than the timestamp
@@ -3869,9 +4710,23 @@ def create_app(config: Optional[Config] = None) -> Flask:
             async task so the event loop stays responsive.
             """
             try:
+                trusted_content = _peer_is_trusted_for_content(from_peer)
+                if not trusted_content:
+                    logger.info(
+                        "Handling catchup request from untrusted peer %s in public-only mode",
+                        from_peer,
+                    )
                 all_messages = []
                 # Get all local channels (peer may not know about some)
-                local_ts = channel_manager.get_channel_latest_timestamps()
+                local_bounds = channel_manager.get_channel_history_bounds()
+                local_ts = {
+                    channel_id: str((bounds or {}).get('latest') or '').strip()
+                    for channel_id, bounds in local_bounds.items()
+                    if str((bounds or {}).get('latest') or '').strip()
+                }
+                visibility_map = channel_manager.get_channel_visibility_map(list(local_ts.keys()))
+                remote_channel_ranges = channel_ranges if isinstance(channel_ranges, dict) else {}
+                catchup_mode_counts = {'incremental': 0, 'backfill': 0}
                 digest_checked = 0
                 digest_matched = 0
                 digest_mismatched = 0
@@ -3888,6 +4743,12 @@ def create_app(config: Optional[Config] = None) -> Flask:
                         and isinstance(digest.get('channels'), dict)
                     ):
                         remote_digest_channels = cast(Dict[str, Any], digest.get('channels') or {})
+                        if not trusted_content and remote_digest_channels:
+                            remote_digest_channels = {
+                                cid: payload
+                                for cid, payload in remote_digest_channels.items()
+                                if visibility_map.get(str(cid or '').strip(), False)
+                            }
                         if remote_digest_channels:
                             local_digest_channels = channel_manager.get_channel_sync_digests(
                                 channel_ids=list(remote_digest_channels.keys()),
@@ -3907,6 +4768,12 @@ def create_app(config: Optional[Config] = None) -> Flask:
                 # access-control filtering was removed to fix relay gaps.
 
                 for ch_id, local_latest in local_ts.items():
+                    if channel_manager.is_agent_quarantine_channel(ch_id):
+                        continue
+                    if not trusted_content and not visibility_map.get(ch_id, False):
+                        continue
+                    bounds = local_bounds.get(ch_id) or {}
+                    local_oldest = str(bounds.get('oldest') or '').strip()
                     remote_digest = remote_digest_channels.get(ch_id)
                     local_digest = local_digest_channels.get(ch_id)
                     if remote_digest is not None:
@@ -3941,17 +4808,61 @@ def create_app(config: Optional[Config] = None) -> Flask:
                             digest_fallbacks += 1
 
                     peer_latest = channel_timestamps.get(ch_id)
+                    peer_range = remote_channel_ranges.get(ch_id) if isinstance(remote_channel_ranges.get(ch_id), dict) else {}
+                    peer_oldest = str((peer_range or {}).get('oldest') or '').strip()
+                    should_send_incremental = False
+                    since = ''
                     if peer_latest is None:
                         # Peer has no messages in this channel — send
                         # everything (up to the limit).
                         since = '1970-01-01 00:00:00'
+                        should_send_incremental = True
                     elif local_latest > peer_latest:
                         since = peer_latest
-                    else:
-                        continue  # peer is up-to-date
+                        should_send_incremental = True
 
-                    msgs = channel_manager.get_messages_since(ch_id, since)
-                    all_messages.extend(msgs)
+                    if should_send_incremental:
+                        msgs = channel_manager.get_messages_since(ch_id, since)
+                        if msgs:
+                            catchup_mode_counts['incremental'] += 1
+                            all_messages.extend(msgs)
+
+                    should_backfill = (
+                        bool(peer_oldest)
+                        and bool(local_oldest)
+                        and local_oldest < peer_oldest
+                    )
+                    if should_backfill:
+                        older_msgs = channel_manager.get_messages_before(ch_id, peer_oldest, limit=50)
+                        if older_msgs:
+                            catchup_mode_counts['backfill'] += 1
+                            all_messages.extend(older_msgs)
+
+                if all_messages:
+                    deduped_messages = []
+                    seen_message_ids = set()
+                    for msg in sorted(
+                        all_messages,
+                        key=lambda item: (
+                            str(item.get('created_at') or ''),
+                            str(item.get('channel_id') or ''),
+                            str(item.get('id') or ''),
+                        ),
+                    ):
+                        msg_id = str(msg.get('id') or '').strip()
+                        if msg_id and msg_id in seen_message_ids:
+                            continue
+                        if msg_id:
+                            seen_message_ids.add(msg_id)
+                        deduped_messages.append(msg)
+                    all_messages = deduped_messages
+                    logger.info(
+                        "Catchup response to %s modes incremental=%d backfill=%d messages=%d",
+                        from_peer,
+                        catchup_mode_counts['incremental'],
+                        catchup_mode_counts['backfill'],
+                        len(all_messages),
+                    )
 
                 if remote_digest_channels:
                     for ch_id in remote_digest_channels.keys():
@@ -4142,7 +5053,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     logger.debug(f"Catchup feed posts gathering failed: {fp_err}")
 
                 # Circle objects newer than what the peer has (v0.3.55+)
-                if circle_manager:
+                if trusted_content and circle_manager:
                     try:
                         since_co = circles_latest or '1970-01-01 00:00:00'
                         circles_data = circle_manager.get_circles_since(since_co)
@@ -4152,7 +5063,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                         logger.debug(f"Catchup circles gathering failed: {co_err}")
 
                 # Circle entries newer than what the peer has
-                if circle_manager:
+                if trusted_content and circle_manager:
                     try:
                         since_ce = circle_entries_latest or '1970-01-01 00:00:00'
                         entries = circle_manager.get_entries_since(since_ce)
@@ -4171,7 +5082,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                         logger.debug(f"Catchup circle votes gathering failed: {cv_err}")
 
                 # Tasks newer than what the peer has
-                if task_manager:
+                if trusted_content and task_manager:
                     try:
                         since_t = tasks_latest or '1970-01-01 00:00:00'
                         tasks = task_manager.get_tasks_since(since_t)
@@ -4226,9 +5137,26 @@ def create_app(config: Optional[Config] = None) -> Flask:
             has_extra = bool(feed_posts) or bool(circle_entries) or bool(circle_votes) or bool(circles) or bool(tasks)
             if not has_messages and not has_extra:
                 return
+            trusted_content = _peer_is_trusted_for_content(from_peer)
+            if not trusted_content:
+                logger.info(
+                    "Applying catchup response from untrusted peer %s in public-only mode",
+                    from_peer,
+                )
             try:
                 stored = 0
                 skipped_dup = 0
+                catchup_local_user = 'local_user'
+                try:
+                    with db_manager.get_connection() as conn:
+                        row = conn.execute(
+                            "SELECT id FROM users WHERE id != 'system' "
+                            "AND id != 'local_user' LIMIT 1"
+                        ).fetchone()
+                        if row:
+                            catchup_local_user = row[0]
+                except Exception:
+                    pass
                 for msg in (messages or []):
                     mid = msg.get('id')
                     if not mid:
@@ -4240,6 +5168,25 @@ def create_app(config: Optional[Config] = None) -> Flask:
                         continue
 
                     channel_id = msg.get('channel_id', 'general')
+                    incoming_channel_type = str(msg.get('channel_type') or '').strip().lower()
+                    incoming_channel_privacy = str(msg.get('channel_privacy_mode') or '').strip().lower() or 'open'
+                    if not trusted_content and not _channel_definition_is_public(incoming_channel_type, incoming_channel_privacy):
+                        continue
+                    if _is_foreign_agent_quarantine_channel(channel_id):
+                        logger.info(
+                            "Ignoring foreign agent quarantine catchup for %s from %s",
+                            channel_id,
+                            from_peer,
+                        )
+                        continue
+                    if channel_manager.is_channel_retired_by_vote(channel_id):
+                        logger.info(
+                            "Ignoring catchup message %s for retired channel %s from %s",
+                            mid,
+                            channel_id,
+                            from_peer,
+                        )
+                        continue
                     user_id = msg.get('user_id', f'peer_{from_peer}')
                     content = msg.get('content', '')
                     incoming_encrypted = msg.get('encrypted_content')
@@ -4325,24 +5272,60 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     )
 
                     # Ensure channel exists
+                    catchup_channel_name = str(msg.get('channel_name') or '').strip() or f"peer-channel-{channel_id[:8]}"
+                    catchup_channel_authority = str(msg.get('channel_origin_peer') or from_peer or '').strip() or str(from_peer or '').strip()
+                    if _channel_definition_is_public(incoming_channel_type, incoming_channel_privacy):
+                        try:
+                            channel_manager.merge_or_adopt_channel(
+                                remote_id=channel_id,
+                                remote_name=catchup_channel_name,
+                                remote_type=incoming_channel_type or 'public',
+                                remote_desc='',
+                                local_user_id=catchup_local_user,
+                                from_peer=catchup_channel_authority,
+                                privacy_mode=incoming_channel_privacy,
+                            )
+                        except Exception as merge_err:
+                            logger.debug(
+                                "Catchup public channel reconcile skipped for %s from %s: %s",
+                                channel_id,
+                                catchup_channel_authority or from_peer,
+                                merge_err,
+                            )
                     with db_manager.get_connection() as conn:
                         existing_ch = conn.execute(
-                            "SELECT privacy_mode FROM channels WHERE id = ?",
+                            "SELECT channel_type, privacy_mode FROM channels WHERE id = ?",
                             (channel_id,)
                         ).fetchone()
                         if not existing_ch:
+                            auto_channel_name = catchup_channel_name
+                            auto_channel_type = incoming_channel_type if incoming_channel_type in {'public', 'private', 'general'} else (
+                                'public' if _channel_definition_is_public(incoming_channel_type, incoming_channel_privacy) else 'private'
+                            )
+                            auto_channel_privacy = incoming_channel_privacy if incoming_channel_privacy in {'open', 'guarded', 'private', 'confidential'} else (
+                                'open' if auto_channel_type in {'public', 'general'} else 'private'
+                            )
+                            auto_channel_origin = catchup_channel_authority
                             conn.execute(
                                 "INSERT OR IGNORE INTO channels "
                                 "(id, name, channel_type, created_by, "
                                 "description, origin_peer, privacy_mode, created_at) "
-                                "VALUES (?, ?, 'private', ?, "
-                                "'Auto-created from P2P catchup', ?, 'private', "
+                                "VALUES (?, ?, ?, ?, "
+                                "'Auto-created from P2P catchup', ?, ?, "
                                 "datetime('now'))",
                                 (channel_id,
-                                 f"peer-channel-{channel_id[:8]}",
-                                 user_id, from_peer)
+                                 auto_channel_name,
+                                 auto_channel_type,
+                                 user_id,
+                                 auto_channel_origin,
+                                 auto_channel_privacy)
                             )
                             conn.commit()
+                            channel_type_for_membership = auto_channel_type
+                            channel_privacy_mode = auto_channel_privacy
+                        else:
+                            channel_type_for_membership = str(existing_ch['channel_type'] or incoming_channel_type or 'public').strip().lower() or 'public'
+                            channel_privacy_mode = str(existing_ch['privacy_mode'] or 'open').strip().lower()
 
                         # Ensure memberships
                         conn.execute(
@@ -4350,6 +5333,13 @@ def create_app(config: Optional[Config] = None) -> Flask:
                             "(channel_id, user_id, role) "
                             "VALUES (?, ?, 'member')",
                             (channel_id, user_id)
+                        )
+                        channel_manager._ensure_public_channel_membership_conn(
+                            conn,
+                            channel_id,
+                            channel_type_for_membership,
+                            channel_privacy_mode,
+                            fallback_user_id=catchup_local_user,
                         )
                         conn.commit()
 
@@ -4430,7 +5420,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
             # ---- Process extra catch-up data (v0.3.36+) ----
 
             # Feed posts
-            if feed_posts:
+            if trusted_content and feed_posts:
                 fp_stored = 0
                 for fp in feed_posts:
                     try:
@@ -4479,7 +5469,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
 
             # Circle objects (v0.3.55+) — must be ingested BEFORE entries
             # so that entries have a parent circle to reference.
-            if circles and circle_manager:
+            if trusted_content and circles and circle_manager:
                 co_stored = 0
                 for circle_data in circles:
                     try:
@@ -4492,7 +5482,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                                 f"{co_stored} missed circle objects")
 
             # Circle entries
-            if circle_entries and circle_manager:
+            if trusted_content and circle_entries and circle_manager:
                 ce_stored = 0
                 for entry in circle_entries:
                     try:
@@ -4505,7 +5495,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                                 f"{ce_stored} missed circle entries")
 
             # Circle votes
-            if circle_votes and circle_manager:
+            if trusted_content and circle_votes and circle_manager:
                 cv_stored = 0
                 for vote in circle_votes:
                     try:
@@ -4525,7 +5515,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                                 f"{cv_stored} missed circle votes")
 
             # Tasks
-            if tasks and task_manager:
+            if trusted_content and tasks and task_manager:
                 t_stored = 0
                 for task_data in tasks:
                     try:
@@ -4548,6 +5538,8 @@ def create_app(config: Optional[Config] = None) -> Flask:
 
         # Profile hash cache — skip re-processing unchanged profiles
         _seen_profile_hashes: dict[tuple[str, str], str] = {}  # (peer_id, user_id) -> profile_hash
+        _device_profile_apply_counts: dict[str, int] = {}
+        _peer_profile_apply_counts: dict[str, int] = {}
 
         def _on_profile_sync(profile_data, from_peer):
             """Handle incoming PROFILE_SYNC / PROFILE_UPDATE from a peer.
@@ -4560,7 +5552,34 @@ def create_app(config: Optional[Config] = None) -> Flask:
             profiles arriving via relay before any messages.
             """
             try:
+                if not _peer_is_trusted_for_content(from_peer):
+                    logger.info("Ignoring profile sync from untrusted peer %s", from_peer)
+                    return
                 remote_peer_id = profile_data.get('peer_id', from_peer)
+
+                # ---- Store device profile FIRST (independent of user/hash) ----
+                # Device profiles are keyed by peer_id in a separate table and
+                # must be reapplied even when the user profile hash is unchanged,
+                # otherwise peer rows can go missing while shadow-user state stays
+                # present.
+                device_info = profile_data.get('device')
+                if device_info and remote_peer_id:
+                    channel_manager.store_peer_device_profile(
+                        peer_id=remote_peer_id,
+                        display_name=device_info.get('display_name'),
+                        description=device_info.get('description'),
+                        avatar_b64=device_info.get('avatar_b64'),
+                        avatar_mime=device_info.get('avatar_mime'),
+                    )
+                    count = _device_profile_apply_counts.get(remote_peer_id, 0) + 1
+                    _device_profile_apply_counts[remote_peer_id] = count
+                    logger.info(
+                        "peer_device_profile_sync_applied peer=%s count=%s has_avatar=%s display_name=%s",
+                        remote_peer_id,
+                        count,
+                        bool(device_info.get('avatar_b64')),
+                        str(device_info.get('display_name') or '').strip() or remote_peer_id[:12],
+                    )
 
                 # ---- Skip unchanged profiles (version hash dedup) ----
                 # Exception: if our copy of this user's avatar file is missing (e.g. after
@@ -4580,21 +5599,48 @@ def create_app(config: Optional[Config] = None) -> Flask:
                                     f"peer-%-{uid[-8:] if len(uid) >= 8 else ''}",
                                 ):
                                     r = conn.execute(
-                                        "SELECT id, avatar_file_id FROM users WHERE username LIKE ?",
-                                        (pattern,),
+                                        "SELECT id, avatar_file_id FROM users WHERE username LIKE ? AND origin_peer = ?",
+                                        (pattern, peer_id),
                                     ).fetchone()
                                     if r:
                                         break
                             if not r:
-                                return False
+                                return True
                             fid_raw = r['avatar_file_id'] if 'avatar_file_id' in r.keys() else ''
                             fid = (fid_raw or '').strip() if isinstance(fid_raw, str) else str(fid_raw or '').strip()
                             if not fid:
-                                return False
+                                return True
                         profile_manager.file_manager.get_file_data(fid)
                         return False  # file exists
                     except Exception:
                         return True  # no user, no file_id, or get_file_data failed
+
+                def _display_name_stale_for_user(uid: str, peer_id: str) -> bool:
+                    if not uid:
+                        return False
+                    try:
+                        with db_manager.get_connection() as conn:
+                            r = conn.execute(
+                                "SELECT id, display_name FROM users WHERE id = ?", (uid,)
+                            ).fetchone()
+                            if not r:
+                                for pattern in (
+                                    f"peer-{peer_id[:8]}",
+                                    f"peer-{peer_id[:8]}-%",
+                                    f"peer-%-{uid[-8:] if len(uid) >= 8 else ''}",
+                                ):
+                                    r = conn.execute(
+                                        "SELECT id, display_name FROM users WHERE username LIKE ? AND origin_peer = ?",
+                                        (pattern, peer_id),
+                                    ).fetchone()
+                                    if r:
+                                        break
+                            if not r:
+                                return True
+                            current = str(r['display_name'] or '').strip()
+                            return not current or current.startswith('peer-') or current == uid
+                    except Exception:
+                        return True
 
                 incoming_hash = profile_data.get('profile_hash')
                 if incoming_hash:
@@ -4606,33 +5652,35 @@ def create_app(config: Optional[Config] = None) -> Flask:
                                 profile_data.get('user_id', ''), remote_peer_id
                             )
                         )
-                        if not need_avatar:
-                            logger.debug(
-                                f"Profile from {from_peer} unchanged (hash={incoming_hash[:8]}), "
-                                f"skipping")
-                            return
-                        logger.info(
-                            "Profile hash unchanged but our avatar file is missing; "
-                            "re-applying to recover avatar from peer"
+                        need_display_name = (
+                            profile_data.get('display_name')
+                            and _display_name_stale_for_user(
+                                profile_data.get('user_id', ''), remote_peer_id
+                            )
                         )
+                        if not need_avatar and not need_display_name:
+                            logger.debug(
+                                "profile_sync_hash_dedup_skipped peer=%s user_id=%s hash=%s",
+                                from_peer,
+                                profile_data.get('user_id', ''),
+                                incoming_hash[:8],
+                            )
+                            return
+                        if need_avatar:
+                            logger.info(
+                                "profile_sync_reapply_missing_avatar peer=%s user_id=%s hash=%s",
+                                from_peer,
+                                profile_data.get('user_id', ''),
+                                incoming_hash[:8],
+                            )
+                        if need_display_name:
+                            logger.info(
+                                "profile_sync_reapply_stale_display_name peer=%s user_id=%s hash=%s",
+                                from_peer,
+                                profile_data.get('user_id', ''),
+                                incoming_hash[:8],
+                            )
                     _seen_profile_hashes[hash_key] = incoming_hash
-
-                # ---- Store device profile FIRST (independent of user) ----
-                # Device profiles are keyed by peer_id in a separate table,
-                # so they don't require a shadow user to exist.  This must
-                # happen before the early-return below, otherwise profiles
-                # arriving via relay (before any messages) would be lost.
-                device_info = profile_data.get('device')
-                if device_info and remote_peer_id:
-                    channel_manager.store_peer_device_profile(
-                        peer_id=remote_peer_id,
-                        display_name=device_info.get('display_name'),
-                        description=device_info.get('description'),
-                        avatar_b64=device_info.get('avatar_b64'),
-                        avatar_mime=device_info.get('avatar_mime'),
-                    )
-                    logger.debug(f"Stored device profile for {remote_peer_id} "
-                                 f"(device_name={device_info.get('display_name')})")
 
                 # ---- Re-broadcast to other peers (relay) ----
                 # Do this before the shadow-user check so profiles propagate
@@ -4654,6 +5702,8 @@ def create_app(config: Optional[Config] = None) -> Flask:
                                 continue  # don't echo back to sender
                             if pid == (p2p_manager.get_peer_id() or ''):
                                 continue  # skip ourselves
+                            if not _peer_is_trusted_for_content(pid):
+                                continue
                             if p2p_manager.message_router and p2p_manager._event_loop:
                                 asyncio.run_coroutine_threadsafe(
                                     p2p_manager.message_router.send_profile_sync(
@@ -4696,8 +5746,9 @@ def create_app(config: Optional[Config] = None) -> Flask:
                             f"peer-%-{remote_user_id[-8:]}",
                         ]:
                             row = conn.execute(
-                                "SELECT id FROM users WHERE username LIKE ?",
-                                (pattern,)
+                                "SELECT id FROM users WHERE username LIKE ?"
+                                " AND origin_peer = ?",
+                                (pattern, remote_peer_id),
                             ).fetchone()
                             if row:
                                 break
@@ -4711,6 +5762,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                             remote_user_id,
                             profile_data.get('display_name'),
                             remote_peer_id,
+                            account_type=profile_data.get('account_type'),
                             allow_origin_reassign=False,
                         )
                         if db_manager.get_user(remote_user_id):
@@ -4733,8 +5785,15 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     remote_peer_id,
                     allow_remote_reassign=False,
                 )
-                logger.debug(f"Profile sync from {from_peer}: updated {target_user_id} "
-                             f"(display_name={profile_data.get('display_name')})")
+                count = _peer_profile_apply_counts.get(remote_peer_id, 0) + 1
+                _peer_profile_apply_counts[remote_peer_id] = count
+                logger.info(
+                    "peer_profile_sync_applied peer=%s user_id=%s count=%s display_name=%s",
+                    remote_peer_id,
+                    target_user_id,
+                    count,
+                    str(profile_data.get('display_name') or '').strip() or target_user_id,
+                )
 
             except Exception as e:
                 logger.error(f"Failed to handle profile sync: {e}", exc_info=True)
@@ -4752,14 +5811,20 @@ def create_app(config: Optional[Config] = None) -> Flask:
                         "SELECT origin_peer FROM users WHERE id = ?", (user_id,)
                     ).fetchone()
                     if row:
-                        origin_peer = row[0] if isinstance(row, (tuple, list)) else row.get('origin_peer', row[0])
+                        if hasattr(row, 'keys') and 'origin_peer' in row.keys():
+                            origin_peer = row['origin_peer']
+                        else:
+                            origin_peer = row[0]
                     if not origin_peer:
                         msg_row = conn.execute(
                             "SELECT origin_peer FROM channel_messages WHERE user_id = ? AND origin_peer IS NOT NULL AND origin_peer != '' LIMIT 1",
                             (user_id,)
                         ).fetchone()
                         if msg_row:
-                            origin_peer = msg_row[0] if isinstance(msg_row, (tuple, list)) else msg_row.get('origin_peer', msg_row[0])
+                            if hasattr(msg_row, 'keys') and 'origin_peer' in msg_row.keys():
+                                origin_peer = msg_row['origin_peer']
+                            else:
+                                origin_peer = msg_row[0]
             except Exception as e:
                 logger.warning(f"resync_user_avatar: DB lookup failed for {user_id}: {e}")
 
@@ -4790,6 +5855,151 @@ def create_app(config: Optional[Config] = None) -> Flask:
             return {"ok": True, "origin_peer": origin_peer, "hashes_cleared": cleared, "sync_triggered": synced}
 
         setattr(p2p_manager, 'resync_user_avatar', _resync_user_avatar)  # dynamic; route checks hasattr()
+
+        def _clear_peer_profile_cache(peer_id: str) -> dict:
+            """Clear per-peer profile dedup and relay cooldown state."""
+            clean_peer_id = str(peer_id or "").strip()
+            if not clean_peer_id:
+                return {'cleared_hashes': 0, 'cleared_relays': 0}
+
+            hash_keys = [key for key in _seen_profile_hashes if key[0] == clean_peer_id]
+            relay_keys = [key for key in _relayed_profiles if key[0] == clean_peer_id]
+
+            for key in hash_keys:
+                del _seen_profile_hashes[key]
+            for key in relay_keys:
+                del _relayed_profiles[key]
+
+            if hash_keys or relay_keys:
+                logger.info(
+                    "clear_peer_profile_cache: peer=%s hashes_cleared=%d relays_cleared=%d",
+                    clean_peer_id,
+                    len(hash_keys),
+                    len(relay_keys),
+                )
+
+            return {'cleared_hashes': len(hash_keys), 'cleared_relays': len(relay_keys)}
+
+        setattr(p2p_manager, 'clear_peer_profile_cache', _clear_peer_profile_cache)
+
+        def _recover_peer_profile_state(peer_id: str = "", *, trigger_sync: bool = False) -> dict:
+            """Backfill missing remote user avatars from trusted peer device profiles."""
+            seen_peers: set[str] = set()
+            peer_ids: list[str] = []
+            if peer_id:
+                peer_ids = [str(peer_id or "").strip()]
+            elif trust_manager:
+                try:
+                    peer_ids = [
+                        str(pid or "").strip()
+                        for pid in (trust_manager.get_trusted_peers() or [])
+                        if str(pid or "").strip()
+                    ]
+                except Exception as e:
+                    logger.warning(f"recover_peer_profile_state: failed to load trusted peers: {e}")
+                    peer_ids = []
+
+            recovered_user_ids: list[str] = []
+            sync_triggered_for: list[str] = []
+            skipped_untrusted: list[str] = []
+            peers_with_device_avatar: list[str] = []
+
+            for raw_peer_id in peer_ids:
+                clean_peer_id = str(raw_peer_id or "").strip()
+                if not clean_peer_id or clean_peer_id in seen_peers:
+                    continue
+                seen_peers.add(clean_peer_id)
+
+                if trust_manager and not trust_manager.is_peer_trusted(clean_peer_id):
+                    skipped_untrusted.append(clean_peer_id)
+                    continue
+
+                device_profile = None
+                try:
+                    if channel_manager and hasattr(channel_manager, 'get_peer_device_profile'):
+                        device_profile = channel_manager.get_peer_device_profile(clean_peer_id)
+                    elif channel_manager and hasattr(channel_manager, 'get_peer_device_profiles'):
+                        device_profile = (channel_manager.get_peer_device_profiles([clean_peer_id]) or {}).get(clean_peer_id)
+                except Exception as e:
+                    logger.warning(
+                        "recover_peer_profile_state: failed to load device profile for %s: %s",
+                        clean_peer_id,
+                        e,
+                    )
+                    device_profile = None
+
+                avatar_b64 = str((device_profile or {}).get('avatar_b64') or '').strip()
+                avatar_mime = str((device_profile or {}).get('avatar_mime') or '').strip() or 'image/jpeg'
+                if avatar_b64:
+                    peers_with_device_avatar.append(clean_peer_id)
+                    try:
+                        with db_manager.get_connection() as conn:
+                            rows = conn.execute(
+                                """
+                                SELECT id
+                                FROM users
+                                WHERE origin_peer = ?
+                                  AND id NOT IN ('system', 'local_user')
+                                  AND COALESCE(avatar_file_id, '') = ''
+                                ORDER BY id ASC
+                                """,
+                                (clean_peer_id,),
+                            ).fetchall()
+                    except Exception as e:
+                        logger.warning(
+                            "recover_peer_profile_state: failed to scan remote users for %s: %s",
+                            clean_peer_id,
+                            e,
+                        )
+                        rows = []
+
+                    for row in rows or []:
+                        try:
+                            remote_user_id = str(row['id']).strip()
+                        except Exception:
+                            remote_user_id = str(row[0] or '').strip()
+                        if not remote_user_id:
+                            continue
+                        try:
+                            changed = profile_manager.update_from_remote(
+                                remote_user_id,
+                                {
+                                    'avatar_thumbnail': avatar_b64,
+                                    'avatar_content_type': avatar_mime,
+                                },
+                            ) if profile_manager else False
+                            if changed:
+                                recovered_user_ids.append(remote_user_id)
+                        except Exception as e:
+                            logger.warning(
+                                "recover_peer_profile_state: failed avatar backfill for %s from %s: %s",
+                                remote_user_id,
+                                clean_peer_id,
+                                e,
+                            )
+
+                if trigger_sync and p2p_manager and hasattr(p2p_manager, 'trigger_peer_sync'):
+                    try:
+                        if p2p_manager.trigger_peer_sync(clean_peer_id):
+                            sync_triggered_for.append(clean_peer_id)
+                    except Exception as e:
+                        logger.warning(
+                            "recover_peer_profile_state: failed to trigger sync for %s: %s",
+                            clean_peer_id,
+                            e,
+                        )
+
+            return {
+                "ok": True,
+                "peer_ids": list(seen_peers),
+                "peers_with_device_avatar": peers_with_device_avatar,
+                "recovered_user_ids": recovered_user_ids,
+                "recovered_user_count": len(recovered_user_ids),
+                "sync_triggered_for": sync_triggered_for,
+                "skipped_untrusted": skipped_untrusted,
+            }
+
+        setattr(p2p_manager, 'recover_peer_profile_state', _recover_peer_profile_state)  # dynamic; route checks hasattr()
 
         # --- Provide local profile card for sync ---
         def _get_local_profile_sync_user_ids():
@@ -4940,9 +6150,12 @@ def create_app(config: Optional[Config] = None) -> Flask:
         def _on_p2p_feed_post(post_id, author_id, content, post_type,
                                visibility, timestamp, metadata,
                                expires_at, ttl_seconds, ttl_mode,
-                               display_name, from_peer):
+                               display_name, account_type, from_peer):
             """Store an incoming P2P feed post locally. Updates content/metadata when post already exists (edit broadcast)."""
             try:
+                if not _peer_is_trusted_for_content(from_peer):
+                    logger.info("Ignoring feed post %s from untrusted peer %s", post_id, from_peer)
+                    return
                 # --- Input validation ---
 
                 # Reject posts with private/custom visibility over P2P
@@ -4985,6 +6198,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     author_id,
                     display_name,
                     feed_origin_peer,
+                    account_type=account_type,
                     allow_origin_reassign=True,
                 )
 
@@ -5757,12 +6971,21 @@ def create_app(config: Optional[Config] = None) -> Flask:
                                  display_name, metadata, from_peer):
             """Apply an incoming P2P interaction locally (idempotent)."""
             try:
+                if not _peer_is_trusted_for_content(from_peer):
+                    logger.info(
+                        "Ignoring interaction %s/%s from untrusted peer %s",
+                        item_type,
+                        action,
+                        from_peer,
+                    )
+                    return
                 # Ensure shadow user exists
                 interaction_origin_peer = str((metadata or {}).get('origin_peer') or from_peer or '').strip() or str(from_peer or '').strip()
                 _ensure_shadow_user(
                     user_id,
                     display_name,
                     interaction_origin_peer,
+                    account_type=(metadata or {}).get('account_type'),
                     allow_origin_reassign=True,
                 )
                 meta = metadata or {}
@@ -5948,7 +7171,9 @@ def create_app(config: Optional[Config] = None) -> Flask:
         # --- Direct message handler (P2P) ---
         def _on_p2p_direct_message(sender_id, recipient_id, content,
                                     message_id, timestamp, display_name,
-                                    metadata, update_only, edited_at, from_peer):
+                                    account_type=None,
+                                    metadata=None, update_only=None, edited_at=None,
+                                    from_peer=None):
             """Handle an incoming direct message from P2P.
 
             Only store the message if the recipient is a local user on
@@ -5956,6 +7181,9 @@ def create_app(config: Optional[Config] = None) -> Flask:
             to all peers, but only the recipient's node should store it).
             """
             try:
+                if not _peer_is_trusted_for_content(from_peer):
+                    logger.info("Ignoring direct message %s from untrusted peer %s", message_id, from_peer)
+                    return
                 if not recipient_id:
                     return
 
@@ -6031,6 +7259,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
                     sender_id,
                     display_name,
                     str(from_peer or '').strip(),
+                    account_type=account_type,
                     allow_origin_reassign=True,
                 )
 
@@ -6484,6 +7713,7 @@ def create_app(config: Optional[Config] = None) -> Flask:
 
         # Wire trust score lookup so P2P relay can gate by trust
         p2p_manager.get_trust_score = trust_manager.get_trust_score
+        p2p_manager.has_explicit_trust_score = trust_manager.has_explicit_trust_score
 
         # Start P2P network (skip if CANOPY_DISABLE_MESH=true, e.g. for isolated testnet)
         import os as _os
@@ -6493,6 +7723,15 @@ def create_app(config: Optional[Config] = None) -> Flask:
             logger.info("Starting P2P network...")
             p2p_manager.start()
             logger.info("P2P network started successfully")
+            try:
+                recovery_result = p2p_manager.recover_peer_profile_state(trigger_sync=False)
+                if recovery_result.get('recovered_user_count'):
+                    logger.info(
+                        "Recovered %s remote user avatar(s) from trusted peer device profiles",
+                        recovery_result.get('recovered_user_count'),
+                    )
+            except Exception as e:
+                logger.warning(f"Startup peer profile recovery failed: {e}")
 
             # Override the activity event recorder to suppress notifications
             # for private/confidential channels where no local user is a
@@ -6726,6 +7965,9 @@ def create_app(config: Optional[Config] = None) -> Flask:
     # Register error handlers
     register_error_handlers(app)
 
+    # Attach security response headers to every reply
+    _install_security_headers(app)
+
     # Install rate limiting
     _install_rate_limiting(app)
     
@@ -6812,6 +8054,28 @@ def _is_stream_playback_path(path: str) -> bool:
         or '/segments/' in normalized
         or normalized.endswith('/events')
     )
+
+
+def _install_security_headers(app: Flask) -> None:
+    """Attach security-hardening headers to every HTTP response.
+
+    These headers are cheap, stateless defences that all browsers respect:
+
+    * ``X-Content-Type-Options: nosniff`` — prevents MIME-type sniffing that
+      could allow a browser to execute a response as a different content type
+      (e.g. running a JSON upload as a script).
+
+    * ``X-Frame-Options: SAMEORIGIN`` — stops the UI being embedded inside a
+      cross-origin <iframe>, which is the classic clickjacking vector.
+
+    Uses ``setdefault`` so individual routes can override if needed.
+    """
+
+    @app.after_request
+    def _add_security_headers(response):
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+        return response
 
 
 def _install_rate_limiting(app: Flask) -> None:

@@ -12,6 +12,7 @@ import logging
 import os
 import json
 import hashlib
+import hmac
 import secrets
 import base64
 import time
@@ -132,6 +133,180 @@ def _normalize_origin_peer_value(origin_peer: Any, local_peer_id: Optional[str] 
 
 def _is_remote_origin_peer(origin_peer: Any, local_peer_id: Optional[str] = None) -> bool:
     return _normalize_origin_peer_value(origin_peer, local_peer_id) is not None
+
+
+def _is_placeholder_shadow_username(username: Any, user_id: Any) -> bool:
+    """Identify temporary shadow-user names that should lose to canonical names."""
+    uname = str(username or '').strip().lower()
+    uid = str(user_id or '').strip().lower()
+    if not uname or not uid:
+        return False
+    if uname.startswith('peer-'):
+        return True
+    if re.search(r"-[0-9a-f]{6}$", uname):
+        return True
+    uid_suffix = uid[-6:]
+    return bool(uid_suffix) and uname.endswith(f"-{uid_suffix}")
+
+
+def _sort_timestamp_value(value: Any) -> float:
+    raw = str(value or '').strip()
+    if not raw:
+        return 0.0
+    normalized = raw.replace('Z', '+00:00')
+    try:
+        return datetime.fromisoformat(normalized).timestamp()
+    except Exception:
+        pass
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f'):
+        try:
+            return datetime.strptime(raw, fmt).timestamp()
+        except Exception:
+            continue
+    return 0.0
+
+
+def _recipient_directory_candidate_sort_key(user: dict[str, Any]) -> tuple[Any, ...]:
+    origin_peer = str(user.get('origin_peer') or '').strip()
+    username = str(user.get('username') or user.get('user_id') or '').strip()
+    user_id = str(user.get('user_id') or '').strip()
+    peer_token = origin_peer[:6].lower()
+    profile_updated_at = _sort_timestamp_value(user.get('profile_updated_at'))
+    created_at = _sort_timestamp_value(user.get('created_at'))
+    return (
+        0 if profile_updated_at else 1,
+        -profile_updated_at,
+        0 if created_at else 1,
+        -created_at,
+        1 if _is_placeholder_shadow_username(username, user_id) else 0,
+        0 if (peer_token and f".{peer_token}" in username.lower()) else 1,
+        0 if user.get('avatar_url') else 1,
+        username.lower(),
+        user_id,
+    )
+
+
+def _dedupe_recipient_directory_users(users: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse duplicate remote shadow rows while preserving real multi-user peers."""
+    filtered: list[dict[str, Any]] = []
+    seen_user_ids: set[str] = set()
+    remote_identity_index: dict[tuple[str, str], int] = {}
+
+    for raw_user in users:
+        user = dict(raw_user or {})
+        uid = str(user.get('user_id') or '').strip()
+        if not uid or uid in ('system', 'local_user') or uid in seen_user_ids:
+            continue
+        seen_user_ids.add(uid)
+        user['user_id'] = uid
+
+        origin_peer = str(user.get('origin_peer') or '').strip()
+        display_name = str(user.get('display_name') or user.get('username') or uid).strip()
+        if origin_peer and display_name:
+            identity_key = (origin_peer.lower(), display_name.lower())
+            existing_index = remote_identity_index.get(identity_key)
+            if existing_index is None:
+                remote_identity_index[identity_key] = len(filtered)
+                filtered.append(user)
+                continue
+            if _recipient_directory_candidate_sort_key(user) < _recipient_directory_candidate_sort_key(filtered[existing_index]):
+                filtered[existing_index] = user
+            continue
+
+        filtered.append(user)
+
+    return filtered
+
+
+def _resolve_canonical_remote_user_id(db_manager: Any, user_id: Any) -> str:
+    """Pick the freshest local row when a remote identity has stale duplicates."""
+    target_user_id = str(user_id or '').strip()
+    if not target_user_id or not db_manager:
+        return target_user_id
+    try:
+        with db_manager.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, username, display_name, origin_peer, avatar_file_id, profile_updated_at, created_at
+                FROM users
+                WHERE id = ?
+                """,
+                (target_user_id,),
+            ).fetchone()
+            if not row:
+                return target_user_id
+            origin_peer = str(row['origin_peer'] or '').strip() if 'origin_peer' in row.keys() else ''
+            if not origin_peer:
+                return target_user_id
+            display_name = str(
+                (row['display_name'] if 'display_name' in row.keys() else None)
+                or (row['username'] if 'username' in row.keys() else None)
+                or target_user_id
+            ).strip()
+            if not display_name:
+                return target_user_id
+            candidates = conn.execute(
+                """
+                SELECT id, username, display_name, origin_peer, avatar_file_id, profile_updated_at, created_at
+                FROM users
+                WHERE origin_peer = ?
+                  AND lower(COALESCE(display_name, username, id)) = lower(?)
+                """,
+                (origin_peer, display_name),
+            ).fetchall()
+    except Exception:
+        return target_user_id
+    if not candidates:
+        return target_user_id
+    best = min((dict(candidate) for candidate in candidates), key=_recipient_directory_candidate_sort_key)
+    return str(best.get('id') or target_user_id).strip() or target_user_id
+
+
+def _find_remote_identity_duplicate_user_ids(db_manager: Any, user_id: Any) -> list[str]:
+    target_user_id = str(user_id or '').strip()
+    canonical_user_id = _resolve_canonical_remote_user_id(db_manager, target_user_id)
+    if not canonical_user_id or not db_manager:
+        return []
+    try:
+        with db_manager.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT username, display_name, origin_peer
+                FROM users
+                WHERE id = ?
+                """,
+                (canonical_user_id,),
+            ).fetchone()
+            if not row:
+                return []
+            origin_peer = str(row['origin_peer'] or '').strip() if 'origin_peer' in row.keys() else ''
+            if not origin_peer:
+                return []
+            display_name = str(
+                (row['display_name'] if 'display_name' in row.keys() else None)
+                or (row['username'] if 'username' in row.keys() else None)
+                or canonical_user_id
+            ).strip()
+            if not display_name:
+                return []
+            rows = conn.execute(
+                """
+                SELECT id
+                FROM users
+                WHERE origin_peer = ?
+                  AND lower(COALESCE(display_name, username, id)) = lower(?)
+                  AND id != ?
+                """,
+                (origin_peer, display_name, canonical_user_id),
+            ).fetchall()
+    except Exception:
+        return []
+    duplicates: list[str] = []
+    for row in rows or []:
+        dup_id = str((row['id'] if 'id' in row.keys() else row[0]) or '').strip()
+        if dup_id and dup_id not in duplicates:
+            duplicates.append(dup_id)
+    return duplicates
 
 
 def _resolve_p2p_stream(stream_id: str, db_manager: Any, p2p_manager: Any) -> Optional[dict[str, Any]]:
@@ -576,6 +751,7 @@ def create_ui_blueprint() -> Blueprint:
     def register():
         """User registration page and handler."""
         db_manager = current_app.config.get('DB_MANAGER')
+        _, _, _, _, channel_manager, _, _, _, _, _, _ = _get_app_components_any(current_app)
         if not db_manager:
             return render_template('error.html', error='Database not initialized')
         
@@ -640,6 +816,12 @@ def create_ui_blueprint() -> Blueprint:
             x25519_pub=keypair['x25519_public'],
             x25519_priv=keypair['x25519_private']
         )
+        _ensure_user_default_channels(
+            db_manager,
+            channel_manager,
+            user_id,
+            include_quarantine_admin=False,
+        )
         
         # Add user to the general channel and all other public channels
         try:
@@ -687,6 +869,7 @@ def create_ui_blueprint() -> Blueprint:
     def setup():
         """First-run wizard: create admin/first user and optionally connect a peer."""
         db_manager = current_app.config.get('DB_MANAGER')
+        _, _, _, _, channel_manager, _, _, _, _, _, _ = _get_app_components_any(current_app)
         if not db_manager:
             return render_template('error.html', error='Database not initialized')
         has_users = db_manager.has_any_registered_users()
@@ -737,12 +920,22 @@ def create_ui_blueprint() -> Blueprint:
             ed25519_pub=keypair['ed25519_public'], ed25519_priv=keypair['ed25519_private'],
             x25519_pub=keypair['x25519_public'], x25519_priv=keypair['x25519_private']
         )
+        _ensure_user_default_channels(
+            db_manager,
+            channel_manager,
+            user_id,
+            include_quarantine_admin=True,
+        )
         try:
             with db_manager.get_connection() as conn:
                 conn.execute("""
                     INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
                     VALUES ('general', ?, 'member')
                 """, (user_id,))
+                conn.execute("""
+                    INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
+                    VALUES (?, ?, 'admin')
+                """, (channel_manager.get_agent_quarantine_channel_id(), user_id))
                 try:
                     public_channels = conn.execute(
                         "SELECT id FROM channels "
@@ -2133,6 +2326,44 @@ def create_ui_blueprint() -> Blueprint:
             'rev': _stable_ui_revision(payload),
         }
 
+    def _ensure_user_default_channels(
+        db_manager: Any,
+        channel_manager: Any,
+        user_id: str,
+        *,
+        include_quarantine_admin: bool = False,
+    ) -> bool:
+        if not db_manager or not channel_manager or not user_id:
+            return False
+        try:
+            ensure_defaults = getattr(channel_manager, 'ensure_default_channels_exist', None)
+            if callable(ensure_defaults):
+                ensure_defaults()
+        except Exception as exc:
+            logger.warning(f"Failed to re-ensure default channels for {user_id}: {exc}")
+        try:
+            with db_manager.get_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
+                    VALUES (?, ?, 'member')
+                    """,
+                    ('general', user_id),
+                )
+                if include_quarantine_admin:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
+                        VALUES (?, ?, 'admin')
+                        """,
+                        (channel_manager.get_agent_quarantine_channel_id(), user_id),
+                    )
+                conn.commit()
+            return True
+        except Exception as exc:
+            logger.warning(f"Failed to repair default channel memberships for {user_id}: {exc}")
+            return False
+
     def _build_sidebar_attention_summary(
         db_manager: Any,
         channel_manager: Any,
@@ -2499,15 +2730,22 @@ def create_ui_blueprint() -> Blueprint:
                 new_priority = int(built.get('priority') or 0)
                 existing_created = str(existing.get('created_at') or '')
                 new_created = str(built.get('created_at') or '')
-                if new_priority > existing_priority or (
-                    new_priority == existing_priority and new_created >= existing_created
+                existing_seq = int(existing.get('seq') or 0)
+                new_seq = int(built.get('seq') or 0)
+                if new_created > existing_created or (
+                    new_created == existing_created and (
+                        new_seq > existing_seq or (
+                            new_seq == existing_seq and new_priority >= existing_priority
+                        )
+                    )
                 ):
                     merged[semantic_key] = built
             activity_items = sorted(
                 merged.values(),
                 key=lambda entry: (
-                    int(entry.get('priority') or 0),
                     str(entry.get('created_at') or ''),
+                    int(entry.get('seq') or 0),
+                    int(entry.get('priority') or 0),
                 ),
                 reverse=True,
             )[: max(1, int(item_limit or 12))]
@@ -2960,7 +3198,10 @@ def create_ui_blueprint() -> Blueprint:
         if channel_manager and user_id:
             try:
                 policy = channel_manager.get_user_channel_governance(user_id)
-                channels = channel_manager.list_channels_for_governance(user_id=user_id)
+                channels = _filter_admin_governance_channels(
+                    channel_manager.list_channels_for_governance(user_id=user_id),
+                    local_peer_id=(p2p_manager.get_peer_id() if p2p_manager else None),
+                )
                 if not isinstance(policy, dict):
                     policy = {}
                 if not isinstance(channels, list):
@@ -2980,6 +3221,34 @@ def create_ui_blueprint() -> Blueprint:
                 logger.warning(f"Admin workspace governance snapshot failed for {user_id}: {gov_err}")
 
         return workspace
+
+    def _filter_admin_governance_channels(
+        channels: Any,
+        *,
+        local_peer_id: Optional[str],
+    ) -> list[dict[str, Any]]:
+        """Hide unrelated remote private channels from admin governance tooling."""
+        filtered: list[dict[str, Any]] = []
+        local_peer = str(local_peer_id or '').strip()
+        for raw in channels or []:
+            if not isinstance(raw, dict):
+                continue
+            row = dict(raw)
+            origin_peer = str(row.get('origin_peer') or '').strip()
+            privacy_mode = str(row.get('privacy_mode') or 'open').strip().lower() or 'open'
+            channel_type = str(row.get('channel_type') or 'public').strip().lower() or 'public'
+            is_public_open = bool(
+                row.get('is_public_open')
+                or (privacy_mode == 'open' and channel_type in {'public', 'general'})
+            )
+            is_local_origin = not origin_peer or (bool(local_peer) and origin_peer == local_peer)
+            is_member = bool(row.get('is_member'))
+            if not is_public_open and not is_local_origin and not is_member:
+                continue
+            row['origin_peer'] = origin_peer or None
+            row['is_public_open'] = is_public_open
+            filtered.append(row)
+        return filtered
 
     def _serialize_community_notes(notes: Any, viewer_user_id: str) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -3495,6 +3764,63 @@ def create_ui_blueprint() -> Blueprint:
             meta = getattr(message, 'metadata', None)
             return meta if isinstance(meta, dict) else {}
 
+        def _build_recipient_directory_seed(limit: int = 200) -> list[dict[str, Any]]:
+            if not db_manager:
+                return []
+            try:
+                with db_manager.get_connection() as conn:
+                    table_cols = set()
+                    try:
+                        for col_row in conn.execute("PRAGMA table_info(users)").fetchall():
+                            name = col_row['name'] if isinstance(col_row, sqlite3.Row) else col_row[1]
+                            table_cols.add(str(name))
+                    except Exception:
+                        table_cols = {'id', 'username', 'display_name'}
+
+                    if 'display_name' in table_cols and 'username' in table_cols:
+                        sort_expr = "lower(COALESCE(display_name, username, id))"
+                    elif 'display_name' in table_cols:
+                        sort_expr = "lower(COALESCE(display_name, id))"
+                    elif 'username' in table_cols:
+                        sort_expr = "lower(COALESCE(username, id))"
+                    else:
+                        sort_expr = "lower(COALESCE(id, ''))"
+
+                    rows = conn.execute(
+                        f"""
+                        SELECT id
+                        FROM users
+                        WHERE id NOT IN ('system', 'local_user')
+                          AND id != ?
+                        ORDER BY {sort_expr} ASC
+                        LIMIT ?
+                        """,
+                        (user_id, max(1, int(limit))),
+                    ).fetchall()
+            except Exception:
+                return []
+
+            seed: list[dict[str, Any]] = []
+            seen_user_ids: set[str] = set()
+            for row in rows or []:
+                try:
+                    candidate_user_id = str(row['id'] or '').strip()
+                except Exception:
+                    candidate_user_id = str(row[0] or '').strip()
+                if not candidate_user_id or candidate_user_id in seen_user_ids:
+                    continue
+                display = _user_display(candidate_user_id) or {}
+                seed.append({
+                    'user_id': candidate_user_id,
+                    'display_name': display.get('display_name') or candidate_user_id,
+                    'username': display.get('username') or candidate_user_id,
+                    'avatar_url': display.get('avatar_url') or None,
+                    'origin_peer': display.get('origin_peer') or None,
+                    'unknown': False,
+                })
+                seen_user_ids.add(candidate_user_id)
+            return _dedupe_recipient_directory_users(seed)
+
         def _normalize_members(raw_members: Any, fallback_members: Optional[list[str]] = None) -> list[str]:
             members: list[str] = []
             if isinstance(raw_members, list):
@@ -3923,6 +4249,7 @@ def create_ui_blueprint() -> Blueprint:
 
         direct_conversations = [entry for entry in conversation_entries if entry.get('kind') == 'direct']
         group_conversations = [entry for entry in conversation_entries if entry.get('kind') == 'group']
+        recipient_directory_seed = _build_recipient_directory_seed(limit=200)
 
         composer_recipients: list[dict[str, Any]] = []
         if active_thread:
@@ -3949,6 +4276,32 @@ def create_ui_blueprint() -> Blueprint:
 
         latest_message_id = message_rows[-1]['id'] if message_rows else None
         latest_message_created_at = message_rows[-1]['created_at'] if message_rows else None
+        thread_state_fingerprint = hashlib.sha256(
+            '\n'.join(
+                '|'.join(
+                    [
+                        str(row.get('id') or ''),
+                        str(row.get('created_at') or ''),
+                        str(row.get('edited_at') or ''),
+                        str((row.get('security') or {}).get('state') if isinstance(row.get('security'), dict) else ''),
+                        ','.join(
+                            ':'.join(
+                                [
+                                    str(att.get('id') or att.get('origin_file_id') or ''),
+                                    str(att.get('url') or ''),
+                                    str(att.get('download_status') or ''),
+                                ]
+                            )
+                            for att in (row.get('attachments') or [])
+                            if isinstance(att, dict)
+                        ),
+                        str(bool(row.get('source_layout'))),
+                        str(len(str(row.get('content') or ''))),
+                    ]
+                )
+                for row in message_rows
+            ).encode('utf-8')
+        ).hexdigest()[:20] if message_rows else ''
         sidebar_state_token = '|'.join(
             f"{entry.get('key')}:{entry.get('updated_at')}:{entry.get('unread_count')}"
             for entry in conversation_entries[:80]
@@ -3958,6 +4311,7 @@ def create_ui_blueprint() -> Blueprint:
             str(len(message_rows)),
             str(latest_message_id or ''),
             str(latest_message_created_at or ''),
+            str(thread_state_fingerprint or ''),
         ])
 
         return {
@@ -3970,6 +4324,7 @@ def create_ui_blueprint() -> Blueprint:
             'conversation_entries': conversation_entries,
             'search_results': search_results,
             'composer_recipients': composer_recipients,
+            'recipient_directory_seed': recipient_directory_seed,
             'conversation_with': conversation_with,
             'conversation_group': conversation_group,
             'latest_message_id': latest_message_id,
@@ -4047,9 +4402,6 @@ def create_ui_blueprint() -> Blueprint:
             # Get user's API keys
             keys = api_key_manager.list_keys(user_id)
             
-            # Get usage statistics
-            key_stats = api_key_manager.get_key_usage_stats(user_id)
-            
             # Get available permissions
             all_permissions = api_key_manager.get_all_permissions()
             default_permissions = api_key_manager.get_default_permissions()
@@ -4060,7 +4412,6 @@ def create_ui_blueprint() -> Blueprint:
             
             return render_template('api_keys.html',
                                  keys=keys,
-                                 key_stats=key_stats,
                                  all_permissions=all_permissions,
                                  default_permissions=default_permissions,
                                  user_id=user_id,
@@ -4085,6 +4436,15 @@ def create_ui_blueprint() -> Blueprint:
             # Connected and introduced peers
             connected_peers = p2p_manager.get_connected_peers() if p2p_manager else []
             introduced_peers = p2p_manager.get_introduced_peers() if p2p_manager else []
+            connected_set = set(connected_peers or [])
+            introduced_map = {
+                str(peer.get('peer_id') or '').strip(): peer
+                for peer in (introduced_peers or [])
+                if isinstance(peer, dict) and str(peer.get('peer_id') or '').strip()
+            }
+            identity_manager = getattr(p2p_manager, 'identity_manager', None) if p2p_manager else None
+            known_peers = getattr(identity_manager, 'known_peers', {}) or {}
+            peer_display_names = getattr(identity_manager, 'peer_display_names', {}) or {}
 
             # Device profiles for peer identification
             peer_device_profiles = channel_manager.get_all_peer_device_profiles() if channel_manager else {}
@@ -4097,6 +4457,168 @@ def create_ui_blueprint() -> Blueprint:
             
             # Get trusted peers
             trusted_peers = trust_manager.get_trusted_peers() if trust_manager else []
+
+            def _profile_value(profile: Any, key: str, default: Any = '') -> Any:
+                if isinstance(profile, dict):
+                    return profile.get(key, default)
+                return getattr(profile, key, default)
+
+            def _infer_role(profile: Any, public_identity: Any, display_name: str) -> tuple[str, str]:
+                description = str(_profile_value(profile, 'description', '') or '').strip()
+                node_name = ''
+                if isinstance(public_identity, dict):
+                    node_name = str(public_identity.get('node_name') or '').strip()
+                haystack = ' '.join(part for part in (description, display_name, node_name) if part).lower()
+                if any(token in haystack for token in (' agent', 'agent ', 'bot', 'automation', 'cursor', 'claude', 'gpt', 'ai ')):
+                    return 'Agent', 'agent'
+                if any(token in haystack for token in (' human', 'person', 'operator', 'owner')):
+                    return 'Human', 'human'
+                return 'Role unknown', 'unknown'
+
+            def _resolve_peer_card(peer_id: str, score_info: Optional[dict[str, Any]] = None, potential_entry: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                clean_peer_id = str(peer_id or '').strip()
+                profile = peer_device_profiles.get(clean_peer_id) if peer_device_profiles else None
+                public_identity: dict[str, Any] = {}
+                if potential_entry and isinstance(potential_entry.get('public_identity'), dict):
+                    public_identity = dict(potential_entry.get('public_identity') or {})
+                elif p2p_manager and hasattr(p2p_manager, 'get_peer_public_identity'):
+                    try:
+                        public_identity = dict(p2p_manager.get_peer_public_identity(clean_peer_id) or {})
+                    except Exception:
+                        public_identity = {}
+
+                profile_name = str(_profile_value(profile, 'display_name', '') or '').strip()
+                announced_name = str(public_identity.get('node_name') or '').strip()
+                announced_source = str(public_identity.get('source') or '').strip() or 'announced'
+                identity_name = str(peer_display_names.get(clean_peer_id) or '').strip()
+
+                display_name = ''
+                label_source = 'fallback'
+                if profile_name:
+                    display_name = profile_name
+                    label_source = 'profile'
+                elif announced_name and announced_name != clean_peer_id[:12]:
+                    display_name = announced_name
+                    label_source = announced_source
+                elif identity_name and identity_name != clean_peer_id[:12]:
+                    display_name = identity_name
+                    label_source = 'identity'
+                else:
+                    display_name = clean_peer_id[:12]
+
+                role_label, role_state = _infer_role(profile, public_identity, display_name)
+                endpoint_rows: list[dict[str, Any]] = []
+                if p2p_manager and hasattr(p2p_manager, 'get_peer_endpoint_diagnostics'):
+                    try:
+                        endpoint_rows = list(p2p_manager.get_peer_endpoint_diagnostics(clean_peer_id) or [])
+                    except Exception:
+                        endpoint_rows = []
+                if not endpoint_rows:
+                    for endpoint in list(getattr(identity_manager, 'peer_endpoints', {}).get(clean_peer_id, []) or []):
+                        endpoint_rows.append({
+                            'endpoint': endpoint,
+                            'sources': ['stored'],
+                            'currently_connected': False,
+                            'last_failure_reason': '',
+                        })
+
+                endpoint_count = len(endpoint_rows)
+                active_endpoint = next((row.get('endpoint') for row in endpoint_rows if row.get('currently_connected')), '')
+                introduced_by = ''
+                if potential_entry and isinstance(potential_entry, dict):
+                    introduced_by = str(potential_entry.get('introduced_by') or '').strip()
+                if not introduced_by:
+                    intro = introduced_map.get(clean_peer_id) or {}
+                    if isinstance(intro, dict):
+                        introduced_by = str(intro.get('introduced_by') or '').strip()
+
+                connection_state = 'stale'
+                connection_label = 'Stale record'
+                connection_note = 'No live socket or remembered endpoint metadata is available.'
+                if clean_peer_id in connected_set:
+                    connection_state = 'live'
+                    connection_label = 'Connected'
+                    connection_note = active_endpoint or 'Direct socket is active.'
+                elif endpoint_count:
+                    connection_state = 'known'
+                    connection_label = 'Known offline'
+                    connection_note = f'{endpoint_count} remembered endpoint{"s" if endpoint_count != 1 else ""}'
+                elif clean_peer_id in introduced_map:
+                    connection_state = 'introduced'
+                    connection_label = 'Introduced'
+                    connection_note = 'Seen through another trusted peer but not yet anchored locally.'
+
+                needs_profile = not profile_name
+                needs_label = label_source == 'fallback'
+                attention_flags: list[str] = []
+                if needs_profile:
+                    attention_flags.append('Needs profile')
+                if role_state == 'unknown':
+                    attention_flags.append('Role unknown')
+                if connection_state == 'stale':
+                    attention_flags.append('Stale')
+                if connection_state in ('stale', 'introduced') and endpoint_count == 0:
+                    attention_flags.append('No endpoints')
+
+                introduced_by_label = ''
+                if introduced_by:
+                    intro_profile = peer_device_profiles.get(introduced_by) if peer_device_profiles else None
+                    intro_name = str(_profile_value(intro_profile, 'display_name', '') or '').strip()
+                    introduced_by_label = intro_name or str(peer_display_names.get(introduced_by) or '') or introduced_by[:12]
+
+                score_value = None
+                if isinstance(score_info, dict):
+                    try:
+                        score_value = int(score_info.get('score', 0) or 0)
+                    except Exception:
+                        score_value = 0
+                is_trusted = bool(score_value is not None and score_value >= 50)
+
+                connection_sort = {'live': 0, 'known': 1, 'introduced': 2, 'stale': 3}.get(connection_state, 4)
+                return {
+                    'peer_id': clean_peer_id,
+                    'short_id': f'{clean_peer_id[:12]}...',
+                    'display_name': display_name,
+                    'description': str(_profile_value(profile, 'description', '') or '').strip(),
+                    'display_name_source': label_source,
+                    'display_name_source_label': {
+                        'profile': 'Profile label',
+                        'announced': 'Announced label',
+                        'identity': 'Known label',
+                        'fallback': 'Fallback label',
+                    }.get(label_source, 'Known label'),
+                    'avatar_b64': _profile_value(profile, 'avatar_b64', ''),
+                    'avatar_mime': _profile_value(profile, 'avatar_mime', 'image/png'),
+                    'public_avatar_color': str(public_identity.get('avatar_color') or '').strip(),
+                    'public_avatar_initials': str(public_identity.get('avatar_initials') or '').strip(),
+                    'connected': clean_peer_id in connected_set,
+                    'can_connect_now': clean_peer_id in introduced_map and endpoint_count > 0,
+                    'can_reconnect': bool(endpoint_count) and clean_peer_id not in connected_set,
+                    'can_sync_now': clean_peer_id in connected_set,
+                    'can_refresh_profile': bool(
+                        p2p_manager
+                        and hasattr(p2p_manager, 'recover_peer_profile_state')
+                        and hasattr(p2p_manager, 'clear_peer_profile_cache')
+                    ),
+                    'connection_state': connection_state,
+                    'connection_label': connection_label,
+                    'connection_note': connection_note,
+                    'connection_sort': connection_sort,
+                    'role_label': role_label,
+                    'role_state': role_state,
+                    'score': score_value,
+                    'is_trusted': is_trusted,
+                    'endpoint_count': endpoint_count,
+                    'active_endpoint': active_endpoint,
+                    'introduced_by': introduced_by,
+                    'introduced_by_label': introduced_by_label,
+                    'needs_profile': needs_profile,
+                    'needs_label': needs_label,
+                    'attention_flags': attention_flags,
+                    'has_profile': bool(profile_name),
+                    'is_unverified': bool(public_identity.get('unverified')),
+                    'public_identity': public_identity,
+                }
 
             # Build tiered trust buckets for UI
             trust_tiers: dict[str, list[dict[str, Any]]] = {
@@ -4115,7 +4637,7 @@ def create_ui_blueprint() -> Blueprint:
                     tier = 'restricted'
                 else:
                     tier = 'quarantine'
-                trust_tiers[tier].append({**score_info, 'peer_id': peer_id})
+                trust_tiers[tier].append(_resolve_peer_card(peer_id, score_info=score_info))
 
             # Potential peers list (introduced but not yet assigned a trust tier)
             potential_peers = []
@@ -4129,6 +4651,53 @@ def create_ui_blueprint() -> Blueprint:
                 if pid and pid not in existing_peer_ids:
                     potential_peers.append(peer)
                     existing_peer_ids.add(pid)
+
+            if p2p_manager and hasattr(p2p_manager, 'get_peer_public_identity'):
+                for entry in potential_peers:
+                    pid = entry.get('peer_id') if isinstance(entry, dict) else None
+                    if pid:
+                        entry['public_identity'] = p2p_manager.get_peer_public_identity(pid)
+
+            potential_peers = [
+                _resolve_peer_card(str(entry.get('peer_id') or '').strip(), potential_entry=entry)
+                for entry in potential_peers
+                if isinstance(entry, dict) and str(entry.get('peer_id') or '').strip()
+            ]
+
+            for peers in trust_tiers.values():
+                peers.sort(key=lambda peer: (peer['connection_sort'], -(peer.get('score') or 0), str(peer.get('display_name') or '').lower()))
+            potential_peers.sort(key=lambda peer: (peer['connection_sort'], str(peer.get('display_name') or '').lower()))
+
+            peer_index: dict[str, dict[str, Any]] = {}
+            for peers in trust_tiers.values():
+                for peer in peers:
+                    peer_index[peer['peer_id']] = peer
+            for peer in potential_peers:
+                peer_index.setdefault(peer['peer_id'], peer)
+
+            connected_peer_cards = []
+            for pid in connected_peers:
+                clean_pid = str(pid or '').strip()
+                if not clean_pid:
+                    continue
+                connected_peer_cards.append(peer_index.get(clean_pid) or _resolve_peer_card(clean_pid))
+            connected_peer_cards.sort(key=lambda peer: str(peer.get('display_name') or '').lower())
+
+            attention_peers = [
+                peer for peer in peer_index.values()
+                if peer.get('needs_profile') or peer.get('role_state') == 'unknown' or peer.get('connection_state') == 'stale'
+            ]
+            attention_peers.sort(key=lambda peer: (peer['connection_sort'], str(peer.get('display_name') or '').lower()))
+
+            trust_overview = {
+                'safe_count': len(trust_tiers['safe']),
+                'guarded_count': len(trust_tiers['guarded']),
+                'restricted_count': len(trust_tiers['restricted']),
+                'quarantine_count': len(trust_tiers['quarantine']),
+                'connected_count': len(connected_peer_cards),
+                'pending_count': len(potential_peers),
+                'attention_count': len(attention_peers),
+            }
             
             return render_template('trust.html',
                                  trust_scores=trust_scores,
@@ -4139,7 +4708,11 @@ def create_ui_blueprint() -> Blueprint:
                                  connected_peers=connected_peers,
                                  introduced_peers=introduced_peers,
                                  potential_peers=potential_peers,
-                                 peer_device_profiles=peer_device_profiles)
+                                 peer_device_profiles=peer_device_profiles,
+                                 connected_peer_cards=connected_peer_cards,
+                                 attention_peers=attention_peers,
+                                 trust_overview=trust_overview,
+                                 user_id=get_current_user())
                                  
         except Exception as e:
             logger.error(f"Trust management error: {e}")
@@ -4151,7 +4724,7 @@ def create_ui_blueprint() -> Blueprint:
     def trust_update():
         """Update trust score directly (manual tier adjustment)."""
         try:
-            _, _, trust_manager, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
+            _, _, trust_manager, _, _, _, _, _, _, _, p2p_manager = _get_app_components_any(current_app)
             if not trust_manager:
                 return jsonify({'error': 'Trust manager not available'}), 500
 
@@ -4176,17 +4749,151 @@ def create_ui_blueprint() -> Blueprint:
                 score = tier_map[tier]
 
             reason_value = reason or (f"tier:{tier}" if tier else "manual")
+            prior_score = trust_manager.get_trust_score(peer_id)
             new_score = trust_manager.set_trust_score(peer_id, score, reason=reason_value)
+            recovery = None
+            if new_score >= 50 and p2p_manager and hasattr(p2p_manager, 'recover_peer_profile_state'):
+                if hasattr(p2p_manager, 'clear_peer_profile_cache'):
+                    try:
+                        p2p_manager.clear_peer_profile_cache(peer_id)
+                    except Exception as cache_err:
+                        logger.warning(
+                            "clear_peer_profile_cache failed for %s during trust update: %s",
+                            peer_id,
+                            cache_err,
+                        )
+                try:
+                    recovery = p2p_manager.recover_peer_profile_state(
+                        peer_id,
+                        trigger_sync=prior_score < 50,
+                    )
+                except Exception as recovery_err:
+                    logger.warning(
+                        "Peer profile recovery after trust update failed for %s: %s",
+                        peer_id,
+                        recovery_err,
+                    )
 
             return jsonify({
                 'success': True,
                 'peer_id': peer_id,
                 'trust_score': new_score,
-                'is_trusted': new_score >= 50
+                'is_trusted': new_score >= 50,
+                'profile_recovery': recovery,
             })
         except Exception as e:
             logger.error(f"Failed to update trust score: {e}")
             return jsonify({'error': 'Failed to update trust score'}), 500
+
+    @ui.route('/trust/peer_action', methods=['POST'])
+    @require_login
+    def trust_peer_action():
+        """Run a remediation action for a peer from the trust UI."""
+        import asyncio
+        from ..network.invite import parse_invite_endpoint
+
+        try:
+            _, _, trust_manager, _, channel_manager, _, _, _, _, _, p2p_manager = _get_app_components_any(current_app)
+            if not p2p_manager:
+                return jsonify({'error': 'P2P manager not available'}), 500
+
+            data = request.get_json() or {}
+            peer_id = str(data.get('peer_id') or '').strip()
+            action = str(data.get('action') or '').strip().lower()
+            if not peer_id or not action:
+                return jsonify({'error': 'peer_id and action are required'}), 400
+
+            def _connect_via_endpoints(endpoints: list[str], detail: str) -> tuple[bool, Optional[str]]:
+                connection_manager = getattr(p2p_manager, 'connection_manager', None)
+                ev_loop = getattr(p2p_manager, '_event_loop', None)
+                if not connection_manager:
+                    return False, 'P2P connection manager unavailable'
+                if not ev_loop or ev_loop.is_closed():
+                    return False, 'P2P event loop unavailable'
+                for ep in endpoints or []:
+                    parsed = parse_invite_endpoint(ep)
+                    if not parsed:
+                        continue
+                    host, port, scheme = parsed
+                    try:
+                        future = asyncio.run_coroutine_threadsafe(
+                            connection_manager.connect_to_peer(peer_id, host, port, scheme=scheme),
+                            ev_loop,
+                        )
+                        connected = future.result(timeout=10.0)
+                    except Exception as connect_err:
+                        logger.warning("Trust peer action connect failed for %s via %s: %s", peer_id, ep, connect_err)
+                        connected = False
+                    if connected:
+                        try:
+                            _record_connection_event(
+                                p2p_manager,
+                                peer_id,
+                                status='connected',
+                                detail=detail,
+                                endpoint=ep,
+                            )
+                        except Exception:
+                            pass
+                        return True, ep
+                return False, 'Could not connect to any endpoint'
+
+            if action == 'sync_now':
+                trigger_sync = getattr(p2p_manager, 'trigger_peer_sync', None)
+                if not callable(trigger_sync):
+                    return jsonify({'error': 'Peer sync trigger unavailable'}), 500
+                if not trigger_sync(peer_id):
+                    return jsonify({'error': 'Failed to trigger sync'}), 502
+                return jsonify({'success': True, 'peer_id': peer_id, 'action': action, 'message': 'Peer sync triggered.'})
+
+            if action == 'refresh_profile':
+                clear_cache = getattr(p2p_manager, 'clear_peer_profile_cache', None)
+                recover = getattr(p2p_manager, 'recover_peer_profile_state', None)
+                if not callable(clear_cache) or not callable(recover):
+                    return jsonify({'error': 'Profile refresh unavailable'}), 500
+                cache_result = clear_cache(peer_id)
+                recovery = recover(peer_id, trigger_sync=True)
+                skipped_untrusted = list((recovery or {}).get('skipped_untrusted') or [])
+                message = 'Profile refresh requested.'
+                if peer_id in skipped_untrusted:
+                    message = 'Profile refresh is limited until this peer is trusted.'
+                return jsonify({
+                    'success': True,
+                    'peer_id': peer_id,
+                    'action': action,
+                    'cache_result': cache_result,
+                    'profile_recovery': recovery,
+                    'message': message,
+                })
+
+            if action == 'reconnect':
+                identity_manager = getattr(p2p_manager, 'identity_manager', None)
+                endpoints = list((getattr(identity_manager, 'peer_endpoints', {}) or {}).get(peer_id, []) or [])
+                ok, detail = _connect_via_endpoints(endpoints, 'Trust page reconnect succeeded')
+                if not ok:
+                    return jsonify({'error': str(detail or 'Reconnect failed')}), 502
+                try:
+                    p2p_manager.trigger_peer_sync(peer_id)
+                except Exception:
+                    pass
+                return jsonify({'success': True, 'peer_id': peer_id, 'action': action, 'endpoint': detail, 'message': 'Peer reconnected.'})
+
+            if action == 'connect_introduced':
+                intro = (getattr(p2p_manager, '_introduced_peers', {}) or {}).get(peer_id) or {}
+                endpoints = list(intro.get('endpoints') or [])
+                ok, detail = _connect_via_endpoints(endpoints, 'Trust page introduced-peer connect succeeded')
+                if not ok:
+                    return jsonify({'error': str(detail or 'Connect failed')}), 502
+                try:
+                    p2p_manager.trigger_peer_sync(peer_id)
+                except Exception:
+                    pass
+                return jsonify({'success': True, 'peer_id': peer_id, 'action': action, 'endpoint': detail, 'message': 'Introduced peer connected.'})
+
+            return jsonify({'error': 'Unsupported trust action'}), 400
+        except Exception as e:
+            logger.error(f"Failed to run trust peer action: {e}", exc_info=True)
+            return jsonify({'error': 'Failed to run trust peer action'}), 500
     
     # Feed interface
     @ui.route('/feed')
@@ -4968,7 +5675,12 @@ def create_ui_blueprint() -> Blueprint:
         """Task board interface for collaborative work."""
         user_id = get_current_user()
         display_name = session.get('display_name') or session.get('username') or user_id
-        return render_template('tasks.html', current_user_id=user_id, current_user_name=display_name)
+        return render_template(
+            'tasks.html',
+            current_user_id=user_id,
+            current_user_name=display_name,
+            user_id=user_id,
+        )
 
     @ui.route('/bookmarks')
     @require_login
@@ -5134,7 +5846,7 @@ def create_ui_blueprint() -> Blueprint:
     def channels():
         """Slack-style channel interface for real-time messaging."""
         try:
-            _, _, _, _, channel_manager, _, _, _, _, config, p2p_manager = _get_app_components_any(current_app)
+            db_manager, _, _, _, channel_manager, _, _, _, _, config, p2p_manager = _get_app_components_any(current_app)
             from ..core.polls import poll_edit_window_seconds
             user_id = get_current_user()
             workspace_event_manager = current_app.config.get('WORKSPACE_EVENT_MANAGER')
@@ -5147,6 +5859,20 @@ def create_ui_blueprint() -> Blueprint:
             
             # Get user's channels
             channels = channel_manager.get_user_channels(user_id)
+            if not channels:
+                owner_id = None
+                try:
+                    owner_id = db_manager.get_instance_owner_user_id() if db_manager else None
+                except Exception:
+                    owner_id = None
+                repaired = _ensure_user_default_channels(
+                    db_manager,
+                    channel_manager,
+                    user_id,
+                    include_quarantine_admin=bool(owner_id and owner_id == user_id),
+                )
+                if repaired:
+                    channels = channel_manager.get_user_channels(user_id)
             channels = _enrich_channel_lifecycle_state(channels, channel_manager, p2p_manager)
             channel_sidebar_snapshot = _build_channel_sidebar_snapshot(channel_manager, p2p_manager, user_id)
             logger.debug(f"Channels page: user_id={user_id}, channels_count={len(channels)}")
@@ -5264,9 +5990,11 @@ def create_ui_blueprint() -> Blueprint:
                 return jsonify({'success': False, 'error': 'Large attachment downloads are paused on this node'}), 409
             if not p2p_manager:
                 return jsonify({'success': False, 'error': 'P2P manager unavailable'}), 503
-            if not p2p_manager.connection_manager or not p2p_manager.connection_manager.is_connected(source_peer_id):
-                return jsonify({'success': False, 'error': 'Source peer is not currently connected'}), 409
-            if not p2p_manager.peer_supports_capability(source_peer_id, LARGE_ATTACHMENT_CAPABILITY):
+            is_connected = bool(
+                p2p_manager.connection_manager
+                and p2p_manager.connection_manager.is_connected(source_peer_id)
+            )
+            if is_connected and not p2p_manager.peer_supports_capability(source_peer_id, LARGE_ATTACHMENT_CAPABILITY):
                 return jsonify({'success': False, 'error': 'Source peer does not support large attachment fetch'}), 409
 
             request_id = f"LAR{secrets.token_hex(8)}"
@@ -5281,6 +6009,14 @@ def create_ui_blueprint() -> Blueprint:
                 last_request_id=request_id,
                 error=None,
             )
+            if not is_connected:
+                return jsonify({
+                    'success': True,
+                    'queued': True,
+                    'request_id': request_id,
+                    'message': 'Source peer is offline right now. Download queued and will start when that peer reconnects.',
+                }), 202
+
             sent = p2p_manager.send_large_attachment_request(
                 to_peer=source_peer_id,
                 request_id=request_id,
@@ -5296,7 +6032,12 @@ def create_ui_blueprint() -> Blueprint:
                 )
                 return jsonify({'success': False, 'error': 'Failed to send download request'}), 502
 
-            return jsonify({'success': True, 'request_id': request_id})
+            return jsonify({
+                'success': True,
+                'queued': False,
+                'request_id': request_id,
+                'message': 'Large attachment download requested. It will appear when the transfer completes.',
+            })
         except Exception as e:
             logger.error(f"Failed to request remote attachment download: {e}", exc_info=True)
             return jsonify({'success': False, 'error': 'Internal server error'}), 500
@@ -5338,7 +6079,7 @@ def create_ui_blueprint() -> Blueprint:
             flash('Recovery secret is not configured.', 'error')
             return redirect(url_for('ui.dashboard'))
         submitted = (request.form.get('secret') or '').strip()
-        if not submitted or submitted != secret:
+        if not submitted or not hmac.compare_digest(submitted.encode(), secret.encode()):
             flash('Invalid recovery secret.', 'error')
             return render_template('claim_admin.html', needs_secret=True, claim_secret_configured=True)
         db_manager.set_instance_owner_user_id(current_user_id)
@@ -5352,15 +6093,27 @@ def create_ui_blueprint() -> Blueprint:
     def admin_page():
         """Admin page: pending agent approvals, all users, approve/suspend/delete."""
         try:
-            db_manager, _, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
-            _, api_key_manager, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
-            skill_manager = current_app.config.get('SKILL_MANAGER')
+            db_manager, api_key_manager, _, _, _, _, _, _, _, config, _ = _get_app_components_any(current_app)
+            from .. import __version__ as canopy_version
             users = db_manager.get_all_users_for_admin()
             _annotate_user_presence(users, db_manager)
             pending = [
                 u for u in users
                 if u.get('is_registered') and (u.get('status') or 'active') == 'pending_approval'
             ]
+            auto_approve_raw = (os.getenv('CANOPY_AUTO_APPROVE_AGENTS') or '').strip().lower()
+            auto_approve_agents = auto_approve_raw in ('1', 'true', 'yes')
+            config_host = ''
+            config_port = ''
+            config_db_path = ''
+            try:
+                config_host = str(getattr(getattr(config, 'network', None), 'host', '') or '')
+                config_port = str(getattr(getattr(config, 'network', None), 'port', '') or '')
+                config_db_path = str(getattr(getattr(config, 'storage', None), 'database_path', '') or '')
+            except Exception:
+                config_host = ''
+                config_port = ''
+                config_db_path = ''
             active_agents = [
                 u for u in users
                 if u.get('is_registered')
@@ -5412,81 +6165,42 @@ def create_ui_blueprint() -> Blueprint:
                     (u.get('display_name') or u.get('username') or '').lower(),
                 ),
             )
+            remote_shadow_duplicate_groups = []
+            if hasattr(db_manager, 'list_remote_shadow_duplicate_groups'):
+                try:
+                    remote_shadow_duplicate_groups = db_manager.list_remote_shadow_duplicate_groups(limit=200)
+                except Exception:
+                    remote_shadow_duplicate_groups = []
+            cross_peer_same_name_groups = []
+            if hasattr(db_manager, 'list_cross_peer_same_name_groups'):
+                try:
+                    cross_peer_same_name_groups = db_manager.list_cross_peer_same_name_groups(limit=200)
+                except Exception:
+                    cross_peer_same_name_groups = []
             all_permissions = [p.value for p in api_key_manager.get_all_permissions()]
-            current_user_id = get_current_user()
-            current_user_row = db_manager.get_user(current_user_id) if db_manager else None
-            heartbeat_snapshot = _build_agent_heartbeat_snapshot(current_user_id)
-
-            community_note_counts = {
-                'total': 0,
-                'proposed': 0,
-                'accepted': 0,
-                'rejected': 0,
-            }
-            community_note_queue = []
-            top_skill_trust = []
-
-            if skill_manager:
-                try:
-                    with db_manager.get_connection() as conn:
-                        rows = conn.execute(
-                            "SELECT status, COUNT(*) AS cnt FROM community_notes GROUP BY status"
-                        ).fetchall()
-                        total = conn.execute(
-                            "SELECT COUNT(*) AS cnt FROM community_notes"
-                        ).fetchone()
-                    community_note_counts['total'] = int(total['cnt']) if total and total['cnt'] is not None else 0
-                    for row in rows or []:
-                        status = (row['status'] or '').lower()
-                        if status in community_note_counts:
-                            community_note_counts[status] = int(row['cnt'] or 0)
-                except Exception:
-                    pass
-
-                try:
-                    queued = skill_manager.get_community_notes(status='proposed', limit=10)
-                    community_note_queue = _serialize_community_notes(queued, current_user_id)
-                except Exception:
-                    community_note_queue = []
-
-                try:
-                    skills = skill_manager.get_skills(limit=24)
-                    for skill in skills or []:
-                        trust_data = skill_manager.get_skill_trust_score(skill['id'])
-                        trust_score = trust_data.get('trust_score')
-                        components = trust_data.get('components') or {}
-                        top_skill_trust.append({
-                            'id': skill['id'],
-                            'name': skill.get('name') or skill.get('id'),
-                            'version': skill.get('version') or '',
-                            'author_id': skill.get('author_id'),
-                            'trust_score': trust_score,
-                            'trust_percent': int(round(trust_score * 100)) if trust_score is not None else None,
-                            'endorsement_count': int((components or {}).get('endorsement_count') or 0),
-                            'invocation_count': int((components or {}).get('invocation_count') or 0),
-                            'success_rate': components.get('success_rate'),
-                        })
-                    top_skill_trust.sort(
-                        key=lambda x: (x.get('trust_score') is None, -(x.get('trust_score') or 0.0), -(x.get('endorsement_count') or 0)),
-                    )
-                    top_skill_trust = top_skill_trust[:8]
-                except Exception:
-                    top_skill_trust = []
+            default_permissions = [p.value for p in api_key_manager.get_default_permissions()]
 
             return render_template('admin.html',
                                  users=users,
                                  pending_count=len(pending),
                                  active_agents_count=len(active_agents),
+                                 canopy_version=canopy_version,
+                                 auto_approve_agents=auto_approve_agents,
+                                 instance_host=config_host,
+                                 instance_port=config_port,
+                                 instance_database_path=config_db_path,
+                                 large_attachment_threshold_mb=int(LARGE_ATTACHMENT_THRESHOLD / 1024 / 1024),
+                                 large_attachment_store_root=get_large_attachment_store_root(db_manager),
+                                 large_attachment_download_mode=get_large_attachment_download_mode(db_manager),
                                  all_permissions=all_permissions,
+                                 default_permissions=default_permissions,
                                  agent_users=agent_users,
                                  workspace_users=workspace_users,
+                                 remote_shadow_duplicate_groups=remote_shadow_duplicate_groups,
+                                 cross_peer_same_name_groups=cross_peer_same_name_groups,
                                  directive_presets=_agent_directive_presets_payload(),
                                  directive_max_length=MAX_AGENT_DIRECTIVES_LENGTH,
-                                 heartbeat_snapshot=heartbeat_snapshot,
-                                 current_user_is_agent=bool((current_user_row or {}).get('account_type') == 'agent'),
-                                 community_note_counts=community_note_counts,
-                                 community_note_queue=community_note_queue,
-                                 top_skill_trust=top_skill_trust)
+                                 user_id=get_current_user())
         except Exception as e:
             logger.error(f"Admin page error: {e}")
             flash('Error loading admin page', 'error')
@@ -5520,6 +6234,11 @@ def create_ui_blueprint() -> Blueprint:
 
             # Peers introduced by contacts
             introduced_peers = p2p_manager.get_introduced_peers() if p2p_manager else []
+            if p2p_manager and hasattr(p2p_manager, 'get_peer_public_identity'):
+                for entry in introduced_peers:
+                    pid = entry.get('peer_id') if isinstance(entry, dict) else None
+                    if pid:
+                        entry['public_identity'] = p2p_manager.get_peer_public_identity(pid)
 
             # Relay status
             relay_status = p2p_manager.get_relay_status() if p2p_manager else {}
@@ -5676,23 +6395,12 @@ def create_ui_blueprint() -> Blueprint:
                 'peer_changed': peer_changed,
                 'events': events,
                 'server_time': time.time(),
+                'peers': peers,
+                'connected_peer_ids': peer_snapshot['connected_peer_ids'],
+                'peer_trust': peer_snapshot['peer_trust'],
+                'peer_profiles': peer_snapshot['peer_profiles'],
+                'connected_peer_count': peer_snapshot['connected_peer_count'],
             }
-            if peer_changed:
-                payload.update({
-                    'peers': peers,
-                    'connected_peer_ids': peer_snapshot['connected_peer_ids'],
-                    'peer_trust': peer_snapshot['peer_trust'],
-                    'peer_profiles': peer_snapshot['peer_profiles'],
-                    'connected_peer_count': peer_snapshot['connected_peer_count'],
-                })
-            else:
-                payload.update({
-                    'peers': {},
-                    'connected_peer_ids': [],
-                    'peer_trust': {},
-                    'peer_profiles': {},
-                    'connected_peer_count': peer_snapshot['connected_peer_count'],
-                })
             return jsonify(payload)
         except Exception as e:
             logger.error(f"Peer activity error: {e}", exc_info=True)
@@ -6456,6 +7164,40 @@ def create_ui_blueprint() -> Blueprint:
             logger.error(f"Admin list users error: {e}")
             return jsonify({'error': 'Internal server error'}), 500
 
+    @ui.route('/ajax/admin/users/<user_id>/repair-shadow-duplicates', methods=['POST'])
+    @require_login
+    @require_admin
+    def ajax_admin_repair_shadow_duplicates(user_id):
+        """Merge duplicate remote-shadow rows for one origin/display identity."""
+        try:
+            db_manager, _, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
+            result = db_manager.repair_remote_shadow_duplicate_group(user_id)
+            if result.get('success'):
+                return jsonify(result)
+            error = str(result.get('error') or 'Repair failed')
+            status = 404 if 'not found' in error.lower() else 400
+            return jsonify({'error': error}), status
+        except Exception as e:
+            logger.error(f"Admin remote shadow repair error: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @ui.route('/ajax/admin/users/<user_id>/forget-remote-shadow', methods=['POST'])
+    @require_login
+    @require_admin
+    def ajax_admin_forget_remote_shadow_user(user_id):
+        """Delete one explicitly selected remote shadow user."""
+        try:
+            db_manager, _, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
+            result = db_manager.forget_remote_shadow_user(user_id)
+            if result.get('success'):
+                return jsonify(result)
+            error = str(result.get('error') or 'Forget failed')
+            status = 404 if 'not found' in error.lower() else 400
+            return jsonify({'error': error}), status
+        except Exception as e:
+            logger.error(f"Admin forget remote shadow user error: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+
     @ui.route('/ajax/admin/workspace-events/status', methods=['GET'])
     @require_login
     @require_admin
@@ -6916,8 +7658,18 @@ def create_ui_blueprint() -> Blueprint:
     def ajax_admin_approve(user_id):
         """Set user status to active (approve pending agent)."""
         try:
-            db_manager, _, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
+            db_manager, _, _, _, channel_manager, _, _, _, _, _, _ = _get_app_components_any(current_app)
+            user = db_manager.get_user(user_id) if db_manager else None
             if db_manager.set_user_status(user_id, 'active'):
+                if user and (user.get('account_type') or 'human') == 'agent' and channel_manager:
+                    quarantine_ok = channel_manager.ensure_agent_quarantine_assignment(
+                        user_id,
+                        updated_by=get_current_user(),
+                    )
+                    governance_result = channel_manager.enforce_user_channel_governance(user_id) if quarantine_ok else {}
+                    if not quarantine_ok or not governance_result.get('enabled'):
+                        db_manager.set_user_status(user_id, 'pending_approval')
+                        return jsonify({'error': 'Failed to apply default agent quarantine'}), 500
                 return jsonify({'success': True, 'status': 'active'})
             return jsonify({'error': 'User not found or update failed'}), 400
         except Exception as e:
@@ -6947,7 +7699,7 @@ def create_ui_blueprint() -> Blueprint:
     def ajax_admin_update_user_classification(user_id: str):
         """Admin: update account_type/status for local or remote user records."""
         try:
-            db_manager, _, _, _, _, _, _, _, _, _, _ = _get_app_components_any(current_app)
+            db_manager, _, _, _, channel_manager, _, _, _, _, _, _ = _get_app_components_any(current_app)
             user = db_manager.get_user(user_id)
             if not user:
                 return jsonify({'error': 'User not found'}), 404
@@ -6982,6 +7734,26 @@ def create_ui_blueprint() -> Blueprint:
                 return jsonify({'error': 'No valid classification updates were applied'}), 400
 
             refreshed = db_manager.get_user(user_id) or user
+            is_local_registered_agent = (
+                bool(refreshed.get('password_hash'))
+                and not refreshed.get('origin_peer')
+                and (refreshed.get('account_type') or 'human') == 'agent'
+                and (refreshed.get('status') or 'active') == 'active'
+            )
+            if is_local_registered_agent and channel_manager:
+                quarantine_ok = channel_manager.ensure_agent_quarantine_assignment(
+                    user_id,
+                    updated_by=get_current_user(),
+                )
+                governance_result = channel_manager.enforce_user_channel_governance(user_id) if quarantine_ok else {}
+                if not quarantine_ok or not governance_result.get('enabled'):
+                    db_manager.update_user_admin_fields(
+                        user_id,
+                        account_type=user.get('account_type'),
+                        status=user.get('status'),
+                    )
+                    return jsonify({'error': 'Failed to apply default agent quarantine'}), 500
+                refreshed = db_manager.get_user(user_id) or refreshed
             payload = {
                 'id': refreshed.get('id'),
                 'username': refreshed.get('username'),
@@ -7212,7 +7984,7 @@ def create_ui_blueprint() -> Blueprint:
     def ajax_admin_update_user_governance(user_id: str):
         """Admin: update per-user channel governance policy for a local user."""
         try:
-            db_manager, _, _, _, channel_manager, _, _, _, _, _, _ = _get_app_components_any(current_app)
+            db_manager, _, _, _, channel_manager, _, _, _, _, _, p2p_manager = _get_app_components_any(current_app)
             user = _admin_registered_user_row(db_manager, user_id)
             if not user:
                 return jsonify({'error': 'User not found'}), 404
@@ -7241,7 +8013,10 @@ def create_ui_blueprint() -> Blueprint:
             if len(raw_allowed) > 1024:
                 return jsonify({'error': 'Too many allowed channels provided'}), 400
 
-            available_channels = channel_manager.list_channels_for_governance()
+            available_channels = _filter_admin_governance_channels(
+                channel_manager.list_channels_for_governance(user_id=user_id),
+                local_peer_id=(p2p_manager.get_peer_id() if p2p_manager else None),
+            )
             valid_channel_ids = {
                 str(row.get('id')).strip()
                 for row in (available_channels or [])
@@ -10403,6 +11178,8 @@ def create_ui_blueprint() -> Blueprint:
                 key_info = api_key_manager.validate_key(api_key, Permission.WRITE_MESSAGES)
                 if not key_info:
                     return jsonify({'error': 'Invalid API key or insufficient permissions'}), 403
+                if getattr(key_info, 'account_pending', False):
+                    return jsonify({'error': 'Account pending approval', 'status': 'pending_approval'}), 403
                 user_id = key_info.user_id
             
             data = request.get_json()
@@ -11165,7 +11942,16 @@ def create_ui_blueprint() -> Blueprint:
             except Exception as inbox_err:
                 logger.warning(f"Failed to refresh DM inbox trigger on edit: {inbox_err}")
 
-            return jsonify({'success': True})
+            return jsonify({
+                'success': True,
+                'message': {
+                    'id': message_id,
+                    'content': content,
+                    'edited_at': final_metadata.get('edited_at') if isinstance(final_metadata, dict) else None,
+                    'attachments': final_attachments or [],
+                    'metadata': final_metadata if isinstance(final_metadata, dict) else {},
+                },
+            })
         except Exception as e:
             logger.error(f"Update message error: {e}", exc_info=True)
             return jsonify({'error': 'Internal server error'}), 500
@@ -15544,10 +16330,26 @@ def create_ui_blueprint() -> Blueprint:
             db_manager, _, _, _, channel_manager, _, _, _, _, _, _ = _get_app_components_any(current_app)
             user_id = get_current_user()
             data = request.get_json() or {}
-            target_user_id = data.get('user_id')
+            requested_user_id = data.get('user_id')
+            target_user_id = _resolve_canonical_remote_user_id(db_manager, requested_user_id)
+            duplicate_user_ids = _find_remote_identity_duplicate_user_ids(db_manager, target_user_id)
             role = data.get('role', 'member')
             if not target_user_id:
                 return jsonify({'error': 'user_id required'}), 400
+            stale_member_ids = set(duplicate_user_ids)
+            if requested_user_id and requested_user_id != target_user_id:
+                stale_member_ids.add(str(requested_user_id))
+            if stale_member_ids:
+                try:
+                    with db_manager.get_connection() as conn:
+                        for stale_user_id in stale_member_ids:
+                            conn.execute(
+                                "DELETE FROM channel_members WHERE channel_id = ? AND user_id = ?",
+                                (channel_id, stale_user_id),
+                            )
+                        conn.commit()
+                except Exception:
+                    pass
             ok = channel_manager.add_member(channel_id, target_user_id, user_id, role)
             if ok:
                 # Trigger P2P member sync for private channels
@@ -15609,6 +16411,221 @@ def create_ui_blueprint() -> Blueprint:
             return jsonify({'error': 'Permission denied or user not found'}), 403
         except Exception as e:
             logger.error(f"Remove channel member (ui) failed: {e}")
+            return jsonify({'error': 'Internal server error'}), 500
+
+    def _channel_removal_mesh_context(trust_manager, p2p_manager):
+        local_peer_id = None
+        connected_peer_ids: list[str] = []
+        trusted_peer_ids: list[str] = []
+        try:
+            if p2p_manager:
+                local_peer_id = p2p_manager.get_peer_id()
+        except Exception:
+            local_peer_id = None
+        try:
+            if p2p_manager:
+                connected_peer_ids = list(p2p_manager.get_connected_peers() or [])
+        except Exception:
+            connected_peer_ids = []
+        try:
+            if trust_manager:
+                trusted_peer_ids = list(trust_manager.get_trusted_peers() or [])
+        except Exception:
+            trusted_peer_ids = []
+        return local_peer_id, connected_peer_ids, trusted_peer_ids
+
+    @ui.route('/ajax/channel_removal_status/<channel_id>', methods=['GET'])
+    @require_login
+    def ajax_channel_removal_status(channel_id):
+        try:
+            db_manager, _, trust_manager, _, channel_manager, _, _, _, _, _, p2p_manager = _get_app_components_any(current_app)
+            if not channel_manager:
+                return jsonify({'error': 'Channels unavailable'}), 503
+            user_id = get_current_user()
+            allow_admin = _is_admin()
+            if not allow_admin and db_manager:
+                with db_manager.get_connection() as conn:
+                    membership = conn.execute(
+                        "SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?",
+                        (channel_id, user_id),
+                    ).fetchone()
+                if not membership:
+                    return jsonify({'error': 'Channel not found'}), 404
+            local_peer_id, connected_peer_ids, trusted_peer_ids = _channel_removal_mesh_context(
+                trust_manager,
+                p2p_manager,
+            )
+            status = channel_manager.get_channel_removal_status(
+                channel_id,
+                local_peer_id=local_peer_id,
+                viewer_user_id=user_id,
+                allow_admin=allow_admin,
+                connected_peer_ids=connected_peer_ids,
+                trusted_peer_ids=trusted_peer_ids,
+            )
+            if not status.get('channel_exists'):
+                return jsonify({'error': 'Channel not found'}), 404
+            return jsonify({'success': True, 'status': status})
+        except Exception as e:
+            logger.error(f"Channel removal status (ui) failed: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
+
+    @ui.route('/ajax/channel_removal_vote', methods=['POST'])
+    @require_login
+    def ajax_channel_removal_vote():
+        try:
+            db_manager, _, trust_manager, _, channel_manager, _, _, _, _, _, p2p_manager = _get_app_components_any(current_app)
+            if not channel_manager:
+                return jsonify({'error': 'Channels unavailable'}), 503
+
+            user_id = get_current_user()
+            allow_admin = _is_admin()
+            data = request.get_json() or {}
+            channel_id = str(data.get('channel_id') or '').strip()
+            requested_vote = str(data.get('vote') or '').strip().lower()
+            proposal_id = str(data.get('proposal_id') or '').strip() or None
+            reason = str(data.get('reason') or '').strip() or None
+            if requested_vote not in {'remove', 'keep'} or not channel_id:
+                return jsonify({'error': 'channel_id and vote are required'}), 400
+            if not allow_admin and db_manager:
+                with db_manager.get_connection() as conn:
+                    membership = conn.execute(
+                        "SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?",
+                        (channel_id, user_id),
+                    ).fetchone()
+                if not membership:
+                    return jsonify({'error': 'Channel not found'}), 404
+
+            local_peer_id, connected_peer_ids, trusted_peer_ids = _channel_removal_mesh_context(
+                trust_manager,
+                p2p_manager,
+            )
+            if not local_peer_id:
+                return jsonify({'error': 'Local peer identity unavailable'}), 503
+
+            pre_status = channel_manager.get_channel_removal_status(
+                channel_id,
+                local_peer_id=local_peer_id,
+                viewer_user_id=user_id,
+                allow_admin=allow_admin,
+                connected_peer_ids=connected_peer_ids,
+                trusted_peer_ids=trusted_peer_ids,
+            )
+            if not pre_status.get('channel_exists'):
+                return jsonify({'error': 'Channel not found'}), 404
+
+            active_proposal = pre_status.get('active_proposal') or {}
+            manager_result: Dict[str, Any]
+            action = 'cast'
+            if active_proposal:
+                manager_result = channel_manager.cast_channel_removal_vote(
+                    channel_id=channel_id,
+                    proposal_id=proposal_id or str(active_proposal.get('proposal_id') or '').strip(),
+                    user_id=user_id,
+                    local_peer_id=str(local_peer_id),
+                    vote=requested_vote,
+                    allow_admin=allow_admin,
+                    reason=reason,
+                    connected_peer_ids=connected_peer_ids,
+                    trusted_peer_ids=trusted_peer_ids,
+                )
+            else:
+                if requested_vote != 'remove':
+                    return jsonify({'error': 'A keep vote requires an active removal proposal'}), 400
+                action = 'start'
+                manager_result = channel_manager.start_channel_removal_vote(
+                    channel_id=channel_id,
+                    user_id=user_id,
+                    local_peer_id=str(local_peer_id),
+                    connected_peer_ids=connected_peer_ids,
+                    trusted_peer_ids=trusted_peer_ids,
+                    allow_admin=allow_admin,
+                    reason=reason,
+                )
+
+            if not manager_result.get('ok'):
+                error = str(manager_result.get('error') or 'Unable to update vote')
+                http_status = 403 if error in {
+                    'not_authorized',
+                    'peer_not_in_electorate',
+                    'already_retired',
+                    'proposal_exists',
+                    'already_voted',
+                    'system_channel',
+                    'channel_type_ineligible',
+                    'preserved_channel',
+                } else 400
+                return jsonify({
+                    'error': error,
+                    'status': manager_result.get('status'),
+                }), http_status
+
+            post_status = manager_result.get('status') or channel_manager.get_channel_removal_status(
+                channel_id,
+                local_peer_id=local_peer_id,
+                viewer_user_id=user_id,
+                allow_admin=allow_admin,
+                connected_peer_ids=connected_peer_ids,
+                trusted_peer_ids=trusted_peer_ids,
+            )
+            finalization = manager_result.get('finalization') or {}
+            vote_changed = bool(manager_result.get('changed', True))
+            electorate_peer_ids = []
+            if action == 'start':
+                electorate_peer_ids = list(manager_result.get('electorate_peer_ids') or [])
+            elif active_proposal:
+                electorate_peer_ids = [
+                    entry.get('peer_id')
+                    for entry in (active_proposal.get('electorate') or [])
+                    if isinstance(entry, dict) and entry.get('peer_id')
+                ]
+
+            if vote_changed and p2p_manager and p2p_manager.is_running():
+                try:
+                    if action == 'start':
+                        p2p_manager.broadcast_channel_removal_proposal(
+                            proposal_id=manager_result.get('proposal_id'),
+                            channel_id=channel_id,
+                            channel_name=str((post_status.get('active_proposal') or {}).get('channel_name') or pre_status.get('active_proposal', {}).get('channel_name') or channel_id),
+                            channel_origin_peer=(post_status.get('active_proposal') or {}).get('channel_origin_peer'),
+                            channel_privacy_mode=(post_status.get('active_proposal') or {}).get('channel_privacy_mode'),
+                            initiator_user_id=user_id,
+                            electorate_peer_ids=electorate_peer_ids,
+                            threshold_count=int((post_status.get('active_proposal') or {}).get('threshold_count') or len(electorate_peer_ids) or 0),
+                            opened_at=(post_status.get('active_proposal') or {}).get('opened_at'),
+                        )
+                    if electorate_peer_ids:
+                        p2p_manager.broadcast_channel_removal_vote(
+                            proposal_id=(manager_result.get('proposal_id') or proposal_id or (active_proposal.get('proposal_id'))),
+                            channel_id=channel_id,
+                            voter_user_id=user_id,
+                            vote=requested_vote,
+                            electorate_peer_ids=electorate_peer_ids,
+                            reason=reason,
+                        )
+                    if finalization:
+                        p2p_manager.broadcast_channel_removal_result(
+                            proposal_id=str(finalization.get('proposal_id') or manager_result.get('proposal_id') or proposal_id or ''),
+                            channel_id=channel_id,
+                            result=str(finalization.get('result') or finalization.get('status') or ''),
+                            electorate_peer_ids=list(finalization.get('electorate_peer_ids') or electorate_peer_ids),
+                            threshold_count=int(finalization.get('threshold_count') or len(electorate_peer_ids) or 0),
+                            finalizing_user_id=user_id,
+                            tombstone_id=finalization.get('tombstone_id'),
+                            finalized_at=finalization.get('finalized_at'),
+                        )
+                except Exception as mesh_err:
+                    logger.warning(f"Channel removal vote mesh propagation failed: {mesh_err}")
+
+            return jsonify({
+                'success': True,
+                'action': action,
+                'changed': vote_changed,
+                'status': post_status,
+                'finalization': finalization,
+            })
+        except Exception as e:
+            logger.error(f"Channel removal vote (ui) failed: {e}", exc_info=True)
             return jsonify({'error': 'Internal server error'}), 500
 
     @ui.route('/ajax/delete_channel', methods=['POST'])
@@ -16040,7 +17057,7 @@ def create_ui_blueprint() -> Blueprint:
 
     # Database management AJAX endpoints for Settings page
     @ui.route('/ajax/database_cleanup', methods=['POST'])
-    @require_login
+    @require_admin
     def ajax_database_cleanup():
         """AJAX: Clean up old data from the database."""
         try:
@@ -16058,7 +17075,7 @@ def create_ui_blueprint() -> Blueprint:
             return jsonify({'error': 'Internal server error'}), 500
 
     @ui.route('/ajax/database_export', methods=['GET'])
-    @require_login
+    @require_admin
     def ajax_database_export():
         """AJAX: Export database as downloadable file."""
         try:
@@ -16222,7 +17239,7 @@ def create_ui_blueprint() -> Blueprint:
                     pass
 
     @ui.route('/ajax/system_reset', methods=['POST'])
-    @require_login
+    @require_admin
     def ajax_system_reset():
         """AJAX: Reset the system by clearing all user data."""
         try:
@@ -17789,6 +18806,10 @@ def create_ui_blueprint() -> Blueprint:
                         select_cols.append('display_name')
                     if 'avatar_file_id' in table_cols:
                         select_cols.append('avatar_file_id')
+                    if 'profile_updated_at' in table_cols:
+                        select_cols.append('profile_updated_at')
+                    if 'created_at' in table_cols:
+                        select_cols.append('created_at')
                     if 'origin_peer' in table_cols:
                         select_cols.append('origin_peer')
                     if 'account_type' in table_cols:
@@ -17846,6 +18867,8 @@ def create_ui_blueprint() -> Blueprint:
                     dname = row['display_name'] if 'display_name' in row_keys else uname
                     dname = dname or uname or uid
                     avatar_file_id = row['avatar_file_id'] if 'avatar_file_id' in row_keys else None
+                    profile_updated_at = row['profile_updated_at'] if 'profile_updated_at' in row_keys else None
+                    created_at = row['created_at'] if 'created_at' in row_keys else None
                     account_type = row['account_type'] if 'account_type' in row_keys else None
                     origin_peer = row['origin_peer'] if 'origin_peer' in row_keys else ''
                     status = row['status'] if 'status' in row_keys else None
@@ -17856,6 +18879,8 @@ def create_ui_blueprint() -> Blueprint:
                         'display_name': dname,
                         'handle': _clean_mention_handle(dname, uname, uid),
                         'avatar_url': f"/files/{avatar_file_id}" if avatar_file_id else None,
+                        'profile_updated_at': profile_updated_at,
+                        'created_at': created_at,
                         'account_type': (account_type or '').strip().lower() or None,
                         'origin_peer': origin_peer,
                         'status': status,
@@ -17863,16 +18888,7 @@ def create_ui_blueprint() -> Blueprint:
                     })
                 users = _rank_users(users, query)[:limit]
 
-            deduped_users = []
-            seen_user_ids: set[str] = set()
-            for user in users:
-                uid = str(user.get('user_id') or '').strip()
-                if not uid or uid in ('system', 'local_user') or uid in seen_user_ids:
-                    continue
-                seen_user_ids.add(uid)
-                user['user_id'] = uid
-                deduped_users.append(user)
-            users = deduped_users
+            users = _dedupe_recipient_directory_users(users)
 
             user_ids = [u.get('user_id') for u in users if u.get('user_id')]
             if user_ids:
@@ -17961,6 +18977,7 @@ def create_ui_blueprint() -> Blueprint:
                     user['presence_color'] = presence.get('color')
                     user['presence_age_seconds'] = presence.get('age_seconds')
                     user['presence_age_text'] = presence.get('age_text')
+                users = _dedupe_recipient_directory_users(users)
             return jsonify({'success': True, 'users': users})
         except Exception as e:
             logger.error(f"Mention suggestions error: {e}")

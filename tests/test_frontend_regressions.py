@@ -8,11 +8,193 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TestFrontendRegressions(unittest.TestCase):
+    def test_account_pages_do_not_render_deemphasized_stats_panels(self) -> None:
+        bookmarks_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'bookmarks.html').read_text(encoding='utf-8')
+        api_keys_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'api_keys.html').read_text(encoding='utf-8')
+        profile_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'profile.html').read_text(encoding='utf-8')
+        connect_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'connect.html').read_text(encoding='utf-8')
+        trust_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'trust.html').read_text(encoding='utf-8')
+
+        self.assertNotIn('bookmark-hero-stats', bookmarks_template)
+        self.assertNotIn('key_stats.total_keys', api_keys_template)
+        self.assertNotIn('Your Activity', profile_template)
+        self.assertNotIn('{{ connected_peers|length }} connected', connect_template)
+        self.assertNotIn('trust-hero-stats', trust_template)
+
+    def test_admin_agent_operations_unified_card_exists(self) -> None:
+        admin_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'admin.html').read_text(encoding='utf-8')
+        self.assertIn('admin-section-agent-ops', admin_template)
+        self.assertIn('Agent Operations', admin_template)
+        self.assertIn('id="agent-ops-workspace-tab"', admin_template)
+        self.assertIn('id="agent-ops-directives-tab"', admin_template)
+        self.assertIn('id="agent-ops-workspace-pane"', admin_template)
+        self.assertIn('id="agent-ops-directives-pane"', admin_template)
+        self.assertNotIn('admin-section-workspace', admin_template)
+        self.assertNotIn('admin-section-directives', admin_template)
+
+    def test_admin_instance_environment_is_first_section(self) -> None:
+        admin_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'admin.html').read_text(encoding='utf-8')
+        self.assertIn('.admin-section-environment { order: 1; }', admin_template)
+        self.assertIn('.admin-section-users { order: 2; }', admin_template)
+
+    def test_admin_exposes_remote_shadow_duplicate_repair_controls(self) -> None:
+        admin_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'admin.html').read_text(encoding='utf-8')
+        self.assertIn('Duplicate Remote Shadow Users', admin_template)
+        self.assertIn('repair-shadow-duplicates-btn', admin_template)
+        self.assertIn("/ajax/admin/users/${userId}/repair-shadow-duplicates", admin_template)
+        self.assertIn('merged ${mergedCount} duplicate shadow row(s)', admin_template)
+
+    def test_admin_exposes_cross_peer_remote_forget_controls(self) -> None:
+        admin_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'admin.html').read_text(encoding='utf-8')
+        self.assertIn('Cross-Peer Same-Name Identities', admin_template)
+        self.assertIn('forget-remote-shadow-btn', admin_template)
+        self.assertIn("/ajax/admin/users/${userId}/forget-remote-shadow", admin_template)
+        self.assertIn('Forget remote shadow identity', admin_template)
+
+    def test_admin_governance_exposes_unsaved_state_and_secondary_save_bar(self) -> None:
+        admin_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'admin.html').read_text(encoding='utf-8')
+        self.assertIn('id="workspace-governance-dirty-indicator"', admin_template)
+        self.assertIn('Changes are not saved until you click <strong>Save Governance</strong>.', admin_template)
+        self.assertIn('id="workspace-save-governance-bottom-btn"', admin_template)
+        self.assertIn('id="workspace-governance-action-bar"', admin_template)
+
+    def test_admin_governance_tracks_dirty_state_in_script(self) -> None:
+        admin_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'admin.html').read_text(encoding='utf-8')
+        self.assertIn('let workspaceGovernanceSavedSignature = \'\';', admin_template)
+        self.assertIn('function refreshGovernanceDirtyState()', admin_template)
+        self.assertIn("workspaceGovernanceDirtyIndicator.textContent = workspaceGovernanceDirty ? 'Unsaved changes' : 'Saved';", admin_template)
+        self.assertIn('[workspaceSaveGovernanceBtn, workspaceSaveGovernanceBottomBtn].filter(Boolean).forEach((button) => {', admin_template)
+
+    def test_admin_governance_secondary_save_button_defaults_to_outline(self) -> None:
+        admin_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'admin.html').read_text(encoding='utf-8')
+        self.assertIn('class="btn btn-outline-success btn-sm" id="workspace-save-governance-bottom-btn"', admin_template)
+
+    def test_trust_page_exposes_remove_peer_controls(self) -> None:
+        trust_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'trust.html').read_text(encoding='utf-8')
+        self.assertIn("onclick=\"removePeerFromTrust('{{ peer_id }}')\"", trust_template)
+        self.assertIn("function removePeerFromTrust(peerId)", trust_template)
+        self.assertIn("/api/v1/p2p/forget", trust_template)
+        self.assertIn("remove_shadow_users: true", trust_template)
+
+    def test_trust_page_remove_peer_confirmation_mentions_disconnect_and_cleanup(self) -> None:
+        trust_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'trust.html').read_text(encoding='utf-8')
+        self.assertIn('Remove this peer? This will disconnect them, remove stored endpoints, stop auto-reconnect, and clean stored trust and shadow-user residue for that peer.', trust_template)
+
+    def test_trust_page_zone_metrics_and_pending_lane_have_live_bookkeeping(self) -> None:
+        trust_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'trust.html').read_text(encoding='utf-8')
+        self.assertIn('data-stat-guarded', trust_template)
+        self.assertIn('data-stat-restricted', trust_template)
+        self.assertIn('data-stat-quarantine', trust_template)
+        self.assertIn('data-potential-list data-empty-message="No pending peers are waiting for review."', trust_template)
+        self.assertIn("function syncEmptyState(container, message) {", trust_template)
+        self.assertIn("function refreshTrustEmptyStates() {", trust_template)
+        self.assertIn("refreshTrustEmptyStates();", trust_template)
+
+    def test_trust_page_exposes_review_actions_for_flagged_peers(self) -> None:
+        trust_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'trust.html').read_text(encoding='utf-8')
+        self.assertIn("function runTrustPeerAction(peerId, action, triggerEl) {", trust_template)
+        self.assertIn("apiCall('/trust/peer_action', {", trust_template)
+        self.assertIn("runTrustPeerAction('{{ peer_id }}', 'refresh_profile', this)", trust_template)
+        self.assertIn("runTrustPeerAction('{{ peer_id }}', 'sync_now', this)", trust_template)
+        self.assertIn("href=\"#trust-peer-{{ peer.peer_id }}\"", trust_template)
+
+    def test_trust_page_disables_review_action_buttons_while_request_is_in_flight(self) -> None:
+        trust_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'trust.html').read_text(encoding='utf-8')
+        self.assertIn("if (triggerEl) {", trust_template)
+        self.assertIn("triggerEl.disabled = true;", trust_template)
+        self.assertIn("triggerEl.disabled = false;", trust_template)
+
+    def test_trust_page_potential_peers_require_explicit_tier_assignment(self) -> None:
+        trust_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'trust.html').read_text(encoding='utf-8')
+        self.assertIn("{% if tier == 'potential' %}", trust_template)
+        self.assertIn('<option value="" selected disabled>Assign tier...</option>', trust_template)
+
+    def test_trust_page_forget_peer_success_alert_stays_visible_before_reload(self) -> None:
+        trust_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'trust.html').read_text(encoding='utf-8')
+        self.assertIn('setTimeout(refreshTrust, 1500);', trust_template)
+
+    def test_claim_admin_forms_include_hidden_csrf_token(self) -> None:
+        claim_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'claim_admin.html').read_text(encoding='utf-8')
+        self.assertEqual(claim_template.count('name="csrf_token"'), 2)
+        self.assertIn('value="{{ csrf_token() }}"', claim_template)
+
+    def test_connect_forget_peer_mentions_residue_cleanup(self) -> None:
+        connect_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'connect.html').read_text(encoding='utf-8')
+        self.assertIn('clean stored trust/user residue for that peer', connect_template)
+        self.assertIn("purge_residue: true", connect_template)
+        self.assertIn("showAlert('Peer removed from known list and local residue cleaned up.'", connect_template)
+
+    def test_connect_page_supports_external_mesh_endpoint_invites(self) -> None:
+        connect_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'connect.html').read_text(encoding='utf-8')
+        self.assertIn('id="externalEndpoint"', connect_template)
+        self.assertIn('wss://example.ngrok-free.app or ws://0.tcp.ngrok.io:12345', connect_template)
+        self.assertIn('external_endpoint=', connect_template)
+        self.assertIn('Regenerated with external endpoint!', connect_template)
+
+    def test_settings_device_profile_precedes_system_information(self) -> None:
+        settings_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'settings.html').read_text(encoding='utf-8')
+        device_pos = settings_template.find('Device Profile')
+        system_pos = settings_template.find('System Information')
+        self.assertGreater(device_pos, 0)
+        self.assertGreater(system_pos, 0)
+        self.assertLess(device_pos, system_pos)
+
+    def test_profile_theme_is_per_user_and_settings_theme_is_default(self) -> None:
+        profile_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'profile.html').read_text(encoding='utf-8')
+        settings_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'settings.html').read_text(encoding='utf-8')
+        self.assertIn('per-user', profile_template)
+        self.assertIn('Default Theme', settings_template)
+        self.assertIn('each user can override via Profile', settings_template)
+
     def test_channel_reply_button_uses_dataset_helper(self) -> None:
         channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
         self.assertIn("function setReplyFromButton(button)", channels_template)
         self.assertIn("onclick=\"setReplyFromButton(this)\"", channels_template)
         self.assertNotIn("onclick=\"setReplyTo('${message.id}'", channels_template)
+
+    def test_create_channel_defaults_to_private_and_resets_to_private(self) -> None:
+        channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
+        self.assertIn('id="type-private" value="private" checked', channels_template)
+        self.assertNotIn('id="type-public" value="public" checked', channels_template)
+        self.assertIn('Private by default.', channels_template)
+        self.assertIn("const priv = document.getElementById('type-private');", channels_template)
+        self.assertIn("if (priv) priv.checked = true;", channels_template)
+
+    def test_private_channel_icons_use_normalized_channel_type_or_privacy_mode(self) -> None:
+        channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
+        self.assertIn("channel.channel_type.value if channel.channel_type is not string", channels_template)
+        self.assertIn("channel_type_value == 'private' or channel.privacy_mode in ['private', 'confidential']", channels_template)
+
+    def test_channel_delete_menu_item_is_click_wired(self) -> None:
+        channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
+        self.assertIn("const deleteBtn = e.target.closest('.channel-delete-btn');", channels_template)
+        self.assertIn('onclick="return handleChannelDeleteClick(event, this)"', channels_template)
+        self.assertIn("function handleChannelDeleteClick(event, button)", channels_template)
+        self.assertIn("confirmDeleteChannelById(channelId, channelName);", channels_template)
+        self.assertIn("const channelId = String(_toolsPortalChannelId || '').trim();", channels_template)
+        self.assertIn("confirmDeleteChannelById(channelId, channelName);", channels_template)
+
+    def test_channel_delete_permission_honors_creator_metadata(self) -> None:
+        channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
+        self.assertIn('data-created-by="{{ channel.created_by or \'\' }}"', channels_template)
+        self.assertIn("const createdBy = String(item.dataset.createdBy || '').trim();", channels_template)
+        self.assertIn("createdBy === currentUserId", channels_template)
+
+    def test_channel_header_has_direct_delete_action(self) -> None:
+        channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
+        self.assertIn('id="channel-delete-header-btn"', channels_template)
+        self.assertIn('onclick="confirmDeleteChannel()"', channels_template)
+        self.assertIn("const deleteBtn = document.getElementById('channel-delete-header-btn');", channels_template)
+
+    def test_channel_unavailable_images_offer_remote_download_recovery(self) -> None:
+        channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
+        self.assertIn("img && (img.large_attachment || img.storage_mode === 'remote_large'", channels_template)
+        self.assertIn("requestRemoteAttachmentDownload(${JSON.stringify(remotePayload)}, this)", channels_template)
+
+    def test_dm_remote_download_buttons_use_labeled_actions(self) -> None:
+        macros_template = (ROOT / 'canopy' / 'ui' / 'templates' / '_messages_macros.html').read_text(encoding='utf-8')
+        self.assertIn('title="Download from peer"', macros_template)
+        self.assertIn('<i class="bi bi-cloud-download"></i> Download', macros_template)
 
     def test_miniplayer_no_longer_eagerly_docks_youtube_on_update(self) -> None:
         main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
@@ -30,6 +212,20 @@ class TestFrontendRegressions(unittest.TestCase):
         self.assertIn("function shouldPersistActiveYouTube(el) {", main_js)
         self.assertIn("if (!shouldPersistActiveYouTube(el)) {", main_js)
         self.assertIn("clearYouTubeDockResumeState(el);", main_js)
+
+    def test_persist_active_media_keeps_open_deck_media_in_stage(self) -> None:
+        main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
+        self.assertIn("window.canopyPersistActiveMedia = function() {", main_js)
+        self.assertIn("pinDeckOriginIdsFromSourceEl(sourceEl);", main_js)
+        self.assertIn("if (state.deckOpen) {", main_js)
+        self.assertIn("moveDockedMediaToHost(state.current.el, deckStage);", main_js)
+        self.assertIn("return;", main_js)
+
+    def test_persist_active_media_clears_retry_handle_when_deck_open(self) -> None:
+        main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
+        self.assertIn("if (state.persistMediaRetryHandle) {", main_js)
+        self.assertIn("clearInterval(state.persistMediaRetryHandle);", main_js)
+        self.assertIn("state.persistMediaRetryHandle = null;", main_js)
 
     def test_identity_modal_treats_local_peer_origin_as_local(self) -> None:
         main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
@@ -98,15 +294,32 @@ class TestFrontendRegressions(unittest.TestCase):
         self.assertIn("window.renderCanopyAttentionBell(filterCanopyAttentionItems(canopySidebarAttentionState.items));", main_js)
         self.assertIn("saveCanopyAttentionDismissCursor(canopySidebarAttentionState.currentEventCursor);", main_js)
         self.assertIn("saveCanopyAttentionSeenCursor(canopySidebarAttentionState.currentEventCursor);", main_js)
+        self.assertIn("const canopySidebarPeerPollState = {", main_js)
+        self.assertIn("setSidebarPeerPollingStatus(`Peer refresh degraded, retrying in ${retrySeconds}s`, true);", main_js)
+        self.assertIn("if (!r.ok) {", main_js)
+        self.assertIn("console.warn('Canopy sidebar peer poll failed:', detail);", main_js)
+        self.assertIn("scheduleNext(baseDelayMs);", main_js)
+        self.assertNotIn("if (!connectedPeerIds.length && canopySidebarPeerState.totalCount === 0) {", main_js)
+        self.assertIn("canvas.toDataURL('image/jpeg', attempt.quality);", settings_template := (ROOT / 'canopy' / 'ui' / 'templates' / 'settings.html').read_text(encoding='utf-8'))
+        self.assertIn("Avatar optimized for mesh sync before upload.", settings_template)
         self.assertIn("const CANOPY_ATTENTION_FILTER_DEFS = [", main_js)
         self.assertIn("const canopyAttentionFilterStorageKey = (() => {", main_js)
         self.assertIn("function renderFilterBar() {", main_js)
         self.assertIn("saveCanopyAttentionFilters(next);", main_js)
         self.assertIn("const filterBar = document.getElementById('notificationFilterBar');", main_js)
         self.assertIn("const filterResetBtn = document.getElementById('notificationFilterReset');", main_js)
+        self.assertIn("function compareAttentionItemsDesc(a, b) {", main_js)
+        self.assertIn("function groupCanopyAttentionItems(items) {", main_js)
+        self.assertIn("groupCanopyAttentionItems(normalized).forEach((group) => {", main_js)
+        self.assertIn("section.className = 'notification-section';", main_js)
+        self.assertIn("label.className = 'notification-section-label';", main_js)
+        self.assertIn("count.className = 'notification-section-count';", main_js)
         self.assertIn("class=\"notification-filter-wrap\"", base_template)
         self.assertIn("id=\"notificationFilterBar\"", base_template)
         self.assertIn("id=\"notificationFilterReset\"", base_template)
+        self.assertIn(".notification-menu .notification-section {", base_template)
+        self.assertIn(".notification-menu .notification-section-label {", base_template)
+        self.assertIn(".notification-menu .notification-section-count {", base_template)
 
     def test_channel_focus_uses_context_window_and_container_scroll(self) -> None:
         channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
@@ -114,6 +327,19 @@ class TestFrontendRegressions(unittest.TestCase):
         self.assertIn("function scrollMessageIntoContainer(msgEl, options = {})", channels_template)
         self.assertIn("query.set('focus_message', focusMessageId);", channels_template)
         self.assertIn("selectChannel(focusChannelId, channelName, { focusMessageId: initialFocusMessageId || '', forceScroll: false });", channels_template)
+
+    def test_antecedent_deck_open_path_uses_short_retry_chain(self) -> None:
+        channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
+        main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
+        self.assertIn("requestAnimationFrame(function () {", channels_template)
+        self.assertNotIn("runDeckRetryIfClosed", channels_template)
+        self.assertNotIn("setTimeout(runDeck, 120);", channels_template)
+        self.assertNotIn("setTimeout(runDeck, 450);", channels_template)
+        self.assertNotIn("setTimeout(runDeck, 1500);", channels_template)
+        self.assertNotIn("setTimeout(runDeck, 2800);", channels_template)
+        self.assertIn("requestAnimationFrame(() => {", main_js)
+        self.assertNotIn("window.setTimeout(() => {\n                            tryOpenFromRow();\n                        }, 120);", main_js)
+        self.assertNotIn("window.setTimeout(() => {\n                            tryOpenFromRow();\n                        }, 450);", main_js)
 
     def test_stream_owner_controls_drive_real_lifecycle_endpoints(self) -> None:
         channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
@@ -188,6 +414,56 @@ class TestFrontendRegressions(unittest.TestCase):
         self.assertIn('function pollCanopyWorkspaceAttentionEvents()', main_js)
         self.assertIn("requestCanopySidebarDmRefresh({ force: false }).catch(() => {});", main_js)
 
+    def test_bookmarks_navigation_and_save_controls_exist(self) -> None:
+        base_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'base.html').read_text(encoding='utf-8')
+        feed_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'feed.html').read_text(encoding='utf-8')
+        channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
+        dm_template = (ROOT / 'canopy' / 'ui' / 'templates' / '_messages_thread_body.html').read_text(encoding='utf-8')
+        self.assertIn("href=\"{{ url_for('ui.bookmarks_page') }}\"", base_template)
+        self.assertIn('window.toggleCanopyBookmark = toggleBookmark;', base_template)
+        self.assertIn('data-source-type="feed_post"', feed_template)
+        self.assertIn('data-source-type="channel_message"', channels_template)
+        self.assertIn('data-source-type="dm_message"', dm_template)
+
+    def test_feed_repost_ui_uses_reference_wrapper_language(self) -> None:
+        feed_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'feed.html').read_text(encoding='utf-8')
+        self.assertIn('data-repost-wrapper="1"', feed_template)
+        self.assertIn('post-repost-card', feed_template)
+        self.assertIn('function repostPost(postId)', feed_template)
+        self.assertIn("apiCall('/ajax/repost_post'", feed_template)
+        self.assertIn('Open original', feed_template)
+        self.assertIn('Original source unavailable', feed_template)
+        self.assertIn('bi bi-repeat', feed_template)
+
+    def test_channel_repost_ui_uses_reference_wrapper_language(self) -> None:
+        channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
+        self.assertIn('data-repost-wrapper="1"', channels_template)
+        self.assertIn('function renderChannelRepostCard(message)', channels_template)
+        self.assertIn('function toggleChannelRepostComposer(messageId)', channels_template)
+        self.assertIn("apiCall('/ajax/repost_channel_message'", channels_template)
+        self.assertIn("function canopyOpenChannelAntecedentDeck(sourceMessageId)", channels_template)
+        self.assertIn("onclick=\"canopyOpenChannelAntecedentDeck(", channels_template)
+        self.assertIn('Original source unavailable', channels_template)
+        self.assertIn('channel-repost-compose-', channels_template)
+
+    def test_feed_and_channel_variant_ui_use_lineage_language(self) -> None:
+        feed_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'feed.html').read_text(encoding='utf-8')
+        channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
+        self.assertIn('data-variant-wrapper="1"', feed_template)
+        self.assertIn('toggleVariantComposer', feed_template)
+        self.assertIn("apiCall('/ajax/variant_post'", feed_template)
+        self.assertIn('Create a lineage variant', feed_template)
+        # Variants render like normal posts; provenance is a slim bar (not a nested “antecedent card”).
+        self.assertIn('post-variant-shell--minimal', feed_template)
+        self.assertIn('post-lineage-bar', feed_template)
+        self.assertIn('Antecedent{% if ref.author_display', feed_template)
+        self.assertIn('function renderChannelVariantCard(message)', channels_template)
+        self.assertIn('toggleChannelVariantComposer', channels_template)
+        self.assertIn("apiCall('/ajax/variant_channel_message'", channels_template)
+        self.assertIn('post-lineage-bar', channels_template)
+        self.assertIn('Antecedent unavailable', channels_template)
+        self.assertIn('channel-variant-compose-', channels_template)
+
     def test_sidebar_cards_support_three_states_and_mini_player_placement(self) -> None:
         base_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'base.html').read_text(encoding='utf-8')
         main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
@@ -213,6 +489,7 @@ class TestFrontendRegressions(unittest.TestCase):
         main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
         self.assertIn('id="sidebar-media-mini-expand"', base_template)
         self.assertIn('id="sidebar-media-deck"', base_template)
+        self.assertIn("wheel/scroll reaches the channel/feed", base_template)
         self.assertIn('id="sidebar-media-deck-stage"', base_template)
         self.assertIn('id="sidebar-media-deck-queue"', base_template)
         self.assertIn('id="sidebar-media-deck-seek"', base_template)
@@ -233,6 +510,81 @@ class TestFrontendRegressions(unittest.TestCase):
         self.assertIn("function seekCurrentMediaTo(ratio) {", main_js)
         self.assertIn("deckQueue.addEventListener('click'", main_js)
         self.assertIn("deckSeek.addEventListener('change'", main_js)
+        self.assertIn('id="sidebar-media-deck-widget-summary"', base_template)
+        self.assertIn('id="sidebar-media-deck-station-summary"', base_template)
+        self.assertIn('id="sidebar-media-deck-station-policy"', base_template)
+        self.assertIn('id="sidebar-media-deck-station-title"', base_template)
+        self.assertIn('id="sidebar-media-deck-station-badges"', base_template)
+        self.assertIn('id="sidebar-media-deck-widget-badges"', base_template)
+        self.assertIn('id="sidebar-media-deck-widget-details"', base_template)
+        self.assertIn('id="sidebar-media-deck-widget-actions"', base_template)
+        self.assertIn('id="sidebar-media-deck-queue-toggle"', base_template)
+        self.assertIn('id="sidebar-media-deck-detail-toggle"', base_template)
+        self.assertIn(".sidebar-media-deck-station-summary", base_template)
+        self.assertIn(".sidebar-media-deck-widget-summary", base_template)
+        self.assertIn(".sidebar-media-deck.is-module-active .sidebar-media-deck-stage {", base_template)
+        self.assertIn(
+            ".sidebar-media-deck.is-module-active .sidebar-media-deck-stage-shell {",
+            base_template,
+        )
+        self.assertIn(
+            ".sidebar-media-deck.is-module-active .sidebar-media-deck-scroll {",
+            base_template,
+        )
+        self.assertIn(
+            "min-height: clamp(260px, 42vh, 720px) !important",
+            base_template,
+        )
+
+    def test_source_layout_v1_is_rendered_across_surfaces_and_drives_default_deck_entry(self) -> None:
+        base_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'base.html').read_text(encoding='utf-8')
+        channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
+        feed_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'feed.html').read_text(encoding='utf-8')
+        messages_template = (ROOT / 'canopy' / 'ui' / 'templates' / '_messages_thread_body.html').read_text(encoding='utf-8')
+        messages_macros = (ROOT / 'canopy' / 'ui' / 'templates' / '_messages_macros.html').read_text(encoding='utf-8')
+        main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
+
+        self.assertIn('data-canopy-source-layout=', channels_template)
+        self.assertIn('JSON.stringify(m.source_layout)', channels_template)
+        self.assertGreaterEqual(channels_template.count('scheduleChannelSourceLayouts(messagesContainer)'), 3)
+        self.assertIn('function scheduleChannelSourceLayouts', channels_template)
+        self.assertIn('data-canopy-source-layout=', feed_template)
+        self.assertIn('data-canopy-source-layout=', messages_template)
+        self.assertIn('data-canopy-source-ref="content:lede"', channels_template)
+        self.assertIn('data-canopy-source-ref="content:lede"', feed_template)
+        self.assertIn('data-canopy-source-ref="content:lede"', messages_template)
+        self.assertIn('data-canopy-source-ref="attachment:', channels_template)
+        self.assertIn('data-canopy-source-ref="widget:', channels_template)
+        self.assertIn('data-canopy-source-ref="attachment:', messages_macros)
+        self.assertIn('data-canopy-source-ref="widget:', main_js)
+        self.assertIn("function applySourceLayout(rootEl) {", main_js)
+        self.assertIn("function promoteAttachmentHostNode(node) {", main_js)
+        self.assertIn("canopy-source-layout-deck-launch", main_js)
+        self.assertIn("function applySourceLayoutsInScope(scope) {", main_js)
+        self.assertIn("window.canopyApplySourceLayoutsInScope = applySourceLayoutsInScope", main_js)
+        self.assertIn("function getSourceLayoutDefaultRef(sourceEl) {", main_js)
+        self.assertIn("rootEl.setAttribute('data-canopy-default-deck-ref'", main_js)
+        self.assertIn(".canopy-source-layout-shell", base_template)
+        self.assertIn(".canopy-source-layout-hero-label", base_template)
+        self.assertIn("shouldSplitChannelImageGridsForSourceLayout", channels_template)
+        self.assertIn(".canopy-source-layout-deck-launch", base_template)
+        self.assertIn(".canopy-source-layout-top", base_template)
+        self.assertIn(".canopy-source-layout-strip", base_template)
+        self.assertIn('data-canopy-module-shell="1"', main_js)
+        self.assertIn(".sidebar-media-deck-detail.is-collapsed", base_template)
+        self.assertIn(".sidebar-media-deck-queue-shell.is-collapsed .sidebar-media-deck-queue", base_template)
+        self.assertIn("function buildSourceDeckItems(sourceEl, activeEl) {", main_js)
+        self.assertIn("function buildSourceWidgetList(sourceEl) {", main_js)
+        self.assertIn("function renderDeckStationSummary(manifest) {", main_js)
+        self.assertIn("function renderDeckWidgetSummary(item) {", main_js)
+        self.assertIn("function renderDeckWidgetStage(item) {", main_js)
+        self.assertIn("function runDeckWidgetAction(action, item) {", main_js)
+        self.assertIn("function isDeckModuleItem(item) {", main_js)
+        self.assertIn("function setDeckQueueCollapsed(collapsed) {", main_js)
+        self.assertIn("function setDeckDetailCollapsed(collapsed) {", main_js)
+        self.assertIn("function syncDeckLayoutMode(selectedItem) {", main_js)
+        self.assertIn("deckLayoutLastQueueCount", main_js)
+        self.assertIn("deck.classList.toggle('is-module-active', moduleActive);", main_js)
 
     def test_media_deck_switching_uses_central_deactivation_and_disconnect_cleanup(self) -> None:
         main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
@@ -245,36 +597,48 @@ class TestFrontendRegressions(unittest.TestCase):
         self.assertIn("const staleCurrent = state.current;", main_js)
         self.assertIn("deactivateMediaEntry(staleCurrent);", main_js)
 
-    def test_media_deck_adds_source_level_launcher_for_playable_posts_and_messages(self) -> None:
+    def test_media_deck_adds_source_level_launcher_for_media_and_widget_posts(self) -> None:
         base_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'base.html').read_text(encoding='utf-8')
         main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
         self.assertIn(".canopy-media-deck-source-slot", base_template)
         self.assertIn(".canopy-media-deck-launcher", base_template)
         self.assertIn(".canopy-media-mini-launcher", base_template)
+        self.assertIn(".canopy-media-playback-launcher", base_template)
         self.assertIn(".canopy-media-deck-launcher-count", base_template)
         self.assertIn("touch-action: manipulation", base_template)
         self.assertIn("const mqCoarseOrNarrow = window.matchMedia('(max-width: 640px), (pointer: coarse)');", main_js)
         self.assertIn("function resolveSourceMediaDeckLauncherHost(sourceEl) {", main_js)
-        self.assertIn("function openMediaDeckForSource(sourceEl) {", main_js)
+        self.assertIn("function openMediaDeckForSource(sourceEl, options = {}) {", main_js)
         self.assertIn("function syncSourceMediaDeckLauncher(sourceEl) {", main_js)
         self.assertIn("function syncSourceMediaDeckLaunchersInScope(scope) {", main_js)
         self.assertIn("btnDeck.setAttribute('data-open-media-deck', '1');", main_js)
         self.assertIn("const actionsHost = sourceEl.querySelector('[data-post-actions] .d-flex.gap-2.flex-wrap, .message-actions .d-flex.gap-2.flex-wrap');", main_js)
         self.assertIn("slot.className = 'canopy-media-deck-source-slot';", main_js)
-        self.assertIn("btnDeck.innerHTML = `<i class=\"bi bi-collection-play\"></i><span class=\"canopy-media-deck-launcher-label\">Media deck</span><span class=\"canopy-media-deck-launcher-count\">${countLabel}</span>`;", main_js)
+        self.assertIn("data-canopy-playback-launcher", main_js)
+        self.assertIn("canopy-media-playback-launcher", main_js)
+        self.assertIn("btnDeck.innerHTML =", main_js)
+        self.assertIn("canopy-media-deck-launcher-count", main_js)
         self.assertIn("state.deckSelectedKey = preferred.key;", main_js)
         self.assertIn("state.deckOpen = true;", main_js)
         self.assertIn("selectDeckItem(preferred, { play: false });", main_js)
         self.assertIn("function materializeYouTubeFacade(facade, options = {}) {", main_js)
         self.assertIn("url.searchParams.set('autoplay', options.autoplay === true ? '1' : '0');", main_js)
         self.assertIn("materializeYouTubeFacade(facade, { autoplay: true });", main_js)
+        self.assertIn("window.canopyRegisterMediaNode(iframe);", main_js)
+        self.assertIn("window.canopyRegisterMediaNode = registerMediaNode;", main_js)
+        self.assertIn("function createYouTubeFacadeElement(videoId, iframeSrc) {", main_js)
+        self.assertIn("wrapper.appendChild(createYouTubeFacadeElement(videoId, buildYouTubeEmbedSrc(videoId, true)));", main_js)
         self.assertIn("sourceEl.querySelectorAll('audio, video, .youtube-embed').forEach(pushCandidate);", main_js)
+        self.assertIn("function getActiveMediaForSource(sourceEl) {", main_js)
+        self.assertIn("return buildRelatedMediaList(sourceEl, getActiveMediaForSource(sourceEl));", main_js)
         self.assertIn("const ytEl = resolveYouTubeMediaElement(el, { activate: true, autoplay: true });", main_js)
         self.assertIn("deferYouTubeMaterialize: true", main_js)
         self.assertIn("activate: !defer, autoplay: false", main_js)
+        self.assertIn("state.deckSelectedKey = item.key || '';", main_js)
         self.assertIn("function openMiniPlayerForSource(sourceEl) {", main_js)
         self.assertIn("function switchDeckToMiniPlayer() {", main_js)
         self.assertIn("btnMini.setAttribute('data-open-mini-player', '1');", main_js)
+        self.assertIn("const mediaItems = items.filter(isDeckMediaItem);", main_js)
         self.assertIn("forceDockMini:", main_js)
         self.assertIn("function isYouTubeFacadeOnly(el) {", main_js)
         self.assertIn("function repairMediaCurrentReference() {", main_js)
@@ -298,11 +662,13 @@ class TestFrontendRegressions(unittest.TestCase):
         self.assertIn("deckSelectedKey: ''", main_js)
         self.assertIn("miniUpdateFrame: 0", main_js)
         self.assertIn("miniUpdateTimer: null", main_js)
+        self.assertIn("persistMediaRetryHandle: null", main_js)
         self.assertIn("function scheduleMiniUpdate(delay = 0) {", main_js)
         self.assertIn("state.miniUpdateFrame = window.requestAnimationFrame(() => {", main_js)
         self.assertIn("const nextSignature = `${activeKey}::${items.map((item) => `${item.key}:${item.type}`).join('|')}`;", main_js)
-        self.assertIn("if (state.deckQueueSignature === nextSignature && deckQueue.childElementCount) {", main_js)
-        self.assertIn("btn.setAttribute('aria-expanded', isActive && state.deckOpen ? 'true' : 'false');", main_js)
+        self.assertIn("const renderedQueueItems = deckQueue.querySelectorAll('.sidebar-media-deck-item').length;", main_js)
+        self.assertIn("if (state.deckQueueSignature === nextSignature && deckQueue.childElementCount && renderedQueueItems === items.length) {", main_js)
+        self.assertIn("btn.setAttribute('aria-expanded', isActive ? 'true' : 'false');", main_js)
         self.assertIn("state.tickHandle = setInterval(scheduleMiniUpdate, 700);", main_js)
         self.assertNotIn("state.tickHandle = setInterval(updateMini, 700);", main_js)
 
@@ -311,10 +677,31 @@ class TestFrontendRegressions(unittest.TestCase):
         base_html = (ROOT / 'canopy' / 'ui' / 'templates' / 'base.html').read_text(encoding='utf-8')
         self.assertIn("state.returnUrl = null;", main_js)
         self.assertIn("state.dockedSubtitle = null;", main_js)
+        self.assertIn("const wrapper = (el.matches && el.matches('.youtube-embed'))", main_js)
+        self.assertIn("iframe.__canopyMiniMediaId = holder.__canopyMiniMediaId;", main_js)
+        self.assertIn("const embedMatch = url.pathname.match(/\\/embed\\/([^/?#&]+)/);", main_js)
+        self.assertIn("const watchId = String(url.searchParams.get('v') || '').trim();", main_js)
         self.assertNotIn("const keepDeckVisible", main_js)
         self.assertIn("closeMediaDeck({ forceClose: true });", main_js)
         self.assertIn("<span>Show source</span>", base_html)
         self.assertIn("<span>Return to source</span>", base_html)
+        self.assertIn("state.deckQueueNeedsRefresh = true;", main_js)
+        self.assertIn("const existingWrapper = getMediaDockWrapper(el, type);", main_js)
+        self.assertIn("const storeTarget = wrapper !== el ? wrapper : el;", main_js)
+        self.assertIn("|| (wrapper && wrapper !== el ? wrapper.__canopyAutoDockPlaceholder : null);", main_js)
+        self.assertIn("if (wrapper && wrapper !== el) delete wrapper.__canopyAutoDockPlaceholder;", main_js)
+        self.assertIn("var ytWrapperForPlaceholder = el.closest ? el.closest('.youtube-embed') : null;", main_js)
+
+    def test_header_navigation_hard_stops_active_media_instead_of_spawning_miniplayer(self) -> None:
+        main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
+        base_html = (ROOT / 'canopy' / 'ui' / 'templates' / 'base.html').read_text(encoding='utf-8')
+        self.assertIn('data-canopy-stop-active-media-nav="1"', base_html)
+        self.assertIn("function stopActiveMediaPlayback(options = {}) {", main_js)
+        self.assertIn("document.querySelectorAll('[data-canopy-stop-active-media-nav]').forEach((link) => {", main_js)
+        self.assertIn("stopActiveMediaPlayback({ clearDismissed: true });", main_js)
+        self.assertIn("state.current = null;", main_js)
+        self.assertIn("state.deckItems = [];", main_js)
+        self.assertIn("hideMini();", main_js)
 
     def test_media_deck_open_state_is_authoritative_over_miniplayer_auto_logic(self) -> None:
         main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
@@ -327,10 +714,28 @@ class TestFrontendRegressions(unittest.TestCase):
         main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
         self.assertIn("function getDeckSelectedItem() {", main_js)
         self.assertIn("function selectDeckItem(item, options = {}) {", main_js)
-        self.assertIn("ensureMediaIdentity(state.current.el)", main_js)
+        self.assertIn("state.deckSelectedKey = item.key || '';", main_js)
+        self.assertIn("const key = String(btn.getAttribute('data-media-key') || '').trim();", main_js)
+        self.assertIn("state.deckItems.find((item) => String(item && item.key || '').trim() === key)", main_js)
+        self.assertNotIn("nextItem = state.deckItems[index];", main_js)
         self.assertIn("pauseMediaElement(state.current.el, state.current.type);", main_js)
-        self.assertIn("selectDeckItem(nextItem, { play: false });", main_js)
+        self.assertIn("selectDeckItem(nextItem, { play: true });", main_js)
+        self.assertIn("function scrollDeckStageIntoView(behavior = 'smooth') {", main_js)
         self.assertIn("scrollDeckSelectionIntoView();", main_js)
+
+    def test_media_deck_youtube_wrapper_iframe_transitions_do_not_count_as_switches(self) -> None:
+        main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
+        self.assertIn("const curWrapper = getMediaDockWrapper(state.current.el, 'youtube');", main_js)
+        self.assertIn("const newWrapper = getMediaDockWrapper(el, 'youtube');", main_js)
+        self.assertIn("if (curWrapper && newWrapper && curWrapper === newWrapper) {", main_js)
+        self.assertIn("state.current.el = el;", main_js)
+
+    def test_deck_queue_reconciliation_prefers_current_scan_order_and_resyncs_selected_key(self) -> None:
+        main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
+        self.assertIn("builtArr.forEach((item) => {", main_js)
+        self.assertIn("if (replacement) {", main_js)
+        self.assertIn("if (selectedItem && state.deckSelectedKey && selectedItem.key !== state.deckSelectedKey) {", main_js)
+        self.assertIn("deckSource.textContent = selectedItem ? deckItemContextSubtitle(selectedItem) : 'Now playing from Canopy';", main_js)
 
     def test_media_deck_first_click_hardening(self) -> None:
         main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
@@ -356,6 +761,148 @@ class TestFrontendRegressions(unittest.TestCase):
         self.assertIn("(min-height: 541px) and (max-height: 720px) and (orientation: landscape)", base_html)
         self.assertNotIn("min-height: min(86vh, 860px);", base_html)
 
+    def test_media_deck_desktop_scroll_and_reference_station_dedup(self) -> None:
+        base_html = (ROOT / 'canopy' / 'ui' / 'templates' / 'base.html').read_text(encoding='utf-8')
+        main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
+        self.assertIn('class="sidebar-media-deck-scroll"', base_html)
+        self.assertIn('class="sidebar-media-deck-footer"', base_html)
+        scroll_idx = base_html.find(".sidebar-media-deck-scroll {")
+        self.assertGreater(scroll_idx, 0, "Expected .sidebar-media-deck-scroll block")
+        scroll_snip = base_html[scroll_idx : scroll_idx + 420]
+        self.assertIn("min-height: 0", scroll_snip)
+        self.assertIn("overflow-y: auto", scroll_snip)
+        self.assertIn("scrollbar-gutter: stable", scroll_snip)
+        footer_idx = base_html.find(".sidebar-media-deck-footer {")
+        self.assertGreater(footer_idx, 0)
+        self.assertIn("flex-shrink: 0", base_html[footer_idx : footer_idx + 220])
+        self.assertIn("const isSimpleReferenceSurface =", main_js)
+        self.assertIn("station.kind === 'reference_surface'", main_js)
+        self.assertIn("if (isSimpleReferenceSurface) return;", main_js)
+
+    def test_deck_widget_manifests_are_typed_and_sanitized(self) -> None:
+        main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
+        channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
+        self.assertIn("const CANOPY_DECK_WIDGET_RENDER_MODES = new Set([", main_js)
+        self.assertIn("const CANOPY_DECK_WIDGET_TYPES = new Set([", main_js)
+        self.assertIn("'module_runtime'", main_js)
+        self.assertIn("'module_surface'", main_js)
+        self.assertIn("const CANOPY_DECK_WIDGET_ACTION_RISKS = new Set(['view', 'low']);", main_js)
+        self.assertIn("const CANOPY_DECK_WIDGET_ACTION_SCOPES = new Set(['source', 'station']);", main_js)
+        self.assertIn("const CANOPY_DECK_WIDGET_STATION_KINDS = new Set([", main_js)
+        self.assertIn("function normalizeDeckWidgetStationSurface(rawSurface, widgetType, providerLabel, title) {", main_js)
+        self.assertIn("function normalizeDeckWidgetActionPolicy(rawPolicy, widgetType, actions) {", main_js)
+        self.assertIn("function normalizeDeckWidgetSourceBinding(rawBinding) {", main_js)
+        self.assertIn("const CANOPY_DECK_IFRAME_HOSTS = new Set([", main_js)
+        self.assertIn("const CANOPY_DECK_EXTERNAL_HOSTS = new Set([", main_js)
+        self.assertIn("function sanitizeDeckWidgetManifest(rawManifest) {", main_js)
+        self.assertIn("station_surface: stationSurface,", main_js)
+        self.assertIn("action_policy: actionPolicy,", main_js)
+        self.assertIn("source_binding: sourceBinding,", main_js)
+        self.assertIn("function buildDeckWidgetManifestAttrs(rawManifest) {", main_js)
+        self.assertIn("function parseDeckWidgetManifest(node) {", main_js)
+        self.assertIn("handler: 'open_stream_workspace'", channels_template)
+        self.assertIn("station_surface: {", channels_template)
+        self.assertIn("action_policy: {", channels_template)
+        self.assertIn("source_binding: {", channels_template)
+        self.assertIn("risk: 'low'", channels_template)
+        self.assertIn("data-canopy-widget-manifest", channels_template)
+
+    def test_canopy_module_runtime_scaffold_and_attachment_path_exist(self) -> None:
+        main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
+        channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
+        feed_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'feed.html').read_text(encoding='utf-8')
+        dm_macros = (ROOT / 'canopy' / 'ui' / 'templates' / '_messages_macros.html').read_text(encoding='utf-8')
+        module_demo = (ROOT / 'canopy' / 'ui' / 'static' / 'modules' / 'piano-lab-v1.canopy-module.html').read_text(encoding='utf-8')
+        self.assertIn("const CANOPY_MODULE_BUNDLE_FORMATS = new Set(['single_html']);", main_js)
+        self.assertIn("const CANOPY_MODULE_CAPABILITIES = new Set([", main_js)
+        self.assertIn("function sanitizeDeckModuleBundleUrl(rawUrl) {", main_js)
+        self.assertIn("function normalizeDeckModuleRuntime(rawRuntime, title) {", main_js)
+        self.assertIn("function fetchDeckModuleBundle(runtime) {", main_js)
+        self.assertIn("function buildDeckModuleBootstrapScript(sessionId, item) {", main_js)
+        self.assertIn("function injectDeckModuleRuntime(bundleHtml, bootstrapJs, manifest) {", main_js)
+        self.assertIn("function buildDeckModuleContext(item) {", main_js)
+        self.assertIn("if (manifest.render_mode === 'module_runtime' && manifest.module_runtime) {", main_js)
+        self.assertIn("data-canopy-module-session-id", main_js)
+        self.assertIn("CanopyModule", module_demo)
+        self.assertIn("Piano Lab Module", module_demo)
+        self.assertIn("function displayAttachments(attachments, sourceLayout) {", channels_template)
+        self.assertIn("const fileId = String((att && (att.id || att.file_id || att.origin_file_id)) || fileIdFromAttachmentUrl(att) || '').trim();", channels_template)
+        self.assertIn("widget_type: 'module_surface'", channels_template)
+        self.assertIn("render_mode: 'module_runtime',", channels_template)
+        self.assertIn("'render_mode': 'module_runtime'", feed_template)
+        self.assertIn("'render_mode': 'module_runtime'", dm_macros)
+        self.assertIn("function canopyIsModuleBundle(filename, contentType) {", main_js)
+        self.assertIn("if (canopyIsModuleBundle(filename, contentType)) return false;", main_js)
+        self.assertIn("window.canopyIsModuleBundle = canopyIsModuleBundle;", main_js)
+        self.assertIn("function firstConnectedDeckAnchor(...candidates) {", main_js)
+        self.assertIn("deckOriginSourceEl", main_js)
+        self.assertIn("function widgetManifestFromDeckNode(node) {", main_js)
+        self.assertIn("function reconcileDeckQueueItemsBuilt(built, previousItems, origin) {", main_js)
+        self.assertIn("function deckItemKeyUsable(key) {", main_js)
+        self.assertIn("function deckItemBelongsToOrigin(item, origin) {", main_js)
+        self.assertIn("function canPreserveDeckItemFromPrevious(item, origin) {", main_js)
+        self.assertIn("function widgetDeckOriginContainsEl(origin, el) {", main_js)
+        self.assertIn("function restoreDeckStageChildToSource(node) {", main_js)
+        self.assertIn("restoreDockedMedia(mediaEl, { preferMini: false });", main_js)
+        self.assertIn("skipResumeUrlRewrite: true,", main_js)
+        self.assertIn("deckOriginMessageId", main_js)
+        self.assertIn("#sidebar-media-deck-stage, #sidebar-media-mini-video", main_js)
+        self.assertIn("function openMediaDeckForManifestNode(node) {", main_js)
+        self.assertIn("window.openMediaDeckForManifestNode = openMediaDeckForManifestNode;", main_js)
+        self.assertIn("const primaryBundleUrl = sanitizeDeckModuleBundleUrl(rawRuntime.bundle_url || '');", main_js)
+        self.assertIn("const bundleUrl = primaryBundleUrl || sanitizeDeckModuleBundleUrl(fallbackBundleUrl);", main_js)
+        self.assertIn("const fileIdFromAttachmentUrl = (att) => {", channels_template)
+        self.assertIn("const bundleUrl = fileId ? `/files/${encodeURIComponent(fileId)}` : '';", channels_template)
+        self.assertIn('data-canopy-widget-key="${_escapeAttr(manifest.key)}"', channels_template)
+        self.assertIn('data-canopy-widget-key="{{ module_manifest.key|e }}"', feed_template)
+        self.assertIn('data-canopy-widget-key="{{ module_manifest.key|e }}"', dm_macros)
+        self.assertIn("'bundle_url': '/files/' ~ attachment_file_id", feed_template)
+        self.assertIn("'bundle_url': '/files/' ~ attachment_file_id", dm_macros)
+        self.assertIn("function buildDeckWidgetItem(node, manifest, sourceEl) {", main_js)
+        self.assertIn("function mergeExplicitDeckItem(items, explicitItem) {", main_js)
+        self.assertIn("items = reconcileDeckQueueItemsBuilt(items, previousDeckItems, sourceEl);", main_js)
+        self.assertIn("const fullDeckItems = reconcileDeckQueueItemsBuilt(", main_js)
+        self.assertIn("function buildCanopyModuleSurfaceManifestFromBundleId(fileId, rawFileName) {", main_js)
+        self.assertIn("function extractDeckModuleBundleFileIdFromManifestAttr(raw) {", main_js)
+        self.assertIn("function resolveCanopyModuleDeckManifestHost(node) {", main_js)
+        self.assertIn("function extractCanopyModuleBundleFileIdFromHost(host) {", main_js)
+        self.assertIn("resolveCanopyModuleDeckManifestHost(node)", main_js)
+        self.assertIn("extractCanopyModuleBundleFileIdFromHost(manifestHost)", main_js)
+        self.assertIn("const explicitItem = buildDeckWidgetItem(manifestHost, manifest, sourceEl);", main_js)
+        self.assertIn("let items = mergeExplicitDeckItem(getSourceDeckItems(sourceEl), explicitItem);", main_js)
+        self.assertIn("const explicitSelectedWidget = (", main_js)
+        self.assertIn("state.deckItems = reconcileDeckQueueItemsBuilt(", main_js)
+        self.assertIn("const builtByKey = new Map();", main_js)
+        self.assertIn("const replacement = builtByKey.get(item.key);", main_js)
+        self.assertIn("if (!canPreserveDeckItemFromPrevious(item, origin)) return;", main_js)
+        self.assertIn("state.deckSelectedKey = pref.key || '';", main_js)
+        self.assertIn("Open module", channels_template)
+        self.assertIn("data-canopy-module-bundle-id", channels_template)
+        self.assertIn("data-canopy-module-bundle-id", feed_template)
+        self.assertIn("data-canopy-module-bundle-id", dm_macros)
+        self.assertIn('data-canopy-module-card="1"', channels_template)
+        self.assertIn('data-canopy-module-card="1"', feed_template)
+        self.assertIn('data-canopy-module-card="1"', dm_macros)
+        self.assertIn('openMediaDeckForManifestNode(this)', channels_template)
+        self.assertIn('openMediaDeckForManifestNode(this)', feed_template)
+        self.assertIn('openMediaDeckForManifestNode(this)', dm_macros)
+
+    def test_deck_widget_actions_are_policy_gated_and_source_binding_updates_return_label(self) -> None:
+        main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
+        self.assertIn("function canRunDeckWidgetAction(action, manifest) {", main_js)
+        self.assertIn("if (maxRisk === 'view' && action.risk !== 'view') return false;", main_js)
+        self.assertIn("if (action.requires_confirmation === true) {", main_js)
+        self.assertIn("selectedItem.manifest.source_binding.return_label", main_js)
+
+    def test_deck_widget_manifest_v1_doc_tracks_contract(self) -> None:
+        doc = (ROOT / 'docs' / 'CANOPY_DECK_WIDGET_MANIFEST_V1.md').read_text(encoding='utf-8')
+        self.assertIn('sanitizeDeckWidgetManifest', doc)
+        self.assertIn('station_surface', doc)
+        self.assertIn('action_policy', doc)
+        self.assertIn('source_binding', doc)
+        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
+        self.assertIn('CANOPY_DECK_WIDGET_MANIFEST_V1.md', readme)
+
     def test_media_deck_portal_is_body_level_for_ios_fixed_positioning(self) -> None:
         base_html = (ROOT / 'canopy' / 'ui' / 'templates' / 'base.html').read_text(encoding='utf-8')
         self.assertIn('data-canopy-deck-portal="1"', base_html)
@@ -366,6 +913,18 @@ class TestFrontendRegressions(unittest.TestCase):
             'Deck portal should render after main layout (outside scroll/overflow sidebar stack)',
         )
 
+    def test_mobile_deck_defaults_collapse_secondary_panels_and_refocus_stage(self) -> None:
+        main_js = (ROOT / 'canopy' / 'ui' / 'static' / 'js' / 'canopy-main.js').read_text(encoding='utf-8')
+        base_html = (ROOT / 'canopy' / 'ui' / 'templates' / 'base.html').read_text(encoding='utf-8')
+        self.assertIn("function isMobileDeckModalMode() {", main_js)
+        self.assertIn("function scrollDeckStageIntoView(behavior = 'smooth') {", main_js)
+        self.assertIn("setDeckQueueCollapsed(mobileDeckMode);", main_js)
+        self.assertIn("setDeckDetailCollapsed(mobileDeckMode);", main_js)
+        self.assertIn("selectDeckItem(nextItem, { play: true });", main_js)
+        self.assertIn("scrollDeckStageIntoView();", main_js)
+        self.assertIn(".sidebar-media-deck-action-label {", base_html)
+        self.assertIn("display: none;", base_html)
+
     def test_dm_search_uses_explicit_search_state_to_suspend_live_refresh(self) -> None:
         messages_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'messages.html').read_text(encoding='utf-8')
         self.assertIn("const DM_SEARCH_QUERY = ", messages_template)
@@ -374,6 +933,23 @@ class TestFrontendRegressions(unittest.TestCase):
         self.assertIn("if (isDmSearchActive()) {\n            window.location.reload();\n            return;\n        }", messages_template)
         self.assertIn("if (!document.hidden && !isDmSearchActive()) {", messages_template)
         self.assertIn("return window.location.search.includes('search=');", messages_template)
+
+    def test_dm_workspace_includes_thread_body_gap_and_inline_edit_close_path(self) -> None:
+        messages_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'messages.html').read_text(encoding='utf-8')
+        self.assertIn("#dm-thread-body {", messages_template)
+        self.assertIn("gap: 0.38rem;", messages_template)
+        self.assertIn("function setInlineDmEditSaving(messageId, saving) {", messages_template)
+        self.assertIn("function applyInlineDmMessageEdit(messageId, content, editedAt) {", messages_template)
+        self.assertIn("let textEl = msgEl.querySelector('.dm-message-text');", messages_template)
+        self.assertIn("if (!textEl && contentWrap && content) {", messages_template)
+        self.assertIn("contentWrap.insertBefore(textEl, attachmentList);", messages_template)
+        self.assertIn("cancelInlineMessageEdit(messageId, true);", messages_template)
+
+    def test_dm_attachment_macro_renders_video_inline_and_remote_download(self) -> None:
+        messages_macros = (ROOT / 'canopy' / 'ui' / 'templates' / '_messages_macros.html').read_text(encoding='utf-8')
+        self.assertIn("{% elif attachment.type and attachment.type.startswith('video/') %}", messages_macros)
+        self.assertIn("<video controls preload=\"metadata\" playsinline", messages_macros)
+        self.assertIn("requestRemoteAttachmentDownload({{ remote_payload|tojson }}, this)", messages_macros)
 
     def test_channel_search_preserves_search_view_and_scrolls_to_top(self) -> None:
         channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
@@ -388,7 +964,7 @@ class TestFrontendRegressions(unittest.TestCase):
         channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
         self.assertIn('name="create-channel-post-policy"', channels_template)
         self.assertIn('id="create-post-policy-curated"', channels_template)
-        self.assertIn('Use curated posting when the channel should stay high-signal', channels_template)
+        self.assertIn('Only admins and approved posters start posts. Replies stay open.', channels_template)
         self.assertIn("const postPolicy = document.querySelector('input[name=\"create-channel-post-policy\"]:checked')?.value || 'open';", channels_template)
         self.assertIn('post_policy: postPolicy,', channels_template)
         self.assertIn("function renderChannelPostingPolicySummary(policy)", channels_template)
@@ -402,9 +978,20 @@ class TestFrontendRegressions(unittest.TestCase):
         self.assertIn('@media (max-width: 1024px) and (orientation: landscape) and (max-height: 520px)', channels_template)
         self.assertIn(".channel-post-policy-btn .privacy-label", channels_template)
         self.assertIn("label.textContent = curated ? 'Curated' : 'Open';", channels_template)
-        self.assertIn("open: { text: 'Open', icon: 'bi-wifi', cls: 'btn-outline-secondary' },", channels_template)
+        self.assertIn("open: { text: 'Open', icon: 'bi-wifi' },", channels_template)
+        self.assertIn(".channel-header-tool-btn {", channels_template)
         self.assertIn("#channel-posting-badge.open {", channels_template)
         self.assertIn("display: flex !important;", channels_template)
+
+    def test_channel_removal_ui_surfaces_local_vote_state_and_toggle_actions(self) -> None:
+        channels_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'channels.html').read_text(encoding='utf-8')
+        self.assertIn("function syncChannelRemovalHeaderAction(status = currentChannelRemovalStatus, enabled = null) {", channels_template)
+        self.assertIn("Channel removal vote · You voted remove", channels_template)
+        self.assertIn("Channel removal vote · You voted keep", channels_template)
+        self.assertIn("status.can_change_vote", channels_template)
+        self.assertIn("Switch to keep", channels_template)
+        self.assertIn("Switch to remove", channels_template)
+        self.assertIn("Vote unchanged", channels_template)
 
     def test_dashboard_flash_messages_null_check(self) -> None:
         dashboard_template = (ROOT / 'canopy' / 'ui' / 'templates' / 'dashboard.html').read_text(encoding='utf-8')

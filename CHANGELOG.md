@@ -8,6 +8,230 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.5.38] - 2026-04-01
+
+### Fixed
+- **Trust review actions are clearer and less error-prone during operator triage** — Peers with no reconnectable endpoints now surface that state directly, untiered peers no longer look implicitly `Safe`, review-action buttons disable while requests are in flight, and the forget-peer success notice stays visible long enough to confirm the action before reload.
+- **Sparse public-history repair no longer depends on the wrong message-count heuristic** — Bounded catch-up backfill now triggers whenever the local node has genuinely older public history than the remote peer, even if both sides happen to report the same total message count.
+
+## [0.5.37] - 2026-03-31
+
+### Fixed
+- **`claim-admin` recovery works from the normal web form again** — Both claim/recovery forms now include the required hidden CSRF token, so authenticated operators no longer hit a misleading generic `403` when trying to claim or recover instance admin through the browser.
+- **Queued targeted messages no longer get dropped when a peer reconnects** — Pending-message flush now bypasses the duplicate-seen gate only for the explicit flush path, which preserves store-and-forward delivery for already-seen local messages without weakening the normal duplicate-loop protection on regular routing.
+
+## [0.5.36] - 2026-03-31
+
+### Fixed
+- **Sparse public-channel history can now repair older holes instead of stalling at the newest local watermark** — Catch-up requests now include bounded channel history hints, and reconnect-time catch-up can return capped older public messages when a peer's local copy looks partial, which addresses sparse backfill gaps without requiring oversized replay payloads.
+- **Trust review cards now expose remediation actions instead of only warning badges** — The Trust page now gives flagged peers direct `Connect`/`Reconnect`, `Sync now`, and `Refresh profile` actions, plus jump links from the review lane back to the full card, so operators can act on missing labels, stale sockets, and profile drift from the page that surfaced the issue.
+
+## [0.5.35] - 2026-03-31
+
+### Fixed
+- **Trust governance now surfaces peer quality and state more clearly without drifting after interaction** — The Trust page now builds normalized peer cards with label-source, role, connection, and endpoint context in the route, uses a denser governance layout for live/attention/pending review, and keeps zone metrics plus empty states accurate after peer reassignment.
+- **Deck handoff and tunnel reconnect behavior are hardened beyond the initial `0.5.34` patch** — Opening the deck now cancels any lingering mini-player playback retry loop before returning control to the deck, live endpoint diagnostics preserve the actual `wss://` scheme used to reach a peer, and endpoint parsing rejects non-WebSocket schemes instead of normalizing away the caller's intent.
+- **Invite/docs handling is cleaner for external and IPv6 endpoints** — Public-host invite generation now formats IPv6 endpoints correctly, and the peer-connect/API docs now describe both port-forwarded host/port invites and full external tunnel endpoints such as ngrok.
+
+## [0.5.34] - 2026-03-31
+
+### Fixed
+- **Deck playback now stays anchored while you navigate between channels** — Persisting active media no longer re-docks an already-open deck session into the mini-player host during channel switches, which avoids unnecessary YouTube/video DOM churn that could restart playback.
+- **External invites now work more cleanly with ngrok and other tunnel endpoints** — Invite generation accepts a full external `ws://` or `wss://` mesh endpoint, connect/import/reconnect flows preserve that scheme when dialing, and explicit secure tunnel URLs without a typed port now normalize to the expected default port.
+- **Invalid external endpoint input now fails clearly instead of looking like a server fault** — Bad invite endpoint values return a focused `400` validation error so the connect UI and operators get actionable feedback instead of a generic invite-generation failure.
+
+## [0.5.33] - 2026-03-31
+
+### Fixed
+- **Active-peer sidebar state now survives transient connection handovers** — Authenticated connection arbitration no longer creates a brief visibility gap in `get_connected_peers()`, and the sidebar no longer wipes all peers immediately on a single empty poll response, reducing the "connected then zero peers" regression under live mesh churn.
+- **Mesh diagnostics now expose pending-vs-authenticated peer state more clearly** — Runtime diagnostics now report connection-state counts, pending handshake candidates, and recent peer-state transitions so operators can confirm whether the UI, manager snapshot, and socket layer are diverging.
+- **Device avatars are now bounded before they can bloat profile propagation** — The settings UI pre-compresses device avatars for mesh-friendly upload, and the server re-normalizes them to a capped JPEG thumbnail before saving, which prevents oversized profile images from inflating `profile_sync` payloads or blocking metadata convergence.
+
+## [0.5.32] - 2026-03-31
+
+### Fixed
+- **Connected-peer sidebar state now self-heals after missed poll updates** — The peer activity endpoint always returns the current connected-peer snapshot, and the sidebar poll now surfaces failures with bounded retry backoff instead of silently remaining stuck at `No active peers` after mesh sessions have already authenticated.
+
+## [0.5.31] - 2026-03-31
+
+### Fixed
+- **Trusted-peer metadata recovery now repairs more partial-loss cases** — Unchanged profile hashes no longer block recovery when a peer's avatar file, placeholder display name, or reconnect-time cached profile state has gone stale, so trusted peer names and avatars converge again without needing profile changes upstream.
+- **Peer cleanup and rebind now stay scoped to the correct origin** — Forget and re-trust flows now clear per-peer profile caches, and shadow-user fallback lookups are constrained by `origin_peer`, which prevents same-prefix peers from reusing each other's stale identity rows during recovery.
+- **Untrusted peer review now shows safe identity previews without exposing profile data** — Trust/connect views can show a public node label plus deterministic initials and color for unknown peers, giving users recognizable context before trust while intentionally withholding pre-trust avatar bytes and private profile fields.
+
+## [0.5.30] - 2026-03-31
+
+### Fixed
+- **Peer device profiles now recover even when user profile hashes are unchanged** — Incoming profile sync now reapplies the peer-level device profile before hash-based user deduplication, so a missing `peer_device_profiles` row can be rebuilt from the next small profile sync instead of staying absent while user/avatar state looks partially healthy.
+- **Post-connect profile/device sync is now retried after settle-race skips** — When a stable winner connection is still forming, Canopy now logs structured `post_connect_sync_skipped` details, schedules bounded retries for that peer, and sends lightweight profile/device metadata earlier in the recovery sequence once the connection settles.
+- **Endpoint mismatch and oversized-drop diagnostics are more actionable** — Verified handshake peer-id mismatches now reset stale endpoint ownership toward the authenticated peer and emit explicit mapping-action logs, while oversized inbound drops now record the message type so profile/device transport can be distinguished from unrelated large content failures.
+
+## [0.5.29] - 2026-03-31
+
+### Fixed
+- **Reconnect recovery no longer strands peers after churn** — Post-connect sync now keeps a legitimate reconnect task alive until the connection actually survives the settle window, and dead-send failure paths now fire the disconnect callback so reconnect scheduling still happens after a socket silently dies.
+- **Private channel continuity now survives fresh-node restart plus username reuse** — Membership recovery queries now include local username hints, and remote peers can fall back to a peer-scoped username match when the restarted node recreated the same username with a new user ID, allowing existing private channels to be recovered without manual database edits.
+- **Recovery/test harnesses now match the current runtime contracts** — The direct-message callback tolerates older callers that omit `account_type`, and focused recovery/catch-up/admin regressions were corrected so they exercise the real code paths instead of failing on stale timestamps or incomplete test fixtures.
+
+## [0.5.28] - 2026-03-30
+
+### Fixed
+- **Duplicate inbound/outbound reconnect races now converge on one stable winner** — Competing authenticated sockets for the same peer now use deterministic connection arbitration instead of repeatedly replacing each other based on arrival timing, which reduces disconnect/reconnect thrash during simultaneous reconnect attempts.
+- **Post-connect sync now waits briefly for a stable session and coalesces duplicate work** — Canopy now gives a newly authenticated connection a short settle window before bulk sync starts and collapses repeated sync requests for the same peer into at most one active run plus one deferred rerun, reducing `channel_sync` zero-sent failures during churn.
+- **Avatar resync no longer trips on `sqlite3.Row.get` misuse** — The remote avatar recovery path now reads SQLite row values safely using row keys/indexes instead of `.get(...)`, removing the repeated runtime error noise seen during peer profile repair.
+
+## [0.5.27] - 2026-03-30
+
+### Fixed
+- **Placeholder reconcile now asks the origin for exact public channel metadata** — When a trusted non-origin peer surfaces a canonical public name for a stuck `peer-channel-*` row, Canopy now sends a targeted metadata request for that channel ID instead of relying on an incidental full peer sync to eventually carry the rename.
+- **Origin replies now replay only the requested public channel announces** — The reconcile path has a dedicated request/response lane that replays authoritative `CHANNEL_ANNOUNCE` metadata for the requested public channel IDs, so canonical names can land even when heavier sync or catch-up traffic is noisy or delayed.
+- **Finalize failures are now visible and regression-covered** — Added explicit logging around reconcile request send/receive, DB update attempt/commit/readback, timeout handling, and focused tests that verify a placeholder row actually renames after the authoritative announce arrives.
+
+## [0.5.26] - 2026-03-30
+
+### Fixed
+- **Public channel metadata now replays on its own lightweight control-plane path at reconnect** — Canopy now sends per-channel `CHANNEL_ANNOUNCE` metadata replay during post-connect sync so canonical channel names, types, privacy, and posting policy can converge independently of heavier batch sync and catch-up payload delivery.
+- **Startup name convergence no longer relies only on batched sync or content catch-up success** — Even if large message/catch-up paths are delayed, dropped, or still reconciling, public channel identity metadata gets an immediate small replay lane that stays below payload limits on a per-channel basis.
+- **Regression coverage now checks reconnect metadata replay** — Added focused tests to verify post-connect sync replays public channel metadata separately and that those announces carry the authoritative peer information needed for later verification.
+
+## [0.5.25] - 2026-03-30
+
+### Fixed
+- **Trusted relay hints now re-trigger reconcile for half-upgraded placeholder rows** — Public channels that were already promoted to `public/open` but still retained `peer-channel-*` placeholder names no longer dead-end when trusted non-origin peers provide canonical names; Canopy now treats those as reconcile hints and asks the recorded origin for authoritative metadata.
+- **Startup/public convergence repair now covers placeholder markers beyond the fully-private state** — Reconcile candidate scans no longer limit themselves to `private/private` placeholder rows, so older partially upgraded public rows remain eligible for origin-authoritative repair when the relevant peer reconnects.
+- **Regression coverage now includes placeholder-name-only convergence failures** — Added a focused test for the case where a trusted peer reports the correct public name but the local row is already `public/open`, preventing that half-upgraded placeholder state from regressing silently.
+
+## [0.5.24] - 2026-03-30
+
+### Fixed
+- **Bulk public sync now respects legacy peer payload ceilings** — Channel sync and catch-up metadata chunking now target the connected peer's effective bulk-sync budget instead of assuming every peer can accept this node's larger router cap, so mixed-version peers stop dropping otherwise valid startup/public-catalog sync frames.
+- **New peers advertise modern bulk-sync support explicitly** — Nodes that can safely receive the larger 1 MB bulk sync envelopes now advertise a dedicated capability, letting newer peers use the higher budget while older peers continue receiving conservative backward-compatible chunk sizes.
+- **Convergence regressions now cover mixed-version payload budgets** — Added focused tests to ensure legacy peers receive smaller channel-sync and catch-up chunks while newer peers still use the higher modern budget.
+
+## [0.5.23] - 2026-03-30
+
+### Fixed
+- **Private membership recovery now restores visibility to the current local owner** — When peers return private-channel memberships that still point at stale local user IDs after account recreation, Canopy now conservatively rebinds local visibility to the active instance owner instead of leaving those channels hidden behind orphaned local memberships.
+- **Startup now repairs already-imported private channels with stale local memberships** — Existing private/confidential channels that only have stale local-hosted memberships but real message history are now repaired during startup so previously invisible channels reappear without manual database edits.
+- **Public convergence repair coverage now includes local private visibility continuity** — Added focused regressions for membership-recovery rebinding and startup-time private visibility repair so the cross-peer convergence path covers both public metadata and local private membership continuity.
+
+## [0.5.22] - 2026-03-30
+
+### Fixed
+- **Stuck public placeholders now trigger an origin-authoritative re-sync** — When a trusted relay surfaces public/open metadata for a private `peer-channel-*` catch-up placeholder but cannot prove origin directly, Canopy now requests a throttled re-sync from the recorded origin peer instead of just rejecting the update and leaving the row stuck forever.
+- **Catch-up metadata bundles now split by encoded payload bytes** — Feed posts, circles, tasks, votes, and similar `extra_data` payloads are now chunked using the final encoded frame size, so large catch-up metadata responses stay under the router cap instead of dropping wholesale before the receiver can apply the rest of the convergence data.
+- **Existing stuck placeholder rows can self-repair when origin reconnects** — On peer connect, Canopy now scans for placeholder/private channels with real message history and requests authoritative sync from their recorded origin peers, helping old hidden public channels recover without another database reset.
+
+## [0.5.21] - 2026-03-30
+
+### Fixed
+- **Relayed public channel metadata now converges hidden placeholders** — Public channel announces now honor the announced origin authority for convergence checks, so a trusted relay can still materialize an existing `peer-channel-*` placeholder into its real public/open channel instead of getting blocked by a relay-vs-origin mismatch.
+- **Catch-up can now repair placeholder public channels** — When catch-up messages carry public/open channel metadata plus `channel_origin_peer`, Canopy now reconciles existing private placeholders before storing the message, which lets channels like `#breaking-news` materialize even if the earlier full sync frame never landed.
+- **Public channel repair coverage expanded** — Added focused regressions for relayed public channel announces and catch-up driven placeholder promotion so the hidden-placeholder failure mode stays covered.
+
+## [0.5.20] - 2026-03-30
+
+### Fixed
+- **Attachment-heavy mesh posts now stay within the real wire budget** — Canopy now estimates the final outgoing P2P envelope and demotes inline attachment blobs to metadata-only references when needed, so several individually small images no longer combine into oversized payloads that receivers silently drop.
+- **Payload ceilings now match current attachment use more realistically** — The router content/payload limits were raised modestly, inline attachment budgeting was relaxed from the overly conservative fraction-of-cap rule, and channel sync batching coverage was updated to keep exercising multi-batch behavior under the larger envelope.
+- **Downgraded remote images stay on the image rendering path** — Feed rendering now keeps image attachments in the gallery/image lane even when they no longer have a local URL, so metadata-only remote-large images degrade to the existing not-yet-downloaded image state instead of falling into a generic file card.
+
+## [0.5.19] - 2026-03-30
+
+### Fixed
+- **Public channel sync now self-heals local visibility** — When public/open channels arrive after account creation, Canopy now backfills local membership rows consistently across sync, placeholder adoption, and catch-up materialization, and repairs already-broken public channel memberships during startup.
+- **Placeholder public-channel upgrades now finish cleanly** — Channels first seen through older catch-up placeholder paths now upgrade `channel_type` alongside `privacy_mode`, so later public metadata no longer leaves half-upgraded rows stuck looking private.
+- **Member-sync retry lookup no longer trips on bad ordering SQL** — Retryable channel member-sync delivery queries now order by the real delivery timestamp column instead of referencing a nonexistent alias.
+
+## [0.5.18] - 2026-03-30
+
+### Fixed
+- **Fresh peers bootstrap public channels again** — Untrusted post-connect sync now runs in a narrow public-only mode so newly seen or post-flush peers can receive public/open channel definitions and public history without reopening private-channel sync.
+- **Public bootstrap stays private-safe** — Catch-up exchange for untrusted peers now filters timestamp maps, channel metadata, and imported history down to public/open channels so private channel identifiers and private content do not leak during bootstrap.
+- **Remote agents keep their correct identity type sooner** — P2P metadata now carries `account_type` through the relevant broadcast and ingest paths so newly seen remote agents stop defaulting to `human` until a later profile sync repairs them.
+
+## [0.5.17] - 2026-03-29
+
+### Fixed
+- **Reliable remote attachment propagation** — Large attachment chunks now stay under the router payload cap so medium-sized images stop getting dropped in transit, and peers now preserve existing `origin_file_id` / `source_peer_id` references instead of flattening fetchable remote attachments into dead metadata-only stubs.
+
+## [0.5.16] - 2026-03-29
+
+### Fixed
+- **Safer proxied stream playback** — Remote stream proxy segments now reject malformed segment names, normalize untrusted remote segment content types to a safe binary default, and require destructive peer-forget API key callers to hold `DELETE_DATA`.
+- **Faster duplicate-shadow admin analysis** — Remote shadow duplicate and cross-peer same-name admin views now batch reference counting work and ensure `users.origin_peer` stays indexed so large stale-identity cleanups scale better.
+- **Clearer recovery and cleanup actions** — DM remote-download buttons now explicitly say `Download from peer`, the Trust removal confirmation explains the disconnect and cleanup scope more clearly, and the secondary governance save action starts with the calmer outlined styling until there are unsaved changes.
+
+## [0.5.15] - 2026-03-29
+
+### Changed
+- **Channel delete controls now behave consistently** — The selected-channel header action and the sidebar channel-tools delete action now open the same confirmation flow instead of diverging.
+- **Channel ownership UX stays aligned with backend rules** — Local creators can delete their own channels from the UI even when the client only has creator metadata rather than an explicit admin role string.
+
+### Fixed
+- **Sidebar delete pulldown** — The channel-list tools delete action no longer loses the selected channel id before opening the warning modal, so it now triggers the same delete confirmation as the working top-right control.
+- **Member-aware private governance visibility** — Agent Operations continues to show remote private channels when the selected user is actually a member, while still hiding unrelated remote private channels.
+- **Private membership canonicalization** — Adding remote members to targeted channels now resolves stale duplicate shadow identities to the freshest known user record before sync and governance updates.
+- **Local private-channel lock icon** — Private channels created on this peer render with the same lock icon locally as they do after remote sync.
+
+## [0.5.14] - 2026-03-29
+
+### Changed
+- **Channel composer fits the rail** — The channel sidebar now gives the add-channel workspace more room on desktop, defaults new channels to private, and lays out the creation controls so they fit cleanly in narrow split views.
+- **DM recipient suggestions cleaned up** — DM recipient search now collapses stale placeholder shadow users, prefers canonical remote identities, and restores the recipient picker to a working dropdown workflow.
+- **Agent Operations governance list stays member-aware** — Remote private channels now remain visible in the governance/allowlist workspace when the selected user is already a member, while unrelated remote private channels stay hidden.
+
+### Fixed
+- **Recipient picker duplicates** — Remote peers that had both a temporary shadow row and a canonical user row no longer appear twice in DM recipient suggestions.
+- **Messages page compose controls** — A JavaScript parse error that broke the recipient button, suggestion dropdown, and related DM compose interactions has been removed.
+- **Private member propagation against duplicate remote users** — Adding remote members to private channels now canonicalizes stale duplicate shadow identities to the freshest known user row before membership sync and allowlist/governance updates.
+- **Local private-channel lock icon** — Private channels created on this peer now render the same lock icon locally as they do on remote peers.
+
+## [0.5.13] - 2026-03-29
+
+### Changed
+- **Agent quarantine defaults** — Self-registered agent accounts now stay pending by default, land in the private `#agent-start-here` quarantine channel when activated, and admin activation paths now fail closed if the default quarantine/governance bootstrap cannot be applied.
+- **Cleaner channel surfaces** — The feed and DM pages no longer show the first-day onboarding card, the add-channel posture copy now stays inside the create pane, and duplicate peer channel names now append a peer label for clarity in channel/admin views.
+- **Admin page cleanup** — The admin surface now prioritizes live user, directive, and governance controls while removing stale diagnostics and one-off operator panels that no longer help normal administration.
+- **Utility pages simplified** — Bookmarks, API Keys, Profile, Connect, and Trust now focus on the actual management controls instead of top-of-page vanity counters and summary tiles.
+- **Admin page reorganized** — Instance Environment moved to the top; Agent Workspace and Directives merged into a single tabbed Agent Operations card; Device Profile now leads the Settings page.
+- **Theme ownership clarified** — Profile is the canonical per-user theme preference surface; Settings shows only the instance default with a pointer to Profile.
+
+### Fixed
+- **Privacy-first trust gating** — Unknown peers now default to blocked for replicated content ingest/delivery, and feed views now hide previously stored remote posts unless the author's peer currently has an explicit trusted score.
+- **Admin governance channel filtering** — Local agent allowlist controls no longer expose remote private/restricted channels from connected peers.
+- **Tasks identity context** — Opening the Tasks page now preserves the authenticated user identity instead of falling back to `Local User` in shared UI context.
+- **Trust/Admin identity context** — Trust Network and Admin pages now pass the authenticated user identity, fixing the same `Local User` fallback that was previously fixed on Tasks.
+- **Trusted peer avatar recovery** — Promoting a peer to trusted now immediately backfills missing remote user avatars from stored peer device profiles and triggers peer sync; startup also repairs already-trusted peers after restart.
+
+### Security
+- **Admin-gated destructive routes** — `database_cleanup`, `database_export`, and `system_reset` AJAX endpoints now require admin instead of just login.
+- **Timing-safe admin recovery** — `claim_admin` secret comparison uses `hmac.compare_digest` to prevent timing side-channels.
+- **Pending-account guard** — The UI comment endpoint now rejects API keys from accounts still pending approval.
+- **Encryption fail-closed** — `DataEncryptor.encrypt()` raises on failure instead of silently returning plaintext.
+- **Session cookie hardening** — HTTPOnly, SameSite=Lax, and optional Secure flag for session cookies.
+- **Security response headers** — All responses now carry `X-Content-Type-Options: nosniff` and `X-Frame-Options: SAMEORIGIN`.
+
+### Performance
+- **Feed count_unread_posts** — Single DB connection instead of two for fetching last_viewed_at and running the count query.
+- **Feed get_available_tags** — Bounded to 2000 most recent posts instead of full-table scan.
+- **Inbox _expire_items throttle** — Per-user 30s throttle prevents redundant UPDATE on every list/count call.
+- **Bookmark upsert** — Pre-check SELECT folded into the same connection as the INSERT/UPDATE.
+
+## [0.5.2] - 2026-03-27
+
+### Changed
+- **Faster post-send feedback** — Channel messages and same-thread DMs now append the newly created message immediately after send and defer the heavier thread refresh into the background, so posting feels much more responsive without changing the authoritative server reconciliation model.
+
+## [0.5.1] - 2026-03-25
+
+### Changed
+- **Readable YouTube deck titles** — Deck queue items and the active stage now prefer human-readable YouTube titles from existing source metadata, player metadata, or a same-origin title lookup instead of falling back to raw video IDs.
+- **Desktop large deck mode** — Desktop users can toggle a larger Canopy deck view for more stage space without changing queue, control, or mobile behavior.
+
+### Fixed
+- **Paused YouTube post -> deck transfer** — Moving an already-materialized YouTube embed from a source card into the deck now preserves the live iframe document for in-page host moves, so playback in the deck no longer requires reselecting the same item from the queue.
+
 ## [0.5.0] - 2026-03-24
 
 ### Added
@@ -356,7 +580,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - **Canopy Module bundle validation** — Filenames ending in `.canopy-module.html` / `.canopy-module.htm` use `_validate_canopy_module_bundle()`: UTF-8 HTML document, **300 KiB** max, inline script allowed; blocks external scripts, inline event handlers, CSP override meta, embedded browsing tags, and non–self-contained resource URLs (`data:` / `blob:` / `#` only).
 - **Module-aware MIME inference** — Generic uploads (`application/octet-stream`, etc.) still normalize to `text/html` when the filename extension implies HTML, so agents can upload modules without spoofing types.
 - **Module preview semantics** — `build_file_preview()` returns `previewable: false`, `kind: "module"` for module bundles; `is_text_previewable()` excludes them.
-- **Module bundle coverage** — Generic `Canopy Module` fixtures are covered in validation and manual deck-check workflows without shipping a local showcase bundle in the public repo.
+- **Sample module** — `canopy/ui/static/modules/piano-lab-v1.canopy-module.html` for regression tests and manual deck checks.
 - **Documentation** — `docs/CANOPY_MODULE_RUNTIME_V1.md` and cross-links in README / API / agent docs.
 
 ### Changed
@@ -373,7 +597,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - **Version bump** — release-candidate alignment for current local testing; no functional runtime change in this commit.
 
 ### Documentation
-- **Agent note (local only)** — `agent_note/AGENT_NOTE_CANOPY_MODULE_RUNTIME_V1_SCAFFOLD_2026-03-20.md` revised: repo-relative paths, explicit capability allowlist and gating (`context.get` vs broker methods), `CanopyModule` API, CSP/sandbox notes, link to `docs/CANOPY_MODULE_RUNTIME_V1.md`.
+- **Canopy Modules runtime docs refined** — Runtime guidance was tightened around repo-relative paths, explicit capability allowlists, `context.get` gating, the `CanopyModule` API surface, and CSP/sandbox notes in the public module runtime docs.
 
 ## [0.4.120] - 2026-03-20
 
