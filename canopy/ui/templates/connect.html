@@ -283,6 +283,21 @@
         .connect-scroll-table {
             max-height: min(46vh, 300px);
         }
+
+        .peer-preview-avatar {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            margin-right: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.65rem;
+            font-weight: 700;
+            color: #fff;
+            border: 1px dashed rgba(255, 255, 255, 0.18);
+            flex-shrink: 0;
+        }
     }
 </style>
 {% endblock %}
@@ -338,7 +353,16 @@
                 <hr>
                 <p class="text-muted small mb-2">
                     <i class="bi bi-globe"></i> <strong>Connecting from outside your LAN?</strong><br>
-                    If you've port-forwarded port <code>{{ mesh_port }}</code> on your router, enter your public IP below to generate an invite that works over the internet.
+                    If you use ngrok or another tunnel, generate the invite from your full external mesh endpoint. Port-forwarded host/port still works as a fallback.
+                </p>
+                <div class="input-group mb-2 public-host-group">
+                    <input type="text" class="form-control" id="externalEndpoint" placeholder="wss://example.ngrok-free.app or ws://0.tcp.ngrok.io:12345">
+                    <button class="btn btn-outline-primary" onclick="regenerateInvite()">
+                        <i class="bi bi-arrow-repeat"></i> Regenerate
+                    </button>
+                </div>
+                <p class="text-muted small mb-2">
+                    Port forwarding instead? Enter the public host and mesh port below.
                 </p>
                 <div class="input-group mb-2 public-host-group">
                     <input type="text" class="form-control" id="publicHost" placeholder="Public IP or hostname">
@@ -390,9 +414,6 @@
                 <div class="d-flex justify-content-between align-items-center">
                     <h5 class="mb-0"><i class="bi bi-people"></i> Connected Peers</h5>
                     <div class="d-flex align-items-center gap-2 flex-wrap">
-                        <span class="badge bg-success peer-pill">{{ connected_peers|length }} connected</span>
-                        <span class="badge bg-secondary peer-pill">{{ discovered_peers|length }} discovered</span>
-                        <span class="badge bg-dark peer-pill">{{ known_peers|length }} known</span>
                         <button class="btn btn-sm btn-outline-secondary" onclick="refreshConnectPage()" title="Refresh">
                             <i class="bi bi-arrow-clockwise"></i>
                         </button>
@@ -564,12 +585,15 @@
                             {% for peer in introduced_peers %}
                             {% set idev = peer_device_profiles.get(peer.peer_id) if peer_device_profiles else None %}
                             {% set ibydev = peer_device_profiles.get(peer.introduced_by) if peer_device_profiles else None %}
+                            {% set pub = peer.public_identity if peer.public_identity else None %}
                             <tr>
                                 <td>
                                     <div class="d-flex align-items-center">
                                         {% if idev and idev.avatar_b64 and idev.avatar_mime %}
                                         <img src="data:{{ idev.avatar_mime }};base64,{{ idev.avatar_b64 }}"
                                              alt="" style="width:24px; height:24px; border-radius:50%; margin-right:6px; object-fit:cover;">
+                                        {% elif pub and pub.avatar_initials %}
+                                        <div class="peer-preview-avatar" style="background:{{ pub.avatar_color or '#334155' }};">{{ pub.avatar_initials }}</div>
                                         {% endif %}
                                         <div>
                                             {% if idev and idev.display_name %}
@@ -578,6 +602,9 @@
                                             {% elif peer.display_name %}
                                             <strong>{{ peer.display_name }}</strong>
                                             <small class="text-muted d-block" style="font-size:0.75rem;">{{ peer.peer_id[:12] }}...</small>
+                                            {% elif pub and pub.node_name %}
+                                            <strong>{{ pub.node_name }}</strong>
+                                            <small class="text-muted d-block" style="font-size:0.75rem;">{{ peer.peer_id[:12] }}... <span class="badge bg-secondary" style="font-size:0.6rem;">unverified</span></small>
                                             {% else %}
                                             <code>{{ peer.peer_id[:12] }}...</code>
                                             {% endif %}
@@ -996,19 +1023,25 @@ function copyInvite() {
 }
 
 function regenerateInvite() {
+    const externalEndpoint = document.getElementById('externalEndpoint').value.trim();
     const host = document.getElementById('publicHost').value.trim();
     const port = document.getElementById('publicPort').value.trim();
-    if (!host) {
-        alert('Enter your public IP or hostname.');
+    if (!externalEndpoint && !host) {
+        alert('Enter an external mesh endpoint or a public host.');
         return;
     }
-    let url = '/api/v1/p2p/invite?public_host=' + encodeURIComponent(host);
-    if (port) url += '&public_port=' + encodeURIComponent(port);
+    let url = '/api/v1/p2p/invite';
+    if (externalEndpoint) {
+        url += '?external_endpoint=' + encodeURIComponent(externalEndpoint);
+    } else {
+        url += '?public_host=' + encodeURIComponent(host);
+        if (port) url += '&public_port=' + encodeURIComponent(port);
+    }
     apiJsonFetch(url).then(data => {
         if (data.invite_code) {
             document.getElementById('inviteCode').value = data.invite_code;
             const s = document.getElementById('copySuccess');
-            s.textContent = 'Regenerated with public endpoint!';
+            s.textContent = externalEndpoint ? 'Regenerated with external endpoint!' : 'Regenerated with public endpoint!';
             s.style.display = 'block';
             setTimeout(() => { s.style.display = 'none'; s.innerHTML = '<i class="bi bi-check-circle"></i> Copied!'; }, 3000);
         } else {
@@ -1280,15 +1313,20 @@ function promoteDirect(peerId, btn) {
 
 function forgetPeer(peerId) {
     if (!peerId) return;
-    if (!confirm('Forget this peer? This will remove stored endpoints and stop auto-reconnect.')) return;
+    if (!confirm('Forget this peer? This will disconnect them, remove stored endpoints, stop auto-reconnect, and clean stored trust/user residue for that peer.')) return;
     apiJsonFetch('/api/v1/p2p/forget', {
         method: 'POST',
-        body: JSON.stringify({peer_id: peerId})
+        body: JSON.stringify({
+            peer_id: peerId,
+            remove_introduced: true,
+            purge_residue: true,
+            remove_shadow_users: true
+        })
     })
     .then(data => {
         if (data.status === 'forgotten' || data.status === 'not_found') {
             document.querySelectorAll(`[data-peer-id="${peerId}"]`).forEach(el => el.remove());
-            showAlert('Peer removed from known list.', 'success');
+            showAlert('Peer removed from known list and local residue cleaned up.', 'success');
         } else {
             showAlert(data.message || 'Could not forget peer', 'danger');
         }

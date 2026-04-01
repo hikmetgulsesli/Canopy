@@ -28,7 +28,7 @@ if 'zeroconf' not in sys.modules:
     sys.modules['zeroconf'] = zeroconf_stub
 
 from canopy.network.discovery import DiscoveredPeer, PeerDiscovery
-from canopy.network.invite import InviteCode, import_invite
+from canopy.network.invite import InviteCode, import_invite, generate_invite
 from canopy.network.manager import P2PNetworkManager
 from canopy.network.identity import IdentityManager
 
@@ -116,6 +116,44 @@ class TestNetworkConnectivityRegressions(unittest.IsolatedAsyncioTestCase):
             ['ws://192.168.1.50:7771', 'ws://[2001:db8::10]:7771'],
         )
 
+    def test_generate_invite_accepts_explicit_external_mesh_endpoint(self) -> None:
+        identity_manager = IdentityManager(Path(self.tempdir) / 'peer_identity.json')
+        identity_manager.initialize()
+
+        invite = generate_invite(
+            identity_manager,
+            7771,
+            external_endpoint='wss://demo.ngrok-free.app:443',
+        )
+
+        self.assertEqual(invite.endpoints[0], 'wss://demo.ngrok-free.app:443')
+        self.assertTrue(any(endpoint.startswith('ws://') for endpoint in invite.endpoints[1:]))
+
+    def test_generate_invite_defaults_wss_external_endpoint_to_443(self) -> None:
+        identity_manager = IdentityManager(Path(self.tempdir) / 'peer_identity.json')
+        identity_manager.initialize()
+
+        invite = generate_invite(
+            identity_manager,
+            7771,
+            external_endpoint='wss://demo.ngrok-free.app',
+        )
+
+        self.assertEqual(invite.endpoints[0], 'wss://demo.ngrok-free.app:443')
+
+    def test_generate_invite_formats_ipv6_public_host(self) -> None:
+        identity_manager = IdentityManager(Path(self.tempdir) / 'peer_identity.json')
+        identity_manager.initialize()
+
+        invite = generate_invite(
+            identity_manager,
+            7771,
+            public_host='2001:db8::10',
+            public_port=9001,
+        )
+
+        self.assertIn('ws://[2001:db8::10]:9001', invite.endpoints)
+
     def test_discovery_preserves_all_advertised_addresses(self) -> None:
         discovery = PeerDiscovery('local-peer')
         captured: list[DiscoveredPeer] = []
@@ -166,6 +204,56 @@ class TestNetworkConnectivityRegressions(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(sync_calls, ['peer-remote'])
 
+    async def test_connect_to_endpoint_preserves_explicit_wss_scheme(self) -> None:
+        manager = self._build_manager()
+        captured: list[tuple[str, str, int, str | None]] = []
+
+        async def _connect(peer_id: str, host: str, port: int, scheme=None) -> bool:
+            captured.append((peer_id, host, port, scheme))
+            return True
+
+        manager.connection_manager = types.SimpleNamespace(
+            enable_tls=False,
+            connect_to_peer=_connect,
+        )
+        manager._record_connection_event = lambda *args, **kwargs: None  # type: ignore[assignment]
+        manager._record_endpoint_result = lambda *args, **kwargs: None  # type: ignore[assignment]
+
+        ok = await manager._connect_to_endpoint('peer-remote', 'wss://demo.ngrok-free.app:443')
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            captured,
+            [('peer-remote', 'demo.ngrok-free.app', 443, 'wss')],
+        )
+
+    async def test_connect_to_endpoint_defaults_missing_wss_port_to_443(self) -> None:
+        manager = self._build_manager()
+        captured: list[tuple[str, str, int, str | None]] = []
+
+        async def _connect(peer_id: str, host: str, port: int, scheme=None) -> bool:
+            captured.append((peer_id, host, port, scheme))
+            return True
+
+        manager.connection_manager = types.SimpleNamespace(
+            enable_tls=False,
+            connect_to_peer=_connect,
+        )
+        manager._record_connection_event = lambda *args, **kwargs: None  # type: ignore[assignment]
+        manager._record_endpoint_result = lambda *args, **kwargs: None  # type: ignore[assignment]
+
+        ok = await manager._connect_to_endpoint('peer-remote', 'wss://demo.ngrok-free.app')
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            captured,
+            [('peer-remote', 'demo.ngrok-free.app', 443, 'wss')],
+        )
+
+    def test_parse_endpoint_rejects_non_websocket_schemes(self) -> None:
+        manager = self._build_manager()
+        self.assertIsNone(manager._parse_endpoint('https://demo.ngrok-free.app'))
+
     def test_discovered_peer_endpoints_format_ipv6_for_dialing(self) -> None:
         manager = self._build_manager()
         peer = DiscoveredPeer(
@@ -211,6 +299,21 @@ class TestNetworkConnectivityRegressions(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             captured[0][0]['endpoints'],
             ['ws://192.168.1.55:7771'],
+        )
+
+    def test_current_connection_endpoint_preserves_wss_scheme_from_endpoint_uri(self) -> None:
+        manager = self._build_manager()
+        manager.connection_manager = types.SimpleNamespace(
+            get_connection=lambda peer_id: types.SimpleNamespace(
+                endpoint_uri='wss://demo.ngrok-free.app:443',
+                address='10.99.0.8',
+                port=7771,
+            )
+        )
+
+        self.assertEqual(
+            manager._current_connection_endpoint('peer-remote'),
+            'wss://demo.ngrok-free.app:443',
         )
 
     async def test_reconnect_keeps_retrying_after_backoff_cap(self) -> None:
@@ -303,6 +406,157 @@ class TestNetworkConnectivityRegressions(unittest.IsolatedAsyncioTestCase):
             'ws://192.168.1.100:7771',
             manager.identity_manager.peer_endpoints.get('peer-remote', []),
         )
+
+    async def test_enqueue_sync_coalesces_duplicate_peer_requests(self) -> None:
+        manager = self._build_manager()
+        manager._sync_queue = asyncio.Queue()
+        manager._queued_sync_peers = set()
+        manager._syncs_in_progress = set()
+        manager._resync_after_current = set()
+
+        await manager._enqueue_sync('peer-remote')
+        await manager._enqueue_sync('peer-remote')
+
+        self.assertEqual(manager._sync_queue.qsize(), 1)
+        self.assertEqual(manager._queued_sync_peers, {'peer-remote'})
+
+    async def test_enqueue_sync_marks_one_rerun_when_peer_already_in_progress(self) -> None:
+        manager = self._build_manager()
+        manager._sync_queue = asyncio.Queue()
+        manager._queued_sync_peers = set()
+        manager._syncs_in_progress = {'peer-remote'}
+        manager._resync_after_current = set()
+
+        await manager._enqueue_sync('peer-remote')
+
+        self.assertEqual(manager._sync_queue.qsize(), 0)
+        self.assertEqual(manager._resync_after_current, {'peer-remote'})
+
+    async def test_wait_for_connection_settle_sleeps_until_window_elapses(self) -> None:
+        manager = self._build_manager()
+        manager._POST_CONNECT_SETTLE_WINDOW_S = 1.5
+        conn = types.SimpleNamespace(
+            connected_at=100.0,
+            is_connected=lambda: True,
+        )
+        manager.connection_manager = types.SimpleNamespace(
+            get_connection=lambda peer_id: conn if peer_id == 'peer-remote' else None
+        )
+
+        sleeps: list[float] = []
+
+        async def _fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+            conn.connected_at = 98.0
+
+        with patch('canopy.network.manager.time.time', return_value=100.2), patch(
+            'canopy.network.manager.asyncio.sleep',
+            new=_fake_sleep,
+        ):
+            ok = await manager._wait_for_connection_settle('peer-remote')
+
+        self.assertTrue(ok)
+        self.assertEqual(len(sleeps), 1)
+        self.assertAlmostEqual(sleeps[0], 1.3, places=1)
+
+    async def test_post_connect_sync_impl_preserves_reconnect_task_when_settle_fails(self) -> None:
+        manager = self._build_manager()
+        manager.on_peer_connected = None
+        manager._peer_is_trusted_for_content = lambda peer_id: False
+        manager._refresh_peer_version_info = lambda peer_id: None
+        cancelled: list[str] = []
+        manager._cancel_reconnect = lambda peer_id: cancelled.append(peer_id)
+        manager.connection_manager = types.SimpleNamespace(
+            get_connection=lambda peer_id: None,
+        )
+        manager._post_connect_retry_counts = {}
+        manager._post_connect_retry_tokens = {}
+        manager._POST_CONNECT_SYNC_MAX_RETRIES = 3
+        manager._resync_after_current = set()
+
+        async def _settle(peer_id: str) -> bool:
+            return False
+
+        manager._wait_for_connection_settle = _settle  # type: ignore[assignment]
+
+        await manager._run_post_connect_sync_impl('peer-remote')
+
+        self.assertEqual(cancelled, [])
+        self.assertEqual(manager._post_connect_retry_counts.get('peer-remote'), 1)
+        self.assertEqual(manager._resync_after_current, {'peer-remote'})
+
+    async def test_post_connect_sync_impl_cancels_reconnect_task_after_settle_succeeds(self) -> None:
+        manager = self._build_manager()
+        manager.on_peer_connected = None
+        manager._peer_is_trusted_for_content = lambda peer_id: True
+        manager._refresh_peer_version_info = lambda peer_id: None
+        cancelled: list[str] = []
+        calls: list[tuple[str, str]] = []
+        manager._cancel_reconnect = lambda peer_id: cancelled.append(peer_id)
+        manager._post_connect_retry_counts = {'peer-remote': 2}
+        manager._post_connect_retry_tokens = {'peer-remote': 'out:1:deadbeef'}
+
+        async def _settle(peer_id: str) -> bool:
+            return True
+
+        async def _record(name: str, peer_id: str) -> None:
+            calls.append((name, peer_id))
+
+        manager._wait_for_connection_settle = _settle  # type: ignore[assignment]
+        manager._send_channel_sync_to_peer = lambda peer_id: _record('channel_sync', peer_id)  # type: ignore[assignment]
+        manager._send_public_channel_metadata_replay_to_peer = lambda peer_id: _record('metadata_replay', peer_id)  # type: ignore[assignment]
+        manager._send_profile_to_peer = lambda peer_id: _record('profile', peer_id)  # type: ignore[assignment]
+        manager._send_membership_recovery_query = lambda peer_id: _record('membership', peer_id)  # type: ignore[assignment]
+        manager._retry_missing_channel_key_requests_for_peer = lambda peer_id: _record('keys', peer_id)  # type: ignore[assignment]
+        manager._send_peer_announcement_to = lambda peer_id: _record('peer_announce', peer_id)  # type: ignore[assignment]
+        manager._announce_new_peer_to_others = lambda peer_id: _record('announce_others', peer_id)  # type: ignore[assignment]
+        manager._send_catchup_request = lambda peer_id: _record('catchup', peer_id)  # type: ignore[assignment]
+        manager.message_router = None
+
+        await manager._run_post_connect_sync_impl('peer-remote')
+
+        self.assertEqual(cancelled, ['peer-remote'])
+        self.assertEqual(
+            calls,
+            [
+                ('channel_sync', 'peer-remote'),
+                ('metadata_replay', 'peer-remote'),
+                ('profile', 'peer-remote'),
+                ('membership', 'peer-remote'),
+                ('keys', 'peer-remote'),
+                ('peer_announce', 'peer-remote'),
+                ('announce_others', 'peer-remote'),
+                ('catchup', 'peer-remote'),
+            ],
+        )
+        self.assertEqual(manager._post_connect_retry_counts, {})
+        self.assertEqual(manager._post_connect_retry_tokens, {})
+
+    def test_request_post_connect_sync_retry_resets_counter_when_connection_changes(self) -> None:
+        manager = self._build_manager()
+        conn_a = types.SimpleNamespace(
+            is_outbound=True,
+            connected_at=1.0,
+        )
+        conn_b = types.SimpleNamespace(
+            is_outbound=False,
+            connected_at=2.0,
+        )
+        current = {'conn': conn_a}
+        manager.connection_manager = types.SimpleNamespace(
+            get_connection=lambda peer_id: current['conn'],
+        )
+        manager._post_connect_retry_counts = {}
+        manager._post_connect_retry_tokens = {}
+        manager._POST_CONNECT_SYNC_MAX_RETRIES = 3
+        manager._resync_after_current = set()
+
+        manager._request_post_connect_sync_retry('peer-remote', 'connection_changed_before_settle')
+        self.assertEqual(manager._post_connect_retry_counts.get('peer-remote'), 1)
+
+        current['conn'] = conn_b
+        manager._request_post_connect_sync_retry('peer-remote', 'connection_changed_before_settle')
+        self.assertEqual(manager._post_connect_retry_counts.get('peer-remote'), 1)
 
 
 if __name__ == '__main__':

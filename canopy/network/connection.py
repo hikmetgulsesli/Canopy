@@ -21,6 +21,24 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger('canopy.network.connection')
 
+_EXPECTED_CONNECT_ERRNOS = {51, 61, 64, 65, 110, 111, 113}
+
+
+def _is_expected_connect_failure(exc: Exception) -> bool:
+    """Return True for routine unreachable-peer connect failures.
+
+    These happen regularly when remembered peers are offline, moved networks,
+    or still advertising stale endpoints. They should not flood logs with full
+    tracebacks during normal background reconnect behavior.
+    """
+    if isinstance(exc, (ConnectionRefusedError, ConnectionResetError)):
+        return True
+    if isinstance(exc, OSError):
+        errno = getattr(exc, 'errno', None)
+        if errno in _EXPECTED_CONNECT_ERRNOS:
+            return True
+    return False
+
 
 def _generate_self_signed_cert(cert_path: Path, key_path: Path) -> bool:
     """Generate a self-signed TLS certificate for P2P WebSocket connections.
@@ -137,6 +155,7 @@ class PeerConnection:
     handshake_version: Optional[str] = None
     canopy_version: Optional[str] = None
     protocol_version: Optional[int] = None
+    endpoint_uri: Optional[str] = None
     failure_reason: Optional[str] = None
     failure_detail: Optional[str] = None
     _send_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -251,6 +270,38 @@ class ConnectionManager:
     def _failure_key(self, peer_id: str, address: str, port: int) -> str:
         return f"{peer_id}|{self._format_endpoint_host(address)}|{int(port)}"
 
+    def _record_handshake_peerid_mismatch(
+        self,
+        expected_peer_id: str,
+        actual_peer_id: str,
+        endpoint_uri: str,
+    ) -> None:
+        """Clean up stale endpoint ownership after a verified peer-id mismatch."""
+        clean_endpoint = str(endpoint_uri or '').strip()
+        if clean_endpoint.endswith('/p2p'):
+            clean_endpoint = clean_endpoint[:-4]
+        action_taken = 'mapping_reset'
+        if not clean_endpoint:
+            logger.warning(
+                "handshake_peerid_mismatch expected_peer=%s actual_peer=%s endpoint=unknown action_taken=%s",
+                expected_peer_id,
+                actual_peer_id,
+                action_taken,
+            )
+            return
+        try:
+            self.identity_manager.remove_endpoint(expected_peer_id, clean_endpoint)
+            self.identity_manager.record_endpoint(actual_peer_id, clean_endpoint, claim=True)
+        except Exception:
+            action_taken = 'endpoint_quarantine'
+        logger.warning(
+            "handshake_peerid_mismatch expected_peer=%s actual_peer=%s endpoint=%s action_taken=%s",
+            expected_peer_id,
+            actual_peer_id,
+            clean_endpoint,
+            action_taken,
+        )
+
     def _record_connect_failure(self, peer_id: str, address: str, port: int,
                                 reason: str, detail: str) -> None:
         self._last_connect_failures[self._failure_key(peer_id, address, port)] = {
@@ -268,6 +319,98 @@ class ConnectionManager:
     def _get_handshake_capabilities(self) -> List[str]:
         """Return deduplicated capability list advertised in handshakes."""
         return self._normalize_capabilities(self.handshake_capabilities)
+
+    def _preferred_connection_is_outbound(self, peer_id: str) -> bool:
+        """Return the deterministic winner direction for a peer pair."""
+        return str(self.local_peer_id or '').strip() < str(peer_id or '').strip()
+
+    @staticmethod
+    def _connection_state_rank(connection: Optional[PeerConnection]) -> int:
+        """Rank connection states for arbitration decisions."""
+        if not connection:
+            return -1
+        state = getattr(connection, 'state', None)
+        if state == ConnectionState.AUTHENTICATED:
+            return 3
+        if state == ConnectionState.CONNECTED:
+            return 2
+        if state == ConnectionState.HANDSHAKING:
+            return 1
+        if state == ConnectionState.CONNECTING:
+            return 0
+        return -1
+
+    def _should_replace_existing_connection(
+        self,
+        existing: Optional[PeerConnection],
+        candidate: PeerConnection,
+    ) -> bool:
+        """Decide whether a newly-authenticated connection should replace the current one."""
+        if existing is None or existing is candidate:
+            return True
+
+        existing_rank = self._connection_state_rank(existing)
+        candidate_rank = self._connection_state_rank(candidate)
+
+        # Once an authenticated session is already established, keep it rather
+        # than churning to a second authenticated socket that appears later.
+        if existing_rank >= 3:
+            return False
+
+        preferred_outbound = self._preferred_connection_is_outbound(candidate.peer_id)
+        existing_matches_preference = bool(getattr(existing, 'is_outbound', True)) == preferred_outbound
+        candidate_matches_preference = bool(getattr(candidate, 'is_outbound', True)) == preferred_outbound
+
+        # During simultaneous inbound/outbound handshakes, prefer one stable
+        # direction per peer pair so both sides converge on a single winner.
+        if existing_matches_preference != candidate_matches_preference:
+            return candidate_matches_preference
+
+        if candidate_rank != existing_rank:
+            return candidate_rank > existing_rank
+
+        return False
+
+    async def _adopt_authenticated_connection(self, connection: PeerConnection) -> bool:
+        """Install a newly-authenticated connection if it wins arbitration.
+
+        Replace the visible connection entry before closing the loser so
+        readers like ``get_connected_peers()`` never observe a transient gap
+        where an authenticated peer disappears mid-handover.
+        """
+        peer_id = connection.peer_id
+        existing = self.connections.get(peer_id)
+        if existing and existing is not connection:
+            replace_existing = self._should_replace_existing_connection(existing, connection)
+            if not replace_existing:
+                logger.info(
+                    "Connection arbitration kept existing %s connection for %s; "
+                    "closing competing %s connection",
+                    'outbound' if getattr(existing, 'is_outbound', True) else 'inbound',
+                    peer_id,
+                    'outbound' if getattr(connection, 'is_outbound', True) else 'inbound',
+                )
+                await self._disconnect_connection(connection, notify=False)
+                return False
+            logger.info(
+                "Connection arbitration replacing existing %s connection for %s "
+                "with %s connection",
+                'outbound' if getattr(existing, 'is_outbound', True) else 'inbound',
+                peer_id,
+                'outbound' if getattr(connection, 'is_outbound', True) else 'inbound',
+            )
+            self.connections[peer_id] = connection
+            connection.state = ConnectionState.AUTHENTICATED
+            connection.connected_at = time.time()
+            connection.update_activity()
+            await self._disconnect_connection(existing, notify=False)
+            return True
+
+        self.connections[peer_id] = connection
+        connection.state = ConnectionState.AUTHENTICATED
+        connection.connected_at = time.time()
+        connection.update_activity()
+        return True
 
     @staticmethod
     def _normalize_capabilities(raw: Any) -> List[str]:
@@ -380,7 +523,7 @@ class ConnectionManager:
         
         logger.info("ConnectionManager stopped")
     
-    async def connect_to_peer(self, peer_id: str, address: str, port: int) -> bool:
+    async def connect_to_peer(self, peer_id: str, address: str, port: int, scheme: Optional[str] = None) -> bool:
         """
         Establish outbound connection to a peer.
         
@@ -388,6 +531,7 @@ class ConnectionManager:
             peer_id: Target peer ID
             address: Peer's IP address
             port: Peer's port
+            scheme: Optional explicit transport scheme ('ws' or 'wss')
             
         Returns:
             True if connection successful
@@ -418,6 +562,10 @@ class ConnectionManager:
             )
             return False
         
+        normalized_scheme = str(scheme or '').strip().lower()
+        if normalized_scheme not in ('ws', 'wss'):
+            normalized_scheme = ''
+
         logger.info(f"Connecting to peer {peer_id} at {address}:{port}...")
         
         # Create connection object
@@ -426,7 +574,7 @@ class ConnectionManager:
             address=address,
             port=port,
             state=ConnectionState.CONNECTING,
-            is_outbound=True
+            is_outbound=True,
         )
         
         self.connections[peer_id] = connection
@@ -434,8 +582,9 @@ class ConnectionManager:
         try:
             # Connect via WebSocket — try wss:// first if TLS is enabled,
             # then fall back to ws:// for backward compatibility.
-            scheme = 'wss' if self.enable_tls else 'ws'
-            uri = f"{scheme}://{address}:{port}/p2p"
+            connect_scheme = normalized_scheme or ('wss' if self.enable_tls else 'ws')
+            uri = f"{connect_scheme}://{address}:{port}/p2p"
+            connection.endpoint_uri = f"{connect_scheme}://{address}:{port}"
             connect_kwargs: Dict[str, Any] = dict(
                 ping_interval=None,
                 ping_timeout=None,
@@ -443,17 +592,18 @@ class ConnectionManager:
                 max_size=20 * 1024 * 1024,  # 20MB — allow P2P image transfer
                 compression="deflate",  # permessage-deflate — matches server setting
             )
-            if self.enable_tls and self._client_ssl:
+            if connect_scheme == 'wss' and self._client_ssl:
                 connect_kwargs['ssl'] = self._client_ssl
 
             try:
                 websocket = await websockets.connect(uri, **connect_kwargs)
             except Exception as tls_err:
-                if self.enable_tls:
+                if connect_scheme == 'wss':
                     # Fall back to plain ws:// if wss failed
                     logger.debug(
                         f"wss:// failed to {address}:{port}, falling back to ws:// ({tls_err})"
                     )
+                    connection.endpoint_uri = f"ws://{address}:{port}"
                     websocket = await websockets.connect(
                         f"ws://{address}:{port}/p2p",
                         ping_interval=None,
@@ -473,8 +623,10 @@ class ConnectionManager:
 
             if success:
                 connection.state = ConnectionState.AUTHENTICATED
-                connection.connected_at = time.time()
-                connection.update_activity()
+                adopted = await self._adopt_authenticated_connection(connection)
+                if not adopted:
+                    current = self.connections.get(peer_id)
+                    return bool(current and current.is_connected())
                 self._clear_connect_failure(peer_id, address, port)
 
                 logger.info(f"Successfully connected to {peer_id}")
@@ -504,11 +656,14 @@ class ConnectionManager:
             await self._disconnect_connection(connection, notify=False)
             return False
         except Exception as e:
-            logger.error(
+            log_message = (
                 f"Failed to connect to {peer_id} at {address}:{port}: "
-                f"{type(e).__name__}: {e}",
-                exc_info=True,
+                f"{type(e).__name__}: {e}"
             )
+            if _is_expected_connect_failure(e):
+                logger.warning(log_message)
+            else:
+                logger.error(log_message, exc_info=True)
             connection.state = ConnectionState.FAILED
             connection.failure_reason = type(e).__name__
             connection.failure_detail = str(e)
@@ -652,16 +807,10 @@ class ConnectionManager:
             success = await self._complete_handshake(connection, handshake_data)
             
             if success:
-                # If we already had a connection object for this peer_id, close it.
-                # (Otherwise its message-handler task may keep running and can cause churn.)
-                existing = self.connections.get(peer_id)
-                if existing and existing.websocket is not websocket:
-                    await self._disconnect_connection(existing, notify=False)
-
-                self.connections[peer_id] = connection
                 connection.state = ConnectionState.AUTHENTICATED
-                connection.connected_at = time.time()
-                connection.update_activity()
+                adopted = await self._adopt_authenticated_connection(connection)
+                if not adopted:
+                    return
                 
                 logger.debug(f"Accepted authenticated connection from {peer_id}")
                 
@@ -814,13 +963,14 @@ class ConnectionManager:
                 connection.failure_detail = (
                     f"Handshake peer-id mismatch: expected {connection.peer_id}, got {resp_peer_id}"
                 )
-                try:
-                    host = connection.address
-                    port = connection.port
-                    self.identity_manager.remove_endpoint(connection.peer_id, f"ws://{host}:{port}")
-                    self.identity_manager.remove_endpoint(connection.peer_id, f"wss://{host}:{port}")
-                except Exception:
-                    pass
+                endpoint_uri = str(getattr(connection, 'endpoint_uri', '') or '').strip()
+                if not endpoint_uri:
+                    endpoint_uri = f"ws://{self._format_endpoint_host(connection.address)}:{connection.port}"
+                self._record_handshake_peerid_mismatch(
+                    expected_peer_id=connection.peer_id,
+                    actual_peer_id=resp_peer_id,
+                    endpoint_uri=endpoint_uri,
+                )
                 return False
 
             # Create a remote peer identity and verify signature
@@ -893,7 +1043,10 @@ class ConnectionManager:
             return True
             
         except Exception as e:
-            logger.error(f"Handshake failed: {e}", exc_info=True)
+            if isinstance(e, websockets.exceptions.ConnectionClosedOK):
+                logger.info(f"Handshake closed cleanly with {connection.peer_id}: {e}")
+            else:
+                logger.error(f"Handshake failed: {e}", exc_info=True)
             connection.failure_reason = type(e).__name__
             connection.failure_detail = str(e)
             return False
@@ -1046,9 +1199,10 @@ class ConnectionManager:
             connection.failure_detail = 'Send timed out'
             logger.error(f"Failed to send to {peer_id}: "
                          f"send timed out (15s), connection likely dead")
-            # Force-close the dead connection so it can be re-established
+            # Force-close the dead connection so the disconnect callback can
+            # schedule reconnect work for the now-stranded peer.
             asyncio.ensure_future(
-                self._disconnect_connection(connection, notify=False))
+                self._disconnect_connection(connection, notify=True))
             return False
 
         except websockets.exceptions.ConnectionClosed as e:
@@ -1060,7 +1214,7 @@ class ConnectionManager:
             else:
                 logger.warning(f"Failed to send to {peer_id}: {e}")
             asyncio.ensure_future(
-                self._disconnect_connection(connection, notify=False))
+                self._disconnect_connection(connection, notify=True))
             return False
 
         except Exception as e:
@@ -1069,7 +1223,7 @@ class ConnectionManager:
             connection.failure_detail = str(e)
             logger.error(f"Failed to send to {peer_id}: {e}")
             asyncio.ensure_future(
-                self._disconnect_connection(connection, notify=False))
+                self._disconnect_connection(connection, notify=True))
             return False
     
     async def _disconnect_connection(self, connection: PeerConnection, *, notify: bool = True) -> None:
@@ -1190,6 +1344,25 @@ class ConnectionManager:
             peer_id for peer_id, conn in self.connections.items()
             if conn.is_connected()
         ]
+
+    def get_connection_state_counts(self) -> Dict[str, int]:
+        """Return counts of live connection objects by state value."""
+        counts: Dict[str, int] = {state.value: 0 for state in ConnectionState}
+        for connection in self.connections.values():
+            state = getattr(connection, 'state', None)
+            key = state.value if isinstance(state, ConnectionState) else str(state or '').strip().lower()
+            if not key:
+                continue
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    def get_pending_handshake_peer_ids(self) -> list[str]:
+        """Return peer IDs currently waiting on handshake completion."""
+        return sorted({
+            str(peer_id or '').strip()
+            for peer_id, conn in self.connections.items()
+            if peer_id and getattr(conn, 'state', None) == ConnectionState.HANDSHAKING
+        })
     
     def get_connection(self, peer_id: str) -> Optional[PeerConnection]:
         """Get connection object for a peer."""

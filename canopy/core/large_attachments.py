@@ -9,7 +9,9 @@ from typing import Any, Dict, Optional
 
 LARGE_ATTACHMENT_CAPABILITY = "large_attachment_store_v1"
 LARGE_ATTACHMENT_THRESHOLD = 10 * 1024 * 1024  # 10 MB fixed protocol threshold
-LARGE_ATTACHMENT_CHUNK_SIZE = 512 * 1024  # 512 KB
+# Chunks are base64-encoded and wrapped in a P2P envelope, so keep them well
+# below the router payload cap to avoid oversized-message drops on receive.
+LARGE_ATTACHMENT_CHUNK_SIZE = 256 * 1024  # 256 KB
 LARGE_ATTACHMENT_STORE_DIRNAME = "canopy-large-attachments"
 LARGE_ATTACHMENT_STORE_ROOT_KEY = "large_attachment_store_root"
 LARGE_ATTACHMENT_DOWNLOAD_MODE_KEY = "large_attachment_download_mode"
@@ -131,3 +133,44 @@ def get_attachment_source_peer_id(attachment: Any) -> str:
         or attachment.get("origin_peer")
         or ""
     ).strip()
+
+
+def coerce_remote_attachment_reference(
+    attachment: Any,
+    *,
+    default_source_peer_id: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Upgrade metadata-only remote attachments into fetchable references.
+
+    Older peers can send attachment metadata with just ``id``/``file_id`` and no
+    inline ``data`` payload. Treat those entries as remote attachment references
+    rooted at the sender peer so the receiver can request the file instead of
+    leaving a dead placeholder in the UI.
+    """
+    if not isinstance(attachment, dict):
+        return None
+    if attachment.get("data"):
+        return None
+
+    source_peer_id = get_attachment_source_peer_id(attachment) or str(default_source_peer_id or "").strip()
+    origin_file_id = str(
+        get_attachment_origin_file_id(attachment)
+        or attachment.get("id")
+        or attachment.get("file_id")
+        or ""
+    ).strip()
+    if not source_peer_id or not origin_file_id:
+        return None
+
+    normalized = dict(attachment)
+    normalized["origin_file_id"] = origin_file_id
+    normalized["source_peer_id"] = source_peer_id
+    normalized.setdefault("name", attachment.get("filename") or attachment.get("original_name") or "file")
+    normalized.setdefault("type", attachment.get("content_type") or "application/octet-stream")
+    normalized.setdefault("size", attachment.get("size") or 0)
+    normalized.setdefault("checksum", attachment.get("checksum") or "")
+    normalized["large_attachment"] = True
+    normalized["storage_mode"] = str(normalized.get("storage_mode") or "remote_large").strip().lower() or "remote_large"
+    normalized["download_status"] = str(normalized.get("download_status") or "pending").strip().lower() or "pending"
+    normalized.pop("url", None)
+    return normalized

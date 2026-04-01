@@ -604,6 +604,11 @@
             totalCount: 0,
             currentRev: canopyInitialPeerRev || '',
         };
+        const canopySidebarPeerPollState = {
+            failureCount: 0,
+            nextDelayMs: 2500,
+            timerId: null,
+        };
 
         function seedSidebarPeerState() {
             if (canopySidebarPeerState.seeded) return;
@@ -680,6 +685,20 @@
             renderSidebarPeerModalList();
         }
 
+        function setSidebarPeerPollingStatus(message, isDegraded = false) {
+            const summaryEl = document.getElementById('sidebar-peers-summary');
+            const subtitleEl = document.getElementById('sidebar-peers-modal-subtitle');
+            const text = String(message || '').trim() || 'Showing up to five peers';
+            if (summaryEl) {
+                summaryEl.textContent = text;
+                summaryEl.classList.toggle('text-warning', !!isDegraded);
+            }
+            if (subtitleEl) {
+                subtitleEl.textContent = isDegraded ? text : 'Mesh connections on this node';
+                subtitleEl.classList.toggle('text-warning', !!isDegraded);
+            }
+        }
+
         window.syncCanopySidebarPeers = function(payload) {
             seedSidebarPeerState();
             if (!payload || typeof payload !== 'object') {
@@ -693,7 +712,11 @@
                 if (typeof payload.connected_peer_count === 'number') {
                     canopySidebarPeerState.totalCount = Math.max(0, Number(payload.connected_peer_count) || 0);
                 }
-                return;
+                const hasPeerSnapshot = Array.isArray(payload.connected_peer_ids)
+                    || (payload.peers && typeof payload.peers === 'object' && Object.keys(payload.peers).length > 0);
+                if (!hasPeerSnapshot) {
+                    return;
+                }
             }
 
             syncCanopyPeerTrust(payload.peer_trust);
@@ -710,16 +733,6 @@
                 0,
                 Number(payload.connected_peer_count || connectedPeerIds.length) || connectedPeerIds.length
             );
-
-            if (!connectedPeerIds.length && canopySidebarPeerState.totalCount === 0) {
-                canopySidebarPeerState.peers.forEach((record, peerId) => {
-                    record.active = false;
-                    record.missCount = 0;
-                    canopySidebarPeerState.peers.set(peerId, record);
-                });
-                renderSidebarPeers();
-                return;
-            }
 
             const seenNow = new Set(connectedPeerIds);
 
@@ -1091,6 +1104,10 @@
             { key: 'channel', label: 'Channels', icon: 'bi-hash' },
             { key: 'feed', label: 'Feed', icon: 'bi-rss' },
         ];
+        const CANOPY_ATTENTION_FILTER_MAP = CANOPY_ATTENTION_FILTER_DEFS.reduce((acc, def) => {
+            acc[def.key] = def;
+            return acc;
+        }, {});
         const canopyAttentionFilterStorageKey = (() => {
             const userId = window.CANOPY_VARS ? String(window.CANOPY_VARS.userId || 'local_user').trim() : 'local_user';
             return `canopy.attention.filters.${userId || 'local_user'}`;
@@ -1198,6 +1215,58 @@
                 const seq = Math.max(0, Number(item && item.seq || 0) || 0);
                 return sum + (seq > seenThrough ? 1 : 0);
             }, 0);
+        }
+
+        function attentionItemSortValue(item) {
+            const created = String(item && item.created_at || '').trim();
+            const seq = Math.max(0, Number(item && item.seq || 0) || 0);
+            return { created, seq };
+        }
+
+        function compareAttentionItemsDesc(a, b) {
+            const left = attentionItemSortValue(a);
+            const right = attentionItemSortValue(b);
+            if (left.created !== right.created) return right.created.localeCompare(left.created);
+            return right.seq - left.seq;
+        }
+
+        function groupCanopyAttentionItems(items) {
+            const normalized = Array.isArray(items) ? items.filter(Boolean) : [];
+            const groups = [];
+            const seenKeys = new Set();
+            CANOPY_ATTENTION_FILTER_DEFS.forEach((def) => {
+                const sectionItems = normalized
+                    .filter((item) => canopyAttentionFilterKeyForItem(item) === def.key)
+                    .sort(compareAttentionItemsDesc);
+                if (!sectionItems.length) return;
+                groups.push({
+                    key: def.key,
+                    label: def.label,
+                    icon: def.icon,
+                    items: sectionItems,
+                    latestCreatedAt: String(sectionItems[0] && sectionItems[0].created_at || ''),
+                    latestSeq: Math.max(0, Number(sectionItems[0] && sectionItems[0].seq || 0) || 0),
+                });
+                seenKeys.add(def.key);
+            });
+            const otherItems = normalized
+                .filter((item) => !seenKeys.has(canopyAttentionFilterKeyForItem(item)))
+                .sort(compareAttentionItemsDesc);
+            if (otherItems.length) {
+                groups.push({
+                    key: 'other',
+                    label: 'Other',
+                    icon: 'bi-bell',
+                    items: otherItems,
+                    latestCreatedAt: String(otherItems[0] && otherItems[0].created_at || ''),
+                    latestSeq: Math.max(0, Number(otherItems[0] && otherItems[0].seq || 0) || 0),
+                });
+            }
+            groups.sort((a, b) => {
+                if (a.latestCreatedAt !== b.latestCreatedAt) return b.latestCreatedAt.localeCompare(a.latestCreatedAt);
+                return b.latestSeq - a.latestSeq;
+            });
+            return groups;
         }
 
         canopySidebarAttentionState.dismissedThroughCursor = loadCanopyAttentionDismissCursor();
@@ -5374,75 +5443,96 @@
                 }
                 if (emptyWrap) emptyWrap.style.display = 'none';
 
-                normalized.forEach((item) => {
-                    const btn = document.createElement('button');
-                    btn.type = 'button';
-                    btn.className = 'dropdown-item notification-item';
+                groupCanopyAttentionItems(normalized).forEach((group) => {
+                    const section = document.createElement('div');
+                    section.className = 'notification-section';
+                    section.setAttribute('data-section-kind', String(group.key || 'other'));
 
-                    const row = document.createElement('div');
-                    row.className = 'activity-row';
+                    const label = document.createElement('div');
+                    label.className = 'notification-section-label';
+                    const left = document.createElement('span');
+                    left.innerHTML = `<i class="bi ${String(group.icon || 'bi-bell')}"></i><span>${String(group.label || 'Other')}</span>`;
+                    left.style.display = 'inline-flex';
+                    left.style.alignItems = 'center';
+                    left.style.gap = '8px';
+                    const count = document.createElement('span');
+                    count.className = 'notification-section-count';
+                    count.textContent = `${group.items.length} ${group.items.length === 1 ? 'item' : 'items'}`;
+                    label.appendChild(left);
+                    label.appendChild(count);
+                    section.appendChild(label);
 
-                    const iconWrap = document.createElement('div');
-                    iconWrap.className = 'activity-avatar';
-                    const avatarUrl = _safeImageSrc(item.avatar_url || '');
-                    if (avatarUrl) {
-                        const img = document.createElement('img');
-                        img.src = avatarUrl;
-                        img.alt = String(item.title || 'Activity');
-                        iconWrap.appendChild(img);
-                    } else {
-                        const fallbackLabel = String(item.title || '').trim();
-                        const fallbackInitial = fallbackLabel ? fallbackLabel.slice(0, 1).toUpperCase() : '';
-                        if (fallbackInitial && /^[A-Z0-9]$/.test(fallbackInitial)) {
-                            iconWrap.textContent = fallbackInitial;
+                    group.items.forEach((item) => {
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'dropdown-item notification-item';
+
+                        const row = document.createElement('div');
+                        row.className = 'activity-row';
+
+                        const iconWrap = document.createElement('div');
+                        iconWrap.className = 'activity-avatar';
+                        const avatarUrl = _safeImageSrc(item.avatar_url || '');
+                        if (avatarUrl) {
+                            const img = document.createElement('img');
+                            img.src = avatarUrl;
+                            img.alt = String(item.title || 'Activity');
+                            iconWrap.appendChild(img);
                         } else {
-                            const icon = document.createElement('i');
-                            icon.className = String(item.icon || 'bi-bell');
-                            iconWrap.appendChild(icon);
+                            const fallbackLabel = String(item.title || '').trim();
+                            const fallbackInitial = fallbackLabel ? fallbackLabel.slice(0, 1).toUpperCase() : '';
+                            if (fallbackInitial && /^[A-Z0-9]$/.test(fallbackInitial)) {
+                                iconWrap.textContent = fallbackInitial;
+                            } else {
+                                const icon = document.createElement('i');
+                                icon.className = String(item.icon || (CANOPY_ATTENTION_FILTER_MAP[group.key] || {}).icon || 'bi-bell');
+                                iconWrap.appendChild(icon);
+                            }
                         }
-                    }
 
-                    const body = document.createElement('div');
-                    body.className = 'activity-body';
+                        const body = document.createElement('div');
+                        body.className = 'activity-body';
 
-                    const top = document.createElement('div');
-                    top.className = 'activity-top';
+                        const top = document.createElement('div');
+                        top.className = 'activity-top';
 
-                    const titleEl = document.createElement('span');
-                    titleEl.className = 'activity-name';
-                    titleEl.textContent = String(item.title || 'Activity');
+                        const titleEl = document.createElement('span');
+                        titleEl.className = 'activity-name';
+                        titleEl.textContent = String(item.title || 'Activity');
 
-                    const timeEl = document.createElement('span');
-                    timeEl.className = 'activity-time';
-                    if (item.created_at) {
-                        timeEl.textContent = formatTimestamp(item.created_at);
-                        timeEl.setAttribute('data-timestamp', item.created_at);
-                    }
+                        const timeEl = document.createElement('span');
+                        timeEl.className = 'activity-time';
+                        if (item.created_at) {
+                            timeEl.textContent = formatTimestamp(item.created_at);
+                            timeEl.setAttribute('data-timestamp', item.created_at);
+                        }
 
-                    top.appendChild(titleEl);
-                    top.appendChild(timeEl);
+                        top.appendChild(titleEl);
+                        top.appendChild(timeEl);
 
-                    const sub = document.createElement('div');
-                    sub.className = 'activity-sub';
-                    const meta = String(item.meta || '').trim();
-                    const preview = cleanPreview(item.preview || '');
-                    if (meta && preview) {
-                        sub.textContent = `${meta} • ${preview}`;
-                    } else {
-                        sub.textContent = meta || preview || 'Open';
-                    }
+                        const sub = document.createElement('div');
+                        sub.className = 'activity-sub';
+                        const meta = String(item.meta || '').trim();
+                        const preview = cleanPreview(item.preview || '');
+                        if (meta && preview) {
+                            sub.textContent = `${meta} • ${preview}`;
+                        } else {
+                            sub.textContent = meta || preview || 'Open';
+                        }
 
-                    body.appendChild(top);
-                    body.appendChild(sub);
+                        body.appendChild(top);
+                        body.appendChild(sub);
 
-                    row.appendChild(iconWrap);
-                    row.appendChild(body);
-                    btn.appendChild(row);
-                    btn.addEventListener('click', () => {
-                        const href = String(item.href || '').trim();
-                        if (href) window.location.href = href;
+                        row.appendChild(iconWrap);
+                        row.appendChild(body);
+                        btn.appendChild(row);
+                        btn.addEventListener('click', () => {
+                            const href = String(item.href || '').trim();
+                            if (href) window.location.href = href;
+                        });
+                        section.appendChild(btn);
                     });
-                    listEl.appendChild(btn);
+                    listEl.appendChild(section);
                 });
             };
 
@@ -5484,6 +5574,27 @@
 
         function startCanopySidebarPeerPolling() {
             const endpoint = ((window.CANOPY_VARS && window.CANOPY_VARS.urls) || {}).peerActivity || '/ajax/peer_activity';
+            const baseDelayMs = 2500;
+            const maxDelayMs = 15000;
+
+            function scheduleNext(delayMs) {
+                if (canopySidebarPeerPollState.timerId) {
+                    window.clearTimeout(canopySidebarPeerPollState.timerId);
+                }
+                canopySidebarPeerPollState.timerId = window.setTimeout(poll, delayMs);
+            }
+
+            function handleFailure(detail) {
+                canopySidebarPeerPollState.failureCount += 1;
+                canopySidebarPeerPollState.nextDelayMs = Math.min(
+                    maxDelayMs,
+                    baseDelayMs * Math.max(1, Math.pow(2, canopySidebarPeerPollState.failureCount - 1))
+                );
+                const retrySeconds = Math.max(1, Math.round(canopySidebarPeerPollState.nextDelayMs / 1000));
+                console.warn('Canopy sidebar peer poll failed:', detail);
+                setSidebarPeerPollingStatus(`Peer refresh degraded, retrying in ${retrySeconds}s`, true);
+                scheduleNext(canopySidebarPeerPollState.nextDelayMs);
+            }
 
             function poll() {
                 const params = new URLSearchParams();
@@ -5491,18 +5602,28 @@
                     params.set('peer_rev', canopySidebarPeerState.currentRev);
                 }
                 fetch(`${endpoint}${params.toString() ? `?${params.toString()}` : ''}`)
-                    .then(r => r.json())
+                    .then(async (r) => {
+                        if (!r.ok) {
+                            throw new Error(`HTTP ${r.status}`);
+                        }
+                        return r.json();
+                    })
                     .then(data => {
-                        if (!data || data.success === false) return;
-                        if (window.syncCanopySidebarPeers && (data.peer_changed !== false || data.peer_rev)) {
+                        if (!data || data.success === false) {
+                            throw new Error((data && data.error) || 'peer_activity unsuccessful');
+                        }
+                        canopySidebarPeerPollState.failureCount = 0;
+                        canopySidebarPeerPollState.nextDelayMs = baseDelayMs;
+                        setSidebarPeerPollingStatus('Showing up to five peers');
+                        if (window.syncCanopySidebarPeers) {
                             window.syncCanopySidebarPeers(data);
                         }
+                        scheduleNext(baseDelayMs);
                     })
-                    .catch(() => {});
+                    .catch((err) => handleFailure(err));
             }
 
             poll();
-            window.setInterval(poll, 2500);
         }
 
         // --- Sidebar media mini player (audio/video/youtube off-screen helper) ---
@@ -5594,11 +5715,13 @@
             const deckMinimizeFooterBtn = document.getElementById('sidebar-media-deck-minimize-footer');
             const deckMiniFooterBtn = document.getElementById('sidebar-media-deck-mini-player-footer');
             const deckCloseBtn = document.getElementById('sidebar-media-deck-close');
+            const deckLargeToggleBtn = document.getElementById('sidebar-media-deck-large-toggle');
             const deckQueue = document.getElementById('sidebar-media-deck-queue');
             const deckQueueCount = document.getElementById('sidebar-media-deck-queue-count');
             const deckQueueShell = deckQueue ? deckQueue.closest('.sidebar-media-deck-queue-shell') : null;
             const deckQueueToggle = document.getElementById('sidebar-media-deck-queue-toggle');
             const deckDetailToggle = document.getElementById('sidebar-media-deck-detail-toggle');
+            const youtubeDeckTitleCache = new Map();
 
             const state = {
                 current: null,
@@ -5631,6 +5754,7 @@
                 deckDetailCollapsed: false,
                 deckLayoutMode: 'default',
                 deckLayoutPrimedKey: '',
+                deckDesktopMode: String(loadSidebarRailPreference('deckDesktopMode', 'default') || 'default').trim().toLowerCase() === 'large' ? 'large' : 'default',
                 /** Last `state.deckItems.length` applied in `syncDeckLayoutMode` (module layout). */
                 deckLayoutLastQueueCount: -1,
             };
@@ -5657,6 +5781,7 @@
             }
 
             setCanopySidebarMiniPosition(canopySidebarRailState.miniPosition);
+            applyDeckDesktopMode(state.deckDesktopMode, { silent: true });
 
             function scheduleMiniUpdate(delay = 0) {
                 const wait = Number(delay || 0);
@@ -5736,6 +5861,174 @@
                 if (type === 'media_embed') return 'Embedded media';
                 if (type === 'story') return 'Story';
                 return 'Media';
+            }
+
+            function isDesktopDeckLargeEligible() {
+                return window.innerWidth > 900 && window.innerHeight > 620;
+            }
+
+            function syncDeckDesktopModeButton() {
+                if (!deckLargeToggleBtn) return;
+                const eligible = isDesktopDeckLargeEligible();
+                const large = eligible && state.deckDesktopMode === 'large';
+                deckLargeToggleBtn.hidden = !eligible;
+                deckLargeToggleBtn.disabled = !eligible;
+                deckLargeToggleBtn.classList.toggle('is-active', large);
+                deckLargeToggleBtn.innerHTML = large
+                    ? '<i class="bi bi-fullscreen-exit"></i><span class="sidebar-media-deck-action-label">Standard view</span>'
+                    : '<i class="bi bi-arrows-fullscreen"></i><span class="sidebar-media-deck-action-label">Large view</span>';
+                deckLargeToggleBtn.title = large ? 'Return Canopy deck to standard size' : 'Use larger Canopy deck view';
+                deckLargeToggleBtn.setAttribute('aria-label', deckLargeToggleBtn.title);
+            }
+
+            function applyDeckDesktopMode(mode, options = {}) {
+                const requested = String(mode || '').trim().toLowerCase() === 'large' ? 'large' : 'default';
+                state.deckDesktopMode = requested;
+                saveSidebarRailPreference('deckDesktopMode', requested);
+                const activeMode = isDesktopDeckLargeEligible() ? requested : 'default';
+                if (deck) {
+                    deck.classList.toggle('is-desktop-large', activeMode === 'large');
+                }
+                syncDeckDesktopModeButton();
+                if (!options.silent) {
+                    scheduleMiniUpdate(0);
+                }
+            }
+
+            function toggleDeckDesktopMode() {
+                applyDeckDesktopMode(state.deckDesktopMode === 'large' ? 'default' : 'large');
+            }
+
+            function normalizeYouTubeReadableTitle(value, videoId) {
+                const text = String(value || '').replace(/\s+/g, ' ').trim();
+                if (!text) return '';
+                const lower = text.toLowerCase();
+                const vid = String(videoId || '').trim().toLowerCase();
+                if (lower === 'youtube video' || lower === 'youtube') return '';
+                if (vid && lower === vid) return '';
+                if (vid && lower === `youtube ${vid}`) return '';
+                if (/^youtube[\s:_-]+[a-z0-9_-]{8,}$/i.test(text)) return '';
+                if (/^(https?:\/\/|www\.)/i.test(text)) return '';
+                return text;
+            }
+
+            function getYouTubeReadableTitleFromDom(el) {
+                if (!el) return '';
+                const wrapper = el.matches && el.matches('.youtube-embed')
+                    ? el
+                    : (el.closest ? el.closest('.youtube-embed') : null);
+                const videoId = getYouTubeVideoId(el);
+                const candidates = [
+                    el.getAttribute && el.getAttribute('data-canopy-media-title'),
+                    wrapper && wrapper.getAttribute && wrapper.getAttribute('data-canopy-media-title'),
+                    el.getAttribute && el.getAttribute('data-youtube-title'),
+                    wrapper && wrapper.getAttribute && wrapper.getAttribute('data-youtube-title'),
+                    el.getAttribute && el.getAttribute('title'),
+                    wrapper && wrapper.getAttribute && wrapper.getAttribute('title'),
+                ];
+                if (wrapper && wrapper.closest) {
+                    const manifestHost = wrapper.closest('[data-canopy-widget-manifest]');
+                    if (manifestHost) {
+                        try {
+                            const manifest = parseDeckWidgetManifest(manifestHost);
+                            if (manifest && manifest.title) candidates.push(manifest.title);
+                        } catch (_) {}
+                    }
+                    const sourceEl = sourceContainer(wrapper);
+                    if (sourceEl && sourceEl.querySelectorAll) {
+                        const linkCandidates = sourceEl.querySelectorAll('a[href*="youtu"], a[href*="youtube.com"]');
+                        linkCandidates.forEach((link) => {
+                            const href = String(link.getAttribute('href') || '').trim();
+                            const text = String(link.textContent || '').trim();
+                            if (!text || !href) return;
+                            if (text === href) return;
+                            candidates.push(text);
+                        });
+                    }
+                }
+                const cached = videoId ? youtubeDeckTitleCache.get(videoId) : null;
+                if (cached && cached.title) candidates.unshift(cached.title);
+                for (const candidate of candidates) {
+                    const normalized = normalizeYouTubeReadableTitle(candidate, videoId);
+                    if (normalized) return normalized;
+                }
+                return '';
+            }
+
+            function applyResolvedYouTubeTitle(videoId, title) {
+                const vid = String(videoId || '').trim();
+                const normalized = normalizeYouTubeReadableTitle(title, vid);
+                if (!vid || !normalized) return;
+                document.querySelectorAll(`.youtube-embed[data-video-id="${vid}"], .youtube-embed iframe[data-video-id="${vid}"]`).forEach((node) => {
+                    if (!(node instanceof Element)) return;
+                    node.setAttribute('data-canopy-media-title', normalized);
+                    const wrapper = node.matches('.youtube-embed') ? node : (node.closest ? node.closest('.youtube-embed') : null);
+                    if (wrapper) wrapper.setAttribute('data-canopy-media-title', normalized);
+                });
+                if (Array.isArray(state.deckItems)) {
+                    let changed = false;
+                    state.deckItems.forEach((item) => {
+                        if (!item || item.type !== 'youtube') return;
+                        if (getYouTubeVideoId(item.el) !== vid) return;
+                        if (item.title !== normalized) {
+                            item.title = normalized;
+                            changed = true;
+                        }
+                    });
+                    if (changed) {
+                        state.deckQueueSignature = '';
+                        renderDeckQueue();
+                    }
+                }
+                if (state.current && state.current.type === 'youtube' && getYouTubeVideoId(state.current.el) === vid) {
+                    state.current.title = normalized;
+                    updateDeckPanel();
+                }
+            }
+
+            function requestYouTubeReadableTitle(el) {
+                const videoId = getYouTubeVideoId(el);
+                if (!videoId) return;
+                const cached = youtubeDeckTitleCache.get(videoId);
+                if (cached && cached.title) {
+                    applyResolvedYouTubeTitle(videoId, cached.title);
+                    return;
+                }
+                if (cached && cached.pending) return;
+                youtubeDeckTitleCache.set(videoId, { pending: true, title: '', error: '' });
+                fetch(`/api/v1/deck/youtube-title?video_id=${encodeURIComponent(videoId)}`, {
+                    method: 'GET',
+                    credentials: 'same-origin',
+                    headers: { Accept: 'application/json' },
+                })
+                    .then((resp) => resp.ok ? resp.json() : Promise.reject(new Error(`HTTP ${resp.status}`)))
+                    .then((payload) => {
+                        const title = normalizeYouTubeReadableTitle(payload && payload.title, videoId);
+                        youtubeDeckTitleCache.set(videoId, { pending: false, title, error: '' });
+                        if (title) {
+                            applyResolvedYouTubeTitle(videoId, title);
+                        }
+                    })
+                    .catch((error) => {
+                        youtubeDeckTitleCache.set(videoId, {
+                            pending: false,
+                            title: '',
+                            error: error && error.message ? String(error.message) : 'lookup failed',
+                        });
+                    });
+            }
+
+            function preferredMediaTitle(el, type, currentTitle) {
+                if (!el) return String(currentTitle || '').trim() || 'Now Playing';
+                if (type !== 'youtube') return String(currentTitle || '').trim() || titleFromMedia(el, type);
+                const domTitle = getYouTubeReadableTitleFromDom(el);
+                if (domTitle) return domTitle;
+                const playerTitle = titleFromMedia(el, type);
+                const normalizedPlayer = normalizeYouTubeReadableTitle(playerTitle, getYouTubeVideoId(el));
+                if (normalizedPlayer) return normalizedPlayer;
+                requestYouTubeReadableTitle(el);
+                const fallback = normalizeYouTubeReadableTitle(currentTitle, getYouTubeVideoId(el));
+                return fallback || 'YouTube video';
             }
 
             function isDeckMediaItem(item) {
@@ -6250,18 +6543,25 @@
             function titleFromMedia(el, type) {
                 if (!el) return 'Now Playing';
                 if (type === 'youtube') {
+                    const domTitle = getYouTubeReadableTitleFromDom(el);
+                    if (domTitle) {
+                        return domTitle;
+                    }
                     const player = el.__canopyMiniYTPlayer;
                     if (player && typeof player.getVideoData === 'function') {
                         try {
                             const data = player.getVideoData() || {};
-                            if (data.title && data.title.trim()) {
-                                return data.title.trim();
+                            const playerTitle = normalizeYouTubeReadableTitle(data.title, getYouTubeVideoId(el));
+                            if (playerTitle) {
+                                const wrapper = el.closest && el.closest('.youtube-embed');
+                                el.setAttribute('data-canopy-media-title', playerTitle);
+                                if (wrapper) wrapper.setAttribute('data-canopy-media-title', playerTitle);
+                                return playerTitle;
                             }
                         } catch (_) {}
                     }
-                    const vid = el.getAttribute('data-video-id') ||
-                        (el.closest('.youtube-embed') && el.closest('.youtube-embed').getAttribute('data-video-id')) || '';
-                    return vid ? `YouTube ${vid}` : 'YouTube video';
+                    requestYouTubeReadableTitle(el);
+                    return 'YouTube video';
                 }
 
                 const attachment = el.closest('.attachment-item');
@@ -6527,9 +6827,15 @@
                     return true;
                 }
                 if (type === 'youtube') {
+                    const currentHost = wrapper.parentNode;
+                    const preserveIframeDocument = !!(
+                        currentHost &&
+                        currentHost.isConnected &&
+                        host &&
+                        host.isConnected
+                    );
                     prepareYouTubeEmbedForHostMove(el, {
-                        skipResumeUrlRewrite: isSidebarDeckOrMiniHost(wrapper.parentNode) &&
-                            isSidebarDeckOrMiniHost(host),
+                        skipResumeUrlRewrite: preserveIframeDocument,
                     });
                 }
                 if (host === deckStage) {
@@ -8276,6 +8582,9 @@
                 }
 
                 items.forEach((item, index) => {
+                    if (item && item.el && isDeckMediaItem(item)) {
+                        item.title = preferredMediaTitle(item.el, item.type, item.title);
+                    }
                     const btn = document.createElement('button');
                     btn.type = 'button';
                     btn.className = 'sidebar-media-deck-item' + (selectedItem && selectedItem.key === item.key ? ' is-active' : '');
@@ -8316,6 +8625,7 @@
 
             function updateDeckVisibility() {
                 if (!deck || !deckBackdrop) return;
+                applyDeckDesktopMode(state.deckDesktopMode, { silent: true });
                 const visible = state.deckOpen && !!(state.current || getDeckSelectedItem());
                 const mobileDeckMode = isMobileDeckModalMode();
                 deck.hidden = !visible;
@@ -8475,7 +8785,10 @@
                 syncDeckLayoutMode(getDeckSelectedItem() || selectedItem);
 
                 const type = selectedItem.type;
-                const mediaTitle = selectedItem.title || titleFromMedia(selectedItem.el, type);
+                const mediaTitle = selectedItem && selectedItem.el
+                    ? preferredMediaTitle(selectedItem.el, type, selectedItem.title)
+                    : (selectedItem.title || titleFromMedia(selectedItem.el, type));
+                selectedItem.title = mediaTitle;
                 const subtitle = deckItemContextSubtitle(selectedItem);
 
                 if (deckTitle) deckTitle.textContent = mediaTitle;
@@ -8811,8 +9124,9 @@
 
             /**
              * Snapshot time/play state; optionally sync embed URL before reparenting.
-             * Mini ↔ deck: reparenting usually keeps the iframe document — rewriting src + resetYouTubePlayerBridge
-             * can blank the player. Post ↔ sidebar: URL + re-init still helps when the embed reloads.
+             * In-page moves usually preserve the iframe document, so rewriting src + resetting the
+             * YT bridge is more harmful than helpful there. Only reload when a caller explicitly
+             * asks for it by leaving skipResumeUrlRewrite false.
              */
             function prepareYouTubeEmbedForHostMove(el, opts) {
                 const options = opts && typeof opts === 'object' ? opts : {};
@@ -9614,6 +9928,10 @@
                 deckMiniPlayerBtn.addEventListener('click', () => switchDeckToMiniPlayer());
             }
 
+            if (deckLargeToggleBtn) {
+                deckLargeToggleBtn.addEventListener('click', () => toggleDeckDesktopMode());
+            }
+
             if (deckMinimizeFooterBtn) {
                 deckMinimizeFooterBtn.addEventListener('click', () => closeMediaDeck());
             }
@@ -9827,7 +10145,10 @@
             });
             state.mutationObserver.observe(mutationRoot, { childList: true, subtree: true });
 
-            window.addEventListener('resize', scheduleMiniUpdate);
+            window.addEventListener('resize', () => {
+                applyDeckDesktopMode(state.deckDesktopMode, { silent: true });
+                scheduleMiniUpdate();
+            });
             document.addEventListener('visibilitychange', scheduleMiniUpdate);
             document.addEventListener('keydown', (event) => {
                 if (!state.deckOpen) return;
@@ -9842,6 +10163,31 @@
                 if (!state.current || !state.current.el) return;
                 const el = state.current.el;
                 const type = state.current.type;
+                const sourceEl = firstConnectedDeckAnchor(
+                    state.current.sourceEl,
+                    state.deckOriginSourceEl,
+                    state.deckSourceEl
+                );
+                if (sourceEl && sourceEl.isConnected) {
+                    state.current.sourceEl = sourceEl;
+                    if (!state.deckOriginSourceEl || !state.deckOriginSourceEl.isConnected) {
+                        state.deckOriginSourceEl = sourceEl;
+                    }
+                    if (!state.deckSourceEl || !state.deckSourceEl.isConnected) {
+                        state.deckSourceEl = sourceEl;
+                    }
+                    pinDeckOriginIdsFromSourceEl(sourceEl);
+                }
+                if (state.deckOpen) {
+                    if (state.persistMediaRetryHandle) {
+                        clearInterval(state.persistMediaRetryHandle);
+                        state.persistMediaRetryHandle = null;
+                    }
+                    if ((type === 'youtube' || type === 'video') && deckStage && state.current && state.current.el) {
+                        moveDockedMediaToHost(state.current.el, deckStage);
+                    }
+                    return;
+                }
                 if (type !== 'youtube' || !miniVideoHost) return;
                 if (!shouldPersistActiveYouTube(el)) {
                     clearYouTubeDockResumeState(el);
@@ -9856,7 +10202,6 @@
                 }
 
                 if (!state.dockedSubtitle) state.dockedSubtitle = sourceSubtitle(el);
-                const sourceEl = state.current.sourceEl;
                 const messageId = sourceEl && sourceEl.getAttribute('data-message-id');
                 state.returnUrl = messageId
                     ? '/channels/locate?message_id=' + encodeURIComponent(messageId)
@@ -10659,7 +11004,10 @@
                         throw new Error(data.error || 'Could not request download');
                     }
                     if (typeof showAlert === 'function') {
-                        showAlert('Large attachment download requested. It will appear when the transfer completes.', 'success');
+                        showAlert(
+                            String(data.message || '').trim() || 'Large attachment download requested. It will appear when the transfer completes.',
+                            data.queued ? 'info' : 'success'
+                        );
                     }
                     return true;
                 })

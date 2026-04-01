@@ -128,8 +128,8 @@ def encode_channel_key_material(key_material: bytes) -> str:
 # Prevents a misbehaving or permanently-offline peer from exhausting RAM.
 MAX_PENDING_PER_PEER = 500
 
-MAX_CONTENT_BYTES = 256 * 1024       # 256 KB for text content
-MAX_PAYLOAD_BYTES = 512 * 1024       # 512 KB for total message payload
+MAX_CONTENT_BYTES = 512 * 1024       # 512 KB for text content
+MAX_PAYLOAD_BYTES = 1024 * 1024      # 1 MB for total message payload
 MAX_ID_BYTES = 512                   # max length for any user/post/signal ID
 
 # Replay-attack and clock-skew guards applied to all inbound messages.
@@ -177,8 +177,12 @@ class MessageType(Enum):
     # Private channel membership
     MEMBER_SYNC = "member_sync"                  # Add/remove member on remote peer
     MEMBER_SYNC_ACK = "member_sync_ack"          # Ack member sync delivery/apply
+    CHANNEL_REMOVAL_PROPOSAL = "channel_removal_proposal"  # Open a channel retirement vote
+    CHANNEL_REMOVAL_VOTE = "channel_removal_vote"          # Cast a channel retirement ballot
+    CHANNEL_REMOVAL_RESULT = "channel_removal_result"      # Finalized retirement result
     CHANNEL_MEMBERSHIP_QUERY = "channel_membership_query"      # Ask peer for private channel memberships
     CHANNEL_MEMBERSHIP_RESPONSE = "channel_membership_response"  # Recovery response with channel metadata
+    CHANNEL_METADATA_REQUEST = "channel_metadata_request"      # Ask origin peer to replay public channel metadata
     PRIVATE_CHANNEL_INVITE = "private_channel_invite"  # Invite peer to private channel
     CHANNEL_KEY_DISTRIBUTION = "channel_key_distribution"  # Wrapped channel key delivery
     CHANNEL_KEY_REQUEST = "channel_key_request"            # Request key delivery/re-send
@@ -270,8 +274,12 @@ class MessageRouter:
         MessageType.CHANNEL_ANNOUNCE,
         MessageType.MEMBER_SYNC,
         MessageType.MEMBER_SYNC_ACK,
+        MessageType.CHANNEL_REMOVAL_PROPOSAL,
+        MessageType.CHANNEL_REMOVAL_VOTE,
+        MessageType.CHANNEL_REMOVAL_RESULT,
         MessageType.CHANNEL_MEMBERSHIP_QUERY,
         MessageType.CHANNEL_MEMBERSHIP_RESPONSE,
+        MessageType.CHANNEL_METADATA_REQUEST,
         MessageType.CHANNEL_KEY_DISTRIBUTION,
         MessageType.CHANNEL_KEY_REQUEST,
         MessageType.CHANNEL_KEY_ACK,
@@ -345,8 +353,12 @@ class MessageRouter:
         self.on_catchup_response: Optional[Any] = None
         self.on_member_sync: Optional[Any] = None
         self.on_member_sync_ack: Optional[Any] = None
+        self.on_channel_removal_proposal: Optional[Any] = None
+        self.on_channel_removal_vote: Optional[Any] = None
+        self.on_channel_removal_result: Optional[Any] = None
         self.on_channel_membership_query: Optional[Any] = None
         self.on_channel_membership_response: Optional[Any] = None
+        self.on_channel_metadata_request: Optional[Any] = None
         self.on_private_channel_invite: Optional[Any] = None
         self.on_channel_key_distribution: Optional[Any] = None
         self.on_channel_key_request: Optional[Any] = None
@@ -576,18 +588,19 @@ class MessageRouter:
             logger.error(f"Decryption failed: {e}", exc_info=True)
             return False
     
-    async def route_message(self, message: P2PMessage) -> bool:
+    async def route_message(self, message: P2PMessage, bypass_seen: bool = False) -> bool:
         """
         Route a message to its destination.
         
         Args:
             message: Message to route
+            bypass_seen: Allow pending-flush retries for already-seen messages
             
         Returns:
             True if routing successful
         """
         # Check if we've seen this message (prevent loops)
-        if message.id in self.seen_messages:
+        if message.id in self.seen_messages and not bypass_seen:
             logger.debug(f"Already seen message {message.id}, skipping")
             return False
 
@@ -869,9 +882,19 @@ class MessageRouter:
             import json as _json
             payload_bytes = len(_json.dumps(payload).encode('utf-8'))
             if payload_bytes > MAX_PAYLOAD_BYTES:
+                meta = payload.get('metadata', {}) if isinstance(payload, dict) else {}
+                payload_type = (
+                    str(meta.get('type') or '').strip()
+                    if isinstance(meta, dict)
+                    else ''
+                ) or message.type.value
                 logger.warning(
-                    f"Dropping oversized message {message.id} from {message.from_peer}: "
-                    f"{payload_bytes} bytes exceeds {MAX_PAYLOAD_BYTES} limit"
+                    "oversize_drop_by_message_type peer=%s message_id=%s type=%s payload_bytes=%s limit=%s",
+                    message.from_peer,
+                    message.id,
+                    payload_type,
+                    payload_bytes,
+                    MAX_PAYLOAD_BYTES,
                 )
                 return False
             content_val = payload.get('content', '')
@@ -975,6 +998,7 @@ class MessageRouter:
                     security=meta.get('security'),
                     message_type=meta.get('message_type', 'text'),
                     display_name=meta.get('display_name'),
+                    account_type=meta.get('account_type'),
                     expires_at=meta.get('expires_at'),
                     ttl_seconds=meta.get('ttl_seconds'),
                     ttl_mode=meta.get('ttl_mode'),
@@ -1061,6 +1085,59 @@ class MessageRouter:
             except Exception as e:
                 logger.error(f"Error delivering member sync ack locally: {e}", exc_info=True)
 
+        elif message.type == MessageType.CHANNEL_REMOVAL_PROPOSAL and self.on_channel_removal_proposal:
+            try:
+                meta = payload.get('metadata', {})
+                self.on_channel_removal_proposal(
+                    proposal_id=meta.get('proposal_id'),
+                    channel_id=meta.get('channel_id'),
+                    channel_name=meta.get('channel_name'),
+                    channel_origin_peer=meta.get('channel_origin_peer'),
+                    channel_privacy_mode=meta.get('channel_privacy_mode'),
+                    initiator_peer_id=meta.get('initiator_peer_id') or message.from_peer,
+                    initiator_user_id=meta.get('initiator_user_id'),
+                    electorate_peer_ids=meta.get('electorate_peer_ids') or [],
+                    threshold_count=meta.get('threshold_count'),
+                    opened_at=meta.get('opened_at'),
+                    from_peer=message.from_peer,
+                )
+            except Exception as e:
+                logger.error(f"Error delivering channel removal proposal locally: {e}", exc_info=True)
+
+        elif message.type == MessageType.CHANNEL_REMOVAL_VOTE and self.on_channel_removal_vote:
+            try:
+                meta = payload.get('metadata', {})
+                self.on_channel_removal_vote(
+                    proposal_id=meta.get('proposal_id'),
+                    channel_id=meta.get('channel_id'),
+                    voter_peer_id=meta.get('voter_peer_id') or message.from_peer,
+                    voter_user_id=meta.get('voter_user_id'),
+                    vote=meta.get('vote'),
+                    reason=meta.get('reason'),
+                    cast_at=meta.get('cast_at'),
+                    from_peer=message.from_peer,
+                )
+            except Exception as e:
+                logger.error(f"Error delivering channel removal vote locally: {e}", exc_info=True)
+
+        elif message.type == MessageType.CHANNEL_REMOVAL_RESULT and self.on_channel_removal_result:
+            try:
+                meta = payload.get('metadata', {})
+                self.on_channel_removal_result(
+                    proposal_id=meta.get('proposal_id'),
+                    channel_id=meta.get('channel_id'),
+                    result=meta.get('result'),
+                    electorate_peer_ids=meta.get('electorate_peer_ids') or [],
+                    threshold_count=meta.get('threshold_count'),
+                    finalizing_peer_id=meta.get('finalizing_peer_id') or message.from_peer,
+                    finalizing_user_id=meta.get('finalizing_user_id'),
+                    tombstone_id=meta.get('tombstone_id'),
+                    finalized_at=meta.get('finalized_at'),
+                    from_peer=message.from_peer,
+                )
+            except Exception as e:
+                logger.error(f"Error delivering channel removal result locally: {e}", exc_info=True)
+
         elif message.type == MessageType.CHANNEL_MEMBERSHIP_QUERY and self.on_channel_membership_query:
             try:
                 meta = payload.get('metadata', {})
@@ -1068,6 +1145,7 @@ class MessageRouter:
                     query_id=meta.get('query_id'),
                     local_user_ids=meta.get('local_user_ids') or [],
                     limit=meta.get('limit'),
+                    username_hints=meta.get('username_hints') or {},
                     from_peer=message.from_peer,
                 )
             except Exception as e:
@@ -1084,6 +1162,18 @@ class MessageRouter:
                 )
             except Exception as e:
                 logger.error(f"Error delivering channel membership response locally: {e}", exc_info=True)
+
+        elif message.type == MessageType.CHANNEL_METADATA_REQUEST and self.on_channel_metadata_request:
+            try:
+                meta = payload.get('metadata', {})
+                self.on_channel_metadata_request(
+                    request_id=meta.get('request_id'),
+                    channel_ids=meta.get('channel_ids') or [],
+                    reason=meta.get('reason'),
+                    from_peer=message.from_peer,
+                )
+            except Exception as e:
+                logger.error(f"Error delivering channel metadata request locally: {e}", exc_info=True)
 
         elif message.type == MessageType.CHANNEL_KEY_DISTRIBUTION and self.on_channel_key_distribution:
             try:
@@ -1229,6 +1319,7 @@ class MessageRouter:
                         circles_latest=meta.get('circles_latest'),
                         tasks_latest=meta.get('tasks_latest'),
                         digest=meta.get('digest'),
+                        channel_ranges=meta.get('channel_ranges'),
                     )
                 except TypeError:
                     # Backward-compatibility for callbacks that predate
@@ -1311,6 +1402,7 @@ class MessageRouter:
                     ttl_seconds=meta.get('ttl_seconds'),
                     ttl_mode=meta.get('ttl_mode'),
                     display_name=meta.get('display_name'),
+                    account_type=meta.get('account_type'),
                     from_peer=message.from_peer,
                 )
             except Exception as e:
@@ -1341,6 +1433,7 @@ class MessageRouter:
                     message_id=meta.get('message_id'),
                     timestamp=meta.get('timestamp'),
                     display_name=meta.get('display_name'),
+                    account_type=meta.get('account_type'),
                     metadata=meta.get('metadata'),
                     update_only=meta.get('update_only'),
                     edited_at=meta.get('edited_at'),
@@ -1605,12 +1698,110 @@ class MessageRouter:
         self.sign_message(message)
         return await self._route_to_peer(message)
 
+    async def send_channel_removal_proposal(
+        self,
+        to_peer: str,
+        *,
+        proposal_id: str,
+        channel_id: str,
+        channel_name: str,
+        channel_origin_peer: Optional[str],
+        channel_privacy_mode: Optional[str],
+        initiator_peer_id: str,
+        initiator_user_id: Optional[str],
+        electorate_peer_ids: list[str],
+        threshold_count: int,
+        opened_at: Optional[str] = None,
+    ) -> bool:
+        payload = {
+            'content': '',
+            'metadata': {
+                'type': 'channel_removal_proposal',
+                'proposal_id': proposal_id,
+                'channel_id': channel_id,
+                'channel_name': channel_name,
+                'channel_origin_peer': channel_origin_peer,
+                'channel_privacy_mode': channel_privacy_mode,
+                'initiator_peer_id': initiator_peer_id,
+                'initiator_user_id': initiator_user_id,
+                'electorate_peer_ids': electorate_peer_ids,
+                'threshold_count': int(threshold_count),
+                'opened_at': opened_at,
+            },
+        }
+        message = self.create_message(MessageType.CHANNEL_REMOVAL_PROPOSAL, to_peer, payload)
+        self.sign_message(message)
+        return await self._route_to_peer(message)
+
+    async def send_channel_removal_vote(
+        self,
+        to_peer: str,
+        *,
+        proposal_id: str,
+        channel_id: str,
+        voter_peer_id: str,
+        voter_user_id: Optional[str],
+        vote: str,
+        reason: Optional[str] = None,
+        cast_at: Optional[str] = None,
+    ) -> bool:
+        payload = {
+            'content': '',
+            'metadata': {
+                'type': 'channel_removal_vote',
+                'proposal_id': proposal_id,
+                'channel_id': channel_id,
+                'voter_peer_id': voter_peer_id,
+                'voter_user_id': voter_user_id,
+                'vote': vote,
+                'reason': reason,
+                'cast_at': cast_at,
+            },
+        }
+        message = self.create_message(MessageType.CHANNEL_REMOVAL_VOTE, to_peer, payload)
+        self.sign_message(message)
+        return await self._route_to_peer(message)
+
+    async def send_channel_removal_result(
+        self,
+        to_peer: str,
+        *,
+        proposal_id: str,
+        channel_id: str,
+        result: str,
+        electorate_peer_ids: list[str],
+        threshold_count: int,
+        finalizing_peer_id: str,
+        finalizing_user_id: Optional[str],
+        tombstone_id: Optional[str] = None,
+        finalized_at: Optional[str] = None,
+    ) -> bool:
+        payload = {
+            'content': '',
+            'metadata': {
+                'type': 'channel_removal_result',
+                'proposal_id': proposal_id,
+                'channel_id': channel_id,
+                'result': result,
+                'electorate_peer_ids': electorate_peer_ids,
+                'threshold_count': int(threshold_count),
+                'finalizing_peer_id': finalizing_peer_id,
+                'finalizing_user_id': finalizing_user_id,
+                'tombstone_id': tombstone_id,
+                'finalized_at': finalized_at,
+            },
+        }
+        message = self.create_message(MessageType.CHANNEL_REMOVAL_RESULT, to_peer, payload)
+        self.sign_message(message)
+        return await self._route_to_peer(message)
+
     async def send_channel_membership_query(
         self,
         to_peer: str,
         local_user_ids: list[str],
         limit: int = 200,
         query_id: Optional[str] = None,
+        username_hints: Optional[dict] = None,
     ) -> bool:
         """Request targeted private-channel membership recovery data."""
         payload = {
@@ -1620,6 +1811,7 @@ class MessageRouter:
                 'query_id': query_id or f"MCQ{secrets.token_hex(8)}",
                 'local_user_ids': list(local_user_ids or []),
                 'limit': max(1, min(int(limit or 200), 500)),
+                'username_hints': dict(username_hints or {}),
             },
         }
         message = self.create_message(MessageType.CHANNEL_MEMBERSHIP_QUERY, to_peer, payload)
@@ -1644,6 +1836,32 @@ class MessageRouter:
             },
         }
         message = self.create_message(MessageType.CHANNEL_MEMBERSHIP_RESPONSE, to_peer, payload)
+        self.sign_message(message)
+        return await self._route_to_peer(message)
+
+    async def send_channel_metadata_request(
+        self,
+        to_peer: str,
+        channel_ids: list[str],
+        request_id: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> bool:
+        """Request authoritative public channel metadata for specific channel IDs."""
+        normalized_ids = [
+            str(channel_id or "").strip()
+            for channel_id in (channel_ids or [])
+            if str(channel_id or "").strip()
+        ]
+        payload = {
+            'content': '',
+            'metadata': {
+                'type': 'channel_metadata_request',
+                'request_id': request_id or f"CMR{secrets.token_hex(8)}",
+                'channel_ids': normalized_ids,
+                'reason': str(reason or '').strip() or None,
+            },
+        }
+        message = self.create_message(MessageType.CHANNEL_METADATA_REQUEST, to_peer, payload)
         self.sign_message(message)
         return await self._route_to_peer(message)
 
@@ -1914,7 +2132,8 @@ class MessageRouter:
     async def send_catchup_request(self, to_peer: str,
                                     channel_timestamps: Dict[str, str],
                                     extra_timestamps: Optional[Dict[str, str]] = None,
-                                    digest: Optional[Dict[str, Any]] = None) -> bool:
+                                    digest: Optional[Dict[str, Any]] = None,
+                                    channel_ranges: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
         """
         Send a catch-up request to a specific peer.
 
@@ -1924,6 +2143,7 @@ class MessageRouter:
             extra_timestamps: Optional dict with feed_latest, circle_entries_latest,
                               circle_votes_latest, tasks_latest
             digest: Optional channel digest envelope for sync optimization
+            channel_ranges: Optional per-channel oldest/latest/count hints
         """
         meta: Dict[str, Any] = {
             'type': 'channel_catchup_request',
@@ -1933,6 +2153,8 @@ class MessageRouter:
             meta.update(extra_timestamps)
         if digest:
             meta['digest'] = digest
+        if channel_ranges:
+            meta['channel_ranges'] = channel_ranges
 
         payload = {
             'content': '',
@@ -2205,7 +2427,7 @@ class MessageRouter:
         logger.info(f"Flushing {len(messages)} pending messages to {peer_id}")
         
         for message in messages:
-            if await self.route_message(message):
+            if await self.route_message(message, bypass_seen=True):
                 sent_count += 1
         
         return sent_count

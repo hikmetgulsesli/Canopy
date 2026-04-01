@@ -9,13 +9,14 @@ License: Apache 2.0
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import threading
 import time
 import json
 from collections import deque
-from typing import Optional, Callable, Dict, Any, Union, Tuple, Deque
+from typing import Optional, Callable, Dict, Any, Union, Tuple, Deque, Iterable
 from pathlib import Path
 
 from .. import __version__ as CANOPY_VERSION
@@ -31,6 +32,9 @@ from ..core.large_attachments import (
     LARGE_ATTACHMENT_THRESHOLD,
     LARGE_ATTACHMENT_CHUNK_SIZE,
     build_large_attachment_metadata,
+    get_attachment_origin_file_id,
+    get_attachment_source_peer_id,
+    is_large_attachment_reference,
 )
 from .identity import IdentityManager, PeerIdentity
 from .discovery import PeerDiscovery, DiscoveredPeer
@@ -39,11 +43,26 @@ from .routing import (
     MessageRouter,
     P2PMessage,
     MessageType,
+    MAX_PAYLOAD_BYTES,
     encrypt_with_channel_key,
     decode_channel_key_material,
 )
 
 logger = logging.getLogger('canopy.network.manager')
+
+# Keep inlined attachment blobs below the router payload ceiling, but do not
+# force ordinary images into remote-large mode too aggressively. We still apply
+# a sender-side payload budget pass before transmission, so this cap is only
+# the first stage of protection against oversized messages.
+P2P_INLINE_ATTACHMENT_MAX_BYTES = min(
+    LARGE_ATTACHMENT_THRESHOLD,
+    max(128 * 1024, MAX_PAYLOAD_BYTES // 4),
+)
+LEGACY_BULK_SYNC_MAX_PAYLOAD_BYTES = 512 * 1024
+LEGACY_BULK_SYNC_CAPABILITY = 'bulk_sync_1mb_v1'
+CHANNEL_SYNC_TARGET_PAYLOAD_BYTES = max(16 * 1024, int(MAX_PAYLOAD_BYTES * 0.75))
+ATTACHMENT_PAYLOAD_TARGET_BYTES = max(64 * 1024, MAX_PAYLOAD_BYTES - (32 * 1024))
+CATCHUP_EXTRA_TARGET_PAYLOAD_BYTES = max(64 * 1024, MAX_PAYLOAD_BYTES - (64 * 1024))
 
 
 class P2PNetworkManager:
@@ -93,6 +112,7 @@ class P2PNetworkManager:
         self.on_member_sync_ack: Optional[Callable] = None
         self.on_channel_membership_query: Optional[Callable] = None
         self.on_channel_membership_response: Optional[Callable] = None
+        self.on_channel_metadata_request: Optional[Callable] = None
         self.on_channel_key_distribution: Optional[Callable] = None
         self.on_channel_key_request: Optional[Callable] = None
         self.on_channel_key_ack: Optional[Callable] = None
@@ -185,8 +205,15 @@ class P2PNetworkManager:
         # Startup grace period — serializes syncs and limits concurrency
         self._startup_time: Optional[float] = None
         self._STARTUP_GRACE_PERIOD = 10.0  # seconds
+        self._POST_CONNECT_SETTLE_WINDOW_S = 1.5
         self._sync_queue: asyncio.Queue[str] = asyncio.Queue()
         self._sync_queue_task: Optional[asyncio.Task] = None
+        self._queued_sync_peers: set[str] = set()
+        self._syncs_in_progress: set[str] = set()
+        self._resync_after_current: set[str] = set()
+        self._post_connect_retry_counts: Dict[str, int] = {}
+        self._post_connect_retry_tokens: Dict[str, str] = {}
+        self._POST_CONNECT_SYNC_MAX_RETRIES = 3
         self._active_catchups: set = set()
         self._MAX_CONCURRENT_CATCHUPS_STARTUP = 2
         self._MAX_CONCURRENT_CATCHUPS_NORMAL = 5
@@ -228,6 +255,8 @@ class P2PNetworkManager:
         if bool(getattr(sec_cfg, 'identity_portability_enabled', False)):
             caps.append('identity_portability_v1')
         caps.append(LARGE_ATTACHMENT_CAPABILITY)
+        if MAX_PAYLOAD_BYTES > LEGACY_BULK_SYNC_MAX_PAYLOAD_BYTES:
+            caps.append(LEGACY_BULK_SYNC_CAPABILITY)
 
         out: list[str] = []
         seen = set()
@@ -287,7 +316,12 @@ class P2PNetworkManager:
             pass
         return False
 
-    def _build_p2p_attachment_entry(self, attachment: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _build_p2p_attachment_entry(
+        self,
+        attachment: Dict[str, Any],
+        *,
+        force_metadata_only: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         """Prepare one attachment payload for P2P propagation."""
         if not isinstance(attachment, dict):
             return None
@@ -298,18 +332,45 @@ class P2PNetworkManager:
             'type': attachment.get('type', attachment.get('content_type', 'application/octet-stream')),
             'size': attachment.get('size', 0),
         }
+        checksum = str(attachment.get('checksum') or '').strip()
+        if checksum:
+            entry['checksum'] = checksum
         if file_id:
             entry['id'] = file_id
 
+        existing_remote_reference: Dict[str, Any] = {}
+        if is_large_attachment_reference(attachment):
+            origin_file_id = get_attachment_origin_file_id(attachment)
+            source_peer_id = get_attachment_source_peer_id(attachment)
+            if origin_file_id and source_peer_id:
+                existing_remote_reference = {
+                    'origin_file_id': origin_file_id,
+                    'source_peer_id': source_peer_id,
+                    'large_attachment': True,
+                    'storage_mode': str(attachment.get('storage_mode') or 'remote_large').strip().lower() or 'remote_large',
+                    'download_status': str(attachment.get('download_status') or 'pending').strip().lower() or 'pending',
+                }
+
+        if existing_remote_reference and force_metadata_only:
+            entry.update(existing_remote_reference)
+            entry.pop('url', None)
+            return entry
+
         if not file_id or not self.file_manager:
+            if existing_remote_reference:
+                entry.update(existing_remote_reference)
+                entry.pop('url', None)
             return entry
 
         try:
             result = self.file_manager.get_file_data(file_id)
             if not result:
+                if existing_remote_reference:
+                    entry.update(existing_remote_reference)
+                    entry.pop('url', None)
                 return entry
             file_data, file_info = result
-            if len(file_data) <= LARGE_ATTACHMENT_THRESHOLD:
+            if not force_metadata_only and len(file_data) <= P2P_INLINE_ATTACHMENT_MAX_BYTES:
                 import base64
                 entry['data'] = base64.b64encode(file_data).decode('ascii')
                 logger.info(
@@ -331,13 +392,312 @@ class P2PNetworkManager:
             ))
             entry.pop('url', None)
             logger.info(
-                "Prepared large attachment metadata for %s (%d bytes)",
+                "Prepared metadata-only attachment reference for %s (%d bytes, inline cap=%d bytes)",
                 file_id,
                 len(file_data),
+                P2P_INLINE_ATTACHMENT_MAX_BYTES,
             )
         except Exception as e:
             logger.error("Failed to read file %s for P2P transfer: %s", file_id, e)
+            if existing_remote_reference:
+                entry.update(existing_remote_reference)
+                entry.pop('url', None)
         return entry
+
+    def _estimate_message_payload_bytes(self, content: Any, metadata: Any) -> int:
+        """Estimate payload bytes using the same JSON shape the router validates."""
+        try:
+            payload = {
+                'content': content if isinstance(content, str) else '',
+                'metadata': metadata or {},
+            }
+            return len(json.dumps(payload).encode('utf-8'))
+        except Exception:
+            return 0
+
+    def _prepare_p2p_attachment_entries(
+        self,
+        *,
+        content: str,
+        attachment_container: Dict[str, Any],
+        attachments: Optional[list[Any]],
+        context_label: str,
+    ) -> list[Dict[str, Any]]:
+        """Build attachment entries and demote inline blobs if the payload is too large."""
+        normalized_attachments = list(attachments or [])
+        entries: list[Dict[str, Any]] = []
+        for attachment in normalized_attachments:
+            entry = self._build_p2p_attachment_entry(attachment)
+            if entry:
+                entries.append(entry)
+
+        if not isinstance(attachment_container, dict):
+            return entries
+        if entries:
+            attachment_container['attachments'] = entries
+        else:
+            attachment_container.pop('attachments', None)
+            return entries
+
+        initial_size = self._estimate_message_payload_bytes(content, attachment_container)
+        if initial_size <= ATTACHMENT_PAYLOAD_TARGET_BYTES:
+            return entries
+
+        demotion_candidates: list[tuple[int, int, int]] = []
+        for idx, (attachment, entry) in enumerate(zip(normalized_attachments, entries)):
+            if not isinstance(entry, dict) or not entry.get('data'):
+                continue
+            entry_type = str(entry.get('type') or attachment.get('type') or '').strip().lower()
+            size_hint = int(entry.get('size') or attachment.get('size') or 0)
+            image_rank = 0 if entry_type.startswith('image/') else 1
+            demotion_candidates.append((image_rank, -size_hint, idx))
+
+        demoted = 0
+        for _, _, idx in sorted(demotion_candidates):
+            replacement = self._build_p2p_attachment_entry(
+                normalized_attachments[idx],
+                force_metadata_only=True,
+            )
+            if not replacement:
+                continue
+            entries[idx] = replacement
+            attachment_container['attachments'] = entries
+            demoted += 1
+            if self._estimate_message_payload_bytes(content, attachment_container) <= ATTACHMENT_PAYLOAD_TARGET_BYTES:
+                break
+
+        final_size = self._estimate_message_payload_bytes(content, attachment_container)
+        if demoted:
+            logger.info(
+                "Demoted %d inline attachment(s) for %s to fit payload budget (%d -> %d bytes)",
+                demoted,
+                context_label,
+                initial_size,
+                final_size,
+            )
+        if final_size > MAX_PAYLOAD_BYTES:
+            logger.warning(
+                "Payload for %s remains above router ceiling after attachment demotion (%d bytes > %d bytes)",
+                context_label,
+                final_size,
+                MAX_PAYLOAD_BYTES,
+            )
+        return entries
+
+    def _get_peer_bulk_sync_payload_limit(self, peer_id: Optional[str] = None) -> int:
+        """Return the safest bulk-sync payload ceiling for the target peer."""
+        clean_peer = str(peer_id or '').strip()
+        if not clean_peer:
+            return LEGACY_BULK_SYNC_MAX_PAYLOAD_BYTES
+        if self.peer_supports_capability(clean_peer, LEGACY_BULK_SYNC_CAPABILITY):
+            return MAX_PAYLOAD_BYTES
+        return min(MAX_PAYLOAD_BYTES, LEGACY_BULK_SYNC_MAX_PAYLOAD_BYTES)
+
+    def _get_channel_sync_target_payload_bytes(self, peer_id: Optional[str] = None) -> int:
+        """Return channel-sync batch target budget for the target peer."""
+        ceiling = self._get_peer_bulk_sync_payload_limit(peer_id)
+        return max(16 * 1024, int(ceiling * 0.75))
+
+    def _get_catchup_extra_target_payload_bytes(self, peer_id: Optional[str] = None) -> int:
+        """Return catch-up extra-data target budget for the target peer."""
+        ceiling = self._get_peer_bulk_sync_payload_limit(peer_id)
+        return max(64 * 1024, ceiling - (64 * 1024))
+
+    @staticmethod
+    def _estimate_catchup_response_payload_bytes(
+        messages: Optional[list[Dict[str, Any]]] = None,
+        extra_data: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Estimate the router-visible payload size for a catch-up response frame."""
+        payload: Dict[str, Any] = {
+            'content': '',
+            'metadata': {
+                'type': 'channel_catchup_response',
+                'messages': list(messages or []),
+            },
+        }
+        if extra_data:
+            payload['metadata'].update(extra_data)
+        return len(json.dumps(payload, separators=(',', ':'), sort_keys=True).encode('utf-8'))
+
+    def _chunk_catchup_extra_data(
+        self,
+        extra_data: Optional[Dict[str, Any]],
+        *,
+        target_payload_bytes: int = CATCHUP_EXTRA_TARGET_PAYLOAD_BYTES,
+    ) -> list[Dict[str, Any]]:
+        """Split catch-up extra_data into payload-safe chunks."""
+        if not isinstance(extra_data, dict) or not extra_data:
+            return []
+
+        clean_target = max(4096, int(target_payload_bytes or CATCHUP_EXTRA_TARGET_PAYLOAD_BYTES))
+        static_payload: Dict[str, Any] = {}
+        list_payloads: list[tuple[str, list[Any]]] = []
+        for key, value in extra_data.items():
+            if isinstance(value, list):
+                items = [item for item in value if item is not None]
+                if items:
+                    list_payloads.append((str(key), items))
+            elif value not in (None, '', {}, []):
+                static_payload[str(key)] = value
+
+        chunks: list[Dict[str, Any]] = []
+        current: Dict[str, Any] = dict(static_payload)
+        if current and self._estimate_catchup_response_payload_bytes([], current) > clean_target:
+            logger.warning(
+                "Static catchup extra payload exceeds target budget (%d bytes > %d bytes)",
+                self._estimate_catchup_response_payload_bytes([], current),
+                clean_target,
+            )
+
+        for key, items in list_payloads:
+            for item in items:
+                current.setdefault(key, [])
+                current[key].append(item)
+                if self._estimate_catchup_response_payload_bytes([], current) <= clean_target:
+                    continue
+                current[key].pop()
+                if not current[key]:
+                    current.pop(key, None)
+                if current:
+                    chunks.append(current)
+                current = {key: [item]}
+                item_size = self._estimate_catchup_response_payload_bytes([], current)
+                if item_size > clean_target:
+                    logger.warning(
+                        "Single catchup extra item for %s exceeds target budget (%d bytes > %d bytes)",
+                        key,
+                        item_size,
+                        clean_target,
+                    )
+
+        if current:
+            chunks.append(current)
+        return chunks
+
+    def _peer_is_trusted_for_content(self, peer_id: Any) -> bool:
+        """Return whether a peer should receive replicated user content."""
+        clean_peer = str(peer_id or '').strip()
+        if not clean_peer:
+            return False
+        local_peer = str(self.get_peer_id() or '').strip()
+        if local_peer and clean_peer == local_peer:
+            return True
+        has_explicit = getattr(self, 'has_explicit_trust_score', None)
+        if has_explicit:
+            try:
+                if not bool(has_explicit(clean_peer)):
+                    return False
+            except Exception:
+                return False
+        trust_lookup = getattr(self, 'get_trust_score', None)
+        if not trust_lookup:
+            return False
+        threshold = max(
+            1,
+            int(getattr(getattr(self.config, 'security', None), 'trust_threshold', 50) or 50),
+        )
+        try:
+            return int(trust_lookup(clean_peer)) >= threshold
+        except Exception:
+            return False
+
+    @staticmethod
+    def _estimate_channel_sync_payload_bytes(channels: list[Dict[str, Any]]) -> int:
+        """Estimate the router-visible payload size for a channel_sync frame."""
+        payload = {
+            'content': '',
+            'metadata': {
+                'type': 'channel_sync',
+                'channels': channels,
+            },
+        }
+        return len(json.dumps(payload, separators=(',', ':'), sort_keys=True).encode('utf-8'))
+
+    def _chunk_channel_sync_batches(
+        self,
+        channels: list[Dict[str, Any]],
+        *,
+        target_payload_bytes: int = CHANNEL_SYNC_TARGET_PAYLOAD_BYTES,
+    ) -> list[list[Dict[str, Any]]]:
+        """Split channel sync into payload-safe batches."""
+        clean_target = max(4096, int(target_payload_bytes or CHANNEL_SYNC_TARGET_PAYLOAD_BYTES))
+        batches: list[list[Dict[str, Any]]] = []
+        current: list[Dict[str, Any]] = []
+
+        for channel in channels or []:
+            trial = current + [channel]
+            trial_size = self._estimate_channel_sync_payload_bytes(trial)
+            if not current and trial_size > clean_target:
+                logger.warning(
+                    "Skipping oversized channel sync entry %s (%s bytes > %s budget)",
+                    str((channel or {}).get('id') or '').strip() or '<unknown>',
+                    trial_size,
+                    clean_target,
+                )
+                continue
+            if current and trial_size > clean_target:
+                batches.append(current)
+                current = [channel]
+                current_size = self._estimate_channel_sync_payload_bytes(current)
+                if current_size > clean_target:
+                    logger.warning(
+                        "Skipping oversized channel sync entry %s (%s bytes > %s budget)",
+                        str((channel or {}).get('id') or '').strip() or '<unknown>',
+                        current_size,
+                        clean_target,
+                    )
+                    current = []
+                continue
+            current = trial
+
+        if current:
+            batches.append(current)
+        return batches
+
+    def _filter_trusted_content_peers(self, peer_ids: Optional[Iterable[Any]]) -> list[str]:
+        """Normalize peer IDs and keep only trusted remote peers."""
+        local_peer = str(self.get_peer_id() or '').strip()
+        filtered: list[str] = []
+        seen: set[str] = set()
+        for raw_peer in peer_ids or []:
+            clean_peer = str(raw_peer or '').strip()
+            if not clean_peer or clean_peer == local_peer or clean_peer in seen:
+                continue
+            if not self._peer_is_trusted_for_content(clean_peer):
+                continue
+            seen.add(clean_peer)
+            filtered.append(clean_peer)
+        return filtered
+
+    def _derive_channel_delivery_peers(self, channel_id: str) -> list[str]:
+        """Derive trusted remote member peers for a restricted channel."""
+        clean_channel_id = str(channel_id or '').strip()
+        local_peer = str(self.get_peer_id() or '').strip()
+        if not clean_channel_id or not local_peer:
+            return []
+        try:
+            with self.db.get_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT DISTINCT u.origin_peer
+                    FROM channel_members cm
+                    JOIN users u ON u.id = cm.user_id
+                    WHERE cm.channel_id = ?
+                      AND u.origin_peer IS NOT NULL
+                      AND u.origin_peer != ''
+                      AND u.origin_peer != ?
+                    """,
+                    (clean_channel_id, local_peer),
+                ).fetchall()
+            peer_ids = [
+                str(row['origin_peer'] if hasattr(row, 'keys') and 'origin_peer' in row.keys() else row[0]).strip()
+                for row in (rows or [])
+            ]
+            return self._filter_trusted_content_peers(peer_ids)
+        except Exception as exc:
+            logger.debug("Could not derive trusted delivery peers for %s: %s", clean_channel_id, exc)
+            return []
 
     def _normalize_capability_items(self, raw_caps: Any) -> list[str]:
         values = raw_caps if isinstance(raw_caps, (list, tuple, set)) else []
@@ -359,6 +719,17 @@ class P2PNetworkManager:
         except Exception:
             row = None
         return row if isinstance(row, dict) else None
+
+    def _get_user_account_type(self, user_id: str) -> Optional[str]:
+        """Return a normalized local account type for outbound metadata."""
+        if not self.db or not user_id:
+            return None
+        try:
+            row = self.db.get_user(user_id)
+        except Exception:
+            row = None
+        raw = str((row or {}).get('account_type') or '').strip().lower()
+        return raw if raw in {'human', 'agent'} else None
 
     def describe_direct_message_security(self, recipient_ids: list[str]) -> Dict[str, Any]:
         clean_recipient_ids = []
@@ -545,6 +916,8 @@ class P2PNetworkManager:
             try:
                 peer_id = await self._sync_queue.get()
                 try:
+                    self._queued_sync_peers.discard(peer_id)
+                    self._syncs_in_progress.add(peer_id)
                     if not await self._acquire_catchup_slot(peer_id):
                         # Wait a bit and retry if at capacity
                         await asyncio.sleep(2.0)
@@ -563,8 +936,13 @@ class P2PNetworkManager:
                 except Exception as e:
                     logger.error(f"Error processing sync for {peer_id}: {e}", exc_info=True)
                 finally:
+                    self._syncs_in_progress.discard(peer_id)
                     self._release_catchup_slot(peer_id)
                     self._sync_queue.task_done()
+                    if peer_id in self._resync_after_current:
+                        self._resync_after_current.discard(peer_id)
+                        if self.connection_manager and self.connection_manager.is_connected(peer_id):
+                            await self._enqueue_sync(peer_id)
             except asyncio.CancelledError:
                 logger.info("Sync queue processor cancelled")
                 break
@@ -680,6 +1058,8 @@ class P2PNetworkManager:
                 self.message_router.on_channel_membership_query = self.on_channel_membership_query
             if self.on_channel_membership_response:
                 self.message_router.on_channel_membership_response = self.on_channel_membership_response
+            if self.on_channel_metadata_request:
+                self.message_router.on_channel_metadata_request = self.on_channel_metadata_request
             if self.on_channel_key_distribution:
                 self.message_router.on_channel_key_distribution = self.on_channel_key_distribution
             if self.on_channel_key_request:
@@ -848,13 +1228,16 @@ class P2PNetworkManager:
         try:
             from urllib.parse import urlparse
             ep = endpoint.strip()
-            if '://' not in ep:
+            had_explicit_scheme = '://' in ep
+            if not had_explicit_scheme:
                 ep = f"ws://{ep}"
             parsed = urlparse(ep)
             host = parsed.hostname
-            port = parsed.port
             scheme = parsed.scheme or 'ws'
-            if not host or not port:
+            port = parsed.port
+            if port is None and had_explicit_scheme:
+                port = 443 if scheme == 'wss' else 80 if scheme == 'ws' else None
+            if scheme not in ('ws', 'wss') or not host or not port:
                 return None
             return host, port, scheme
         except Exception:
@@ -1060,6 +1443,11 @@ class P2PNetworkManager:
         conn = self.connection_manager.get_connection(peer_id)
         if not conn:
             return None
+        endpoint_uri = str(getattr(conn, 'endpoint_uri', '') or '').strip()
+        if endpoint_uri:
+            canonical = self._canonicalize_endpoint(endpoint_uri)
+            if canonical:
+                return canonical
         address = str(getattr(conn, 'address', '') or '').strip()
         port = int(getattr(conn, 'port', 0) or 0)
         if not address or port <= 0:
@@ -1156,7 +1544,7 @@ class P2PNetworkManager:
             detail='Attempting connection',
             endpoint=canon or endpoint,
         )
-        ok = await self.connection_manager.connect_to_peer(peer_id, host, port)
+        ok = await self.connection_manager.connect_to_peer(peer_id, host, port, scheme=scheme)
         if ok and canon:
             # Claim the endpoint so stale mappings don't keep retrying the wrong peer_id.
             self.identity_manager.record_endpoint(peer_id, canon, claim=True)
@@ -1484,12 +1872,100 @@ class P2PNetworkManager:
 
     async def _enqueue_sync(self, peer_id: str) -> None:
         """Add a peer to the sync queue for serialized processing."""
+        if not peer_id:
+            return
         if self._sync_queue is not None:
+            queued = getattr(self, '_queued_sync_peers', set())
+            in_progress = getattr(self, '_syncs_in_progress', set())
+            if peer_id in queued:
+                logger.debug(f"Skipping duplicate queued sync for {peer_id}")
+                return
+            if peer_id in in_progress:
+                if not hasattr(self, '_resync_after_current'):
+                    self._resync_after_current = set()
+                self._resync_after_current.add(peer_id)
+                logger.debug(f"Deferring extra sync for {peer_id} until current run completes")
+                return
+            queued.add(peer_id)
             await self._sync_queue.put(peer_id)
             logger.debug(f"Enqueued post-connect sync for {peer_id}")
         else:
             # Fallback if queue not initialized yet
             await self._run_post_connect_sync_impl(peer_id)
+
+    @staticmethod
+    def _connection_token(connection: Optional[Any]) -> str:
+        """Return a short token describing a specific connection instance."""
+        if not connection:
+            return 'none'
+        direction = 'out' if bool(getattr(connection, 'is_outbound', True)) else 'in'
+        connected_at = float(getattr(connection, 'connected_at', 0.0) or 0.0)
+        return f"{direction}:{int(connected_at * 1000)}:{id(connection):x}"
+
+    def _request_post_connect_sync_retry(self, peer_id: str, reason: str) -> None:
+        """Queue one bounded retry when a stable post-connect sync could not run."""
+        connection_manager = getattr(self, 'connection_manager', None)
+        current = connection_manager.get_connection(peer_id) if connection_manager else None
+        current_token = self._connection_token(current)
+        if self._post_connect_retry_tokens.get(peer_id) != current_token:
+            self._post_connect_retry_tokens[peer_id] = current_token
+            self._post_connect_retry_counts.pop(peer_id, None)
+        count = int(getattr(self, '_post_connect_retry_counts', {}).get(peer_id, 0) or 0) + 1
+        self._post_connect_retry_counts[peer_id] = count
+        if count > int(getattr(self, '_POST_CONNECT_SYNC_MAX_RETRIES', 3) or 3):
+            logger.warning(
+                "post_connect_sync_retry_exhausted peer=%s reason=%s retry_count=%s",
+                peer_id,
+                reason,
+                count - 1,
+            )
+            return
+        if not hasattr(self, '_resync_after_current'):
+            self._resync_after_current = set()
+        self._resync_after_current.add(peer_id)
+        logger.info(
+            "post_connect_sync_retried peer=%s reason=%s retry_count=%s",
+            peer_id,
+            reason,
+            count,
+        )
+
+    async def _wait_for_connection_settle(self, peer_id: str) -> bool:
+        """Wait briefly so post-connect sync does not race a flapping session."""
+        connection_manager = getattr(self, 'connection_manager', None)
+        if not connection_manager:
+            return True
+        conn = connection_manager.get_connection(peer_id)
+        if not conn or not conn.is_connected():
+            logger.info(
+                "post_connect_sync_skipped peer=%s reason=peer_not_connected expected_token=%s current_token=%s",
+                peer_id,
+                self._connection_token(conn),
+                self._connection_token(connection_manager.get_connection(peer_id)),
+            )
+            return False
+        connected_at = float(getattr(conn, 'connected_at', 0.0) or 0.0)
+        settle_window = float(getattr(self, '_POST_CONNECT_SETTLE_WINDOW_S', 1.5) or 0.0)
+        if connected_at > 0.0 and settle_window > 0.0:
+            elapsed = max(0.0, time.time() - connected_at)
+            remaining = settle_window - elapsed
+            if remaining > 0:
+                logger.debug(
+                    "Waiting %.2fs for peer %s connection settle before sync",
+                    remaining,
+                    peer_id,
+                )
+                await asyncio.sleep(remaining)
+        current = connection_manager.get_connection(peer_id)
+        if current is not conn or not current or not current.is_connected():
+            logger.info(
+                "post_connect_sync_skipped peer=%s reason=connection_changed_before_settle expected_token=%s current_token=%s",
+                peer_id,
+                self._connection_token(conn),
+                self._connection_token(current),
+            )
+            return False
+        return True
 
     async def _run_post_connect_sync(self, peer_id: str) -> None:
         """
@@ -1505,16 +1981,44 @@ class P2PNetworkManager:
         (works for both incoming and outgoing invite-code connections).
         """
         try:
-            # Cancel any pending auto-reconnect task for this peer
-            self._cancel_reconnect(peer_id)
             self._refresh_peer_version_info(peer_id)
+            if not await self._wait_for_connection_settle(peer_id):
+                connection_manager = getattr(self, 'connection_manager', None)
+                current = connection_manager.get_connection(peer_id) if connection_manager else None
+                reason = (
+                    'connection_changed_before_settle'
+                    if current and getattr(current, 'is_connected', lambda: False)()
+                    else 'peer_not_connected'
+                )
+                self._request_post_connect_sync_retry(peer_id, reason)
+                return
+
+            # Only cancel reconnect once the current connection has survived the
+            # settle window; otherwise a brief flap can strand the peer.
+            self._cancel_reconnect(peer_id)
 
             # Notify application layer
             if self.on_peer_connected:
                 self.on_peer_connected(peer_id)
 
+            trusted_content = self._peer_is_trusted_for_content(peer_id)
+            if not trusted_content:
+                logger.info(
+                    "Post-connect sync running in public-only mode for untrusted peer %s",
+                    peer_id,
+                )
+                await self._send_channel_sync_to_peer(peer_id)
+                await self._send_public_channel_metadata_replay_to_peer(peer_id)
+                await self._send_catchup_request(peer_id)
+                return
+
             # Channel metadata sync
             await self._send_channel_sync_to_peer(peer_id)
+            await self._send_public_channel_metadata_replay_to_peer(peer_id)
+
+            # Profile/device metadata is lightweight and should not wait behind
+            # heavier recovery work such as membership, key replay, or catch-up.
+            await self._send_profile_to_peer(peer_id)
 
             # Ask connected peer for private-channel memberships relevant
             # to local users on this instance (missed announce/member-sync recovery).
@@ -1523,9 +2027,6 @@ class P2PNetworkManager:
             # Retry key requests for E2E private channels where this instance
             # still lacks active key material and the connected peer may provide it.
             await self._retry_missing_channel_key_requests_for_peer(peer_id)
-
-            # Exchange profile cards
-            await self._send_profile_to_peer(peer_id)
 
             # Announce other connected peers to the new peer
             await self._send_peer_announcement_to(peer_id)
@@ -1541,6 +2042,8 @@ class P2PNetworkManager:
 
             # Catch-up request for any missed messages
             await self._send_catchup_request(peer_id)
+            self._post_connect_retry_counts.pop(peer_id, None)
+            self._post_connect_retry_tokens.pop(peer_id, None)
             logger.info(f"Post-connect sync completed for {peer_id}")
         except Exception as e:
             logger.error(f"Error in post-connect sync for {peer_id}: {e}", exc_info=True)
@@ -1574,6 +2077,9 @@ class P2PNetworkManager:
         can display correct display names for all users on this device.
         """
         if not self.message_router or not self.get_local_profile_card:
+            return
+        if not self._peer_is_trusted_for_content(peer_id):
+            logger.debug("Skipping profile sync for untrusted peer %s", peer_id)
             return
         try:
             # Build device info once (shared across all cards)
@@ -1852,6 +2358,60 @@ class P2PNetworkManager:
         if not hasattr(self, '_introduced_peers'):
             self._introduced_peers = {}
         return list(self._introduced_peers.values())
+
+    def get_peer_public_identity(self, peer_id: str) -> Dict[str, Any]:
+        """Return a public-safe identity preview for a peer before trust."""
+        clean_peer_id = str(peer_id or '').strip()
+        result: Dict[str, Any] = {
+            'peer_id': clean_peer_id,
+            'node_name': '',
+            'avatar_initials': '',
+            'avatar_color': '',
+            'avatar_b64': None,
+            'avatar_mime': None,
+            'source': 'fallback',
+            'unverified': True,
+        }
+        if not clean_peer_id:
+            return result
+
+        hash_int = int(hashlib.sha256(clean_peer_id.encode('utf-8')).hexdigest()[:8], 16)
+        result['avatar_color'] = f"hsl({hash_int % 360}, 55%, 48%)"
+
+        introduced = {}
+        if hasattr(self, '_introduced_peers'):
+            introduced = self._introduced_peers.get(clean_peer_id) or {}
+
+        node_name = ''
+        if isinstance(introduced, dict):
+            node_name = str(introduced.get('display_name') or '').strip()
+            if node_name:
+                result['source'] = 'announced'
+
+        if not node_name and getattr(self, 'identity_manager', None):
+            try:
+                node_name = str(
+                    getattr(self.identity_manager, 'peer_display_names', {}).get(clean_peer_id) or ''
+                ).strip()
+            except Exception:
+                node_name = ''
+            if node_name:
+                result['source'] = 'identity'
+
+        if not node_name:
+            node_name = clean_peer_id[:12]
+
+        result['node_name'] = node_name
+
+        words = [word for word in node_name.split() if word]
+        if len(words) >= 2:
+            initials = (words[0][0] + words[-1][0]).upper()
+        else:
+            initials = (node_name[:2] or clean_peer_id[:2]).upper()
+        result['avatar_initials'] = initials
+
+        # Intentionally keep avatar_b64/avatar_mime unset pre-trust.
+        return result
 
     # ------------------------------------------------------------------ #
     #  Connection brokering and relay                                      #
@@ -2640,27 +3200,50 @@ class P2PNetworkManager:
         # for this specific user yet.
         if display_name:
             metadata['display_name'] = display_name
+        sender_account_type = self._get_user_account_type(user_id)
+        if sender_account_type:
+            metadata['account_type'] = sender_account_type
 
         # Embed file data for each attachment so peers can store locally.
         # Include original file_id so receivers can rewrite /files/ORIGINAL in content to /files/LOCAL.
         if attachments:
-            p2p_attachments = []
-            for att in attachments:
-                att_entry = self._build_p2p_attachment_entry(att)
-                if att_entry:
-                    p2p_attachments.append(att_entry)
-
-            metadata['attachments'] = p2p_attachments
+            p2p_attachments = self._prepare_p2p_attachment_entries(
+                content=outbound_content,
+                attachment_container=metadata,
+                attachments=attachments,
+                context_label=f"channel_message:{channel_id}:{message_id}",
+            )
             metadata['message_type'] = 'file'
 
-        # Broadcast all channel messages (including restricted) to the
-        # full mesh so intermediary peers can relay.  Content
-        # confidentiality for private channels will be enforced via
-        # E2E encryption; targeted-only sending was removed to fix
-        # relay gaps when member peers are not directly connected.
+        delivery_peers = self._filter_trusted_content_peers(list(target_peer_ids or []))
+        if targeted_channel and not delivery_peers:
+            delivery_peers = self._derive_channel_delivery_peers(channel_id)
+        if not targeted_channel and not delivery_peers:
+            delivery_peers = self._filter_trusted_content_peers(self.get_connected_peers())
+
+        if not delivery_peers:
+            logger.info(
+                "Skipping channel message %s in %s: no trusted target peers",
+                message_id,
+                channel_id,
+            )
+            return True
+
+        async def _send_channel_message() -> bool:
+            sent_any = False
+            for peer_id in delivery_peers:
+                ok = await self.message_router.send_channel_broadcast(
+                    outbound_content,
+                    metadata,
+                    to_peer=peer_id,
+                )
+                if ok:
+                    sent_any = True
+            return sent_any
+
         timeout = 60.0 if attachments else 5.0
         future = asyncio.run_coroutine_threadsafe(
-            self.message_router.send_channel_broadcast(outbound_content, metadata),
+            _send_channel_message(),
             self._event_loop
         )
         try:
@@ -2714,6 +3297,9 @@ class P2PNetworkManager:
 
         if display_name:
             meta['display_name'] = display_name
+        author_account_type = self._get_user_account_type(author_id)
+        if author_account_type:
+            meta['account_type'] = author_account_type
 
         # Embed file data for feed attachments so peers can render locally
         try:
@@ -2721,13 +3307,12 @@ class P2PNetworkManager:
             attachments = meta_metadata.get('attachments') if isinstance(meta_metadata, dict) else []
             attachments = attachments or []
             if attachments:
-                enriched = []
-                for att in attachments:
-                    entry = self._build_p2p_attachment_entry(att)
-                    if entry:
-                        enriched.append(entry)
-                if isinstance(meta_metadata, dict):
-                    meta_metadata['attachments'] = enriched
+                self._prepare_p2p_attachment_entries(
+                    content=content,
+                    attachment_container=meta_metadata,
+                    attachments=attachments,
+                    context_label=f"feed_post:{post_id}",
+                )
         except Exception as e:
             logger.debug(f"Feed attachment embedding failed: {e}")
 
@@ -2735,31 +3320,29 @@ class P2PNetworkManager:
             previous_visibility_mode,
             visibility_mode,
         )
-        if visibility_mode == 'trusted' and not target_peers:
+        if visibility_mode in {'public', 'network', 'trusted'} and not target_peers:
             logger.info(
-                "Feed post %s visibility=trusted has no trusted connected peers; keeping local only",
+                "Feed post %s visibility=%s has no trusted connected peers; keeping local only",
                 post_id,
+                visibility_mode,
             )
 
         async def _send_feed_post() -> bool:
             sent_any = False
-            if visibility_mode in {'public', 'network'}:
-                sent_any = await self.message_router.send_feed_post_broadcast(content, meta)
-            else:
-                for peer_id in target_peers:
-                    payload = {
-                        'content': content,
-                        'metadata': dict(meta),
-                    }
-                    message = self.message_router.create_message(
-                        MessageType.FEED_POST,
-                        peer_id,
-                        payload,
-                        ttl=getattr(self.message_router, '_CONTENT_TTL', 5),
-                    )
-                    self.message_router.sign_message(message)
-                    if await self.message_router._route_to_peer(message):
-                        sent_any = True
+            for peer_id in target_peers:
+                payload = {
+                    'content': content,
+                    'metadata': dict(meta),
+                }
+                message = self.message_router.create_message(
+                    MessageType.FEED_POST,
+                    peer_id,
+                    payload,
+                    ttl=getattr(self.message_router, '_CONTENT_TTL', 5),
+                )
+                self.message_router.sign_message(message)
+                if await self.message_router._route_to_peer(message):
+                    sent_any = True
 
             revoked_any = False
             if revoke_peers:
@@ -2797,25 +3380,12 @@ class P2PNetworkManager:
         visibility_mode = str(visibility or 'private').strip().lower() or 'private'
         if visibility_mode in {'private', 'custom'}:
             return []
-        peers = list(self.get_connected_peers())
+        peers = self._filter_trusted_content_peers(self.get_connected_peers())
         if visibility_mode in {'public', 'network'}:
             return peers
         if visibility_mode != 'trusted' or not self.get_trust_score:
             return []
-        threshold = max(
-            1,
-            int(getattr(getattr(self.config, 'security', None), 'trust_threshold', 50) or 50),
-        )
-        trusted_peers: list[str] = []
-        for peer_id in peers:
-            if not peer_id:
-                continue
-            try:
-                if int(self.get_trust_score(peer_id)) >= threshold:
-                    trusted_peers.append(peer_id)
-            except Exception:
-                continue
-        return trusted_peers
+        return peers
 
     def _get_feed_post_target_delta(
         self,
@@ -2865,6 +3435,9 @@ class P2PNetworkManager:
 
         if display_name:
             meta['display_name'] = display_name
+        interaction_account_type = self._get_user_account_type(user_id)
+        if interaction_account_type:
+            meta['account_type'] = interaction_account_type
 
         future = asyncio.run_coroutine_threadsafe(
             self.message_router.send_interaction_broadcast(meta),
@@ -2919,6 +3492,9 @@ class P2PNetworkManager:
 
         if display_name:
             meta['display_name'] = display_name
+        sender_account_type = self._get_user_account_type(sender_id)
+        if sender_account_type:
+            meta['account_type'] = sender_account_type
         if update_only:
             meta['update_only'] = True
         if edited_at:
@@ -2930,13 +3506,12 @@ class P2PNetworkManager:
             attachments = dm_metadata.get('attachments') if isinstance(dm_metadata, dict) else []
             attachments = attachments or []
             if attachments:
-                enriched = []
-                for att in attachments:
-                    entry = self._build_p2p_attachment_entry(att)
-                    if entry:
-                        enriched.append(entry)
-                if isinstance(dm_metadata, dict):
-                    dm_metadata['attachments'] = enriched
+                self._prepare_p2p_attachment_entries(
+                    content=content,
+                    attachment_container=dm_metadata,
+                    attachments=attachments,
+                    context_label=f"direct_message:{message_id}",
+                )
             user_metadata = dm_metadata
         except Exception as e:
             logger.debug(f"DM attachment embedding failed: {e}")
@@ -2974,6 +3549,22 @@ class P2PNetworkManager:
             outbound_metadata['security'] = dict(security_summary)
             if target_peer_id:
                 outbound_metadata['security']['target_peer_id'] = target_peer_id
+
+        try:
+            outbound_attachments = (
+                outbound_metadata.get('attachments')
+                if isinstance(outbound_metadata, dict)
+                else []
+            ) or []
+            if outbound_attachments:
+                self._prepare_p2p_attachment_entries(
+                    content=outbound_content,
+                    attachment_container=outbound_metadata,
+                    attachments=outbound_attachments,
+                    context_label=f"direct_message:{message_id}:final",
+                )
+        except Exception as e:
+            logger.debug(f"Final DM attachment budget pass failed: {e}")
 
         meta['metadata'] = outbound_metadata
         future = asyncio.run_coroutine_threadsafe(
@@ -3246,6 +3837,152 @@ class P2PNetworkManager:
         except Exception as e:
             logger.error(f"Error sending member sync: {e}", exc_info=True)
             return False
+
+    def broadcast_channel_removal_proposal(
+        self,
+        *,
+        proposal_id: str,
+        channel_id: str,
+        channel_name: str,
+        channel_origin_peer: Optional[str],
+        channel_privacy_mode: Optional[str],
+        initiator_user_id: Optional[str],
+        electorate_peer_ids: list[str],
+        threshold_count: int,
+        opened_at: Optional[str] = None,
+    ) -> bool:
+        if not self._running or not self._event_loop:
+            logger.warning("P2P network not running, cannot broadcast channel removal proposal")
+            return False
+        if not self.message_router:
+            return False
+        local_peer = str(self.get_peer_id() or '').strip()
+        targets = sorted({
+            str(peer_id or '').strip()
+            for peer_id in (electorate_peer_ids or [])
+            if str(peer_id or '').strip() and str(peer_id or '').strip() != local_peer
+        })
+        if not targets:
+            return True
+        ok = True
+        for target_peer in targets:
+            future = asyncio.run_coroutine_threadsafe(
+                self.message_router.send_channel_removal_proposal(
+                    to_peer=target_peer,
+                    proposal_id=proposal_id,
+                    channel_id=channel_id,
+                    channel_name=channel_name,
+                    channel_origin_peer=channel_origin_peer,
+                    channel_privacy_mode=channel_privacy_mode,
+                    initiator_peer_id=local_peer,
+                    initiator_user_id=initiator_user_id,
+                    electorate_peer_ids=electorate_peer_ids,
+                    threshold_count=threshold_count,
+                    opened_at=opened_at,
+                ),
+                self._event_loop,
+            )
+            try:
+                ok = bool(future.result(timeout=5.0)) and ok
+            except Exception as e:
+                ok = False
+                logger.error("Error sending channel removal proposal to %s: %s", target_peer, e, exc_info=True)
+        return ok
+
+    def broadcast_channel_removal_vote(
+        self,
+        *,
+        proposal_id: str,
+        channel_id: str,
+        voter_user_id: Optional[str],
+        vote: str,
+        electorate_peer_ids: list[str],
+        reason: Optional[str] = None,
+        cast_at: Optional[str] = None,
+    ) -> bool:
+        if not self._running or not self._event_loop:
+            logger.warning("P2P network not running, cannot broadcast channel removal vote")
+            return False
+        if not self.message_router:
+            return False
+        local_peer = str(self.get_peer_id() or '').strip()
+        targets = sorted({
+            str(peer_id or '').strip()
+            for peer_id in (electorate_peer_ids or [])
+            if str(peer_id or '').strip() and str(peer_id or '').strip() != local_peer
+        })
+        if not targets:
+            return True
+        ok = True
+        for target_peer in targets:
+            future = asyncio.run_coroutine_threadsafe(
+                self.message_router.send_channel_removal_vote(
+                    to_peer=target_peer,
+                    proposal_id=proposal_id,
+                    channel_id=channel_id,
+                    voter_peer_id=local_peer,
+                    voter_user_id=voter_user_id,
+                    vote=vote,
+                    reason=reason,
+                    cast_at=cast_at,
+                ),
+                self._event_loop,
+            )
+            try:
+                ok = bool(future.result(timeout=5.0)) and ok
+            except Exception as e:
+                ok = False
+                logger.error("Error sending channel removal vote to %s: %s", target_peer, e, exc_info=True)
+        return ok
+
+    def broadcast_channel_removal_result(
+        self,
+        *,
+        proposal_id: str,
+        channel_id: str,
+        result: str,
+        electorate_peer_ids: list[str],
+        threshold_count: int,
+        finalizing_user_id: Optional[str],
+        tombstone_id: Optional[str] = None,
+        finalized_at: Optional[str] = None,
+    ) -> bool:
+        if not self._running or not self._event_loop:
+            logger.warning("P2P network not running, cannot broadcast channel removal result")
+            return False
+        if not self.message_router:
+            return False
+        local_peer = str(self.get_peer_id() or '').strip()
+        targets = sorted({
+            str(peer_id or '').strip()
+            for peer_id in (electorate_peer_ids or [])
+            if str(peer_id or '').strip() and str(peer_id or '').strip() != local_peer
+        })
+        if not targets:
+            return True
+        ok = True
+        for target_peer in targets:
+            future = asyncio.run_coroutine_threadsafe(
+                self.message_router.send_channel_removal_result(
+                    to_peer=target_peer,
+                    proposal_id=proposal_id,
+                    channel_id=channel_id,
+                    result=result,
+                    electorate_peer_ids=electorate_peer_ids,
+                    threshold_count=threshold_count,
+                    finalizing_peer_id=local_peer,
+                    finalizing_user_id=finalizing_user_id,
+                    tombstone_id=tombstone_id,
+                    finalized_at=finalized_at,
+                ),
+                self._event_loop,
+            )
+            try:
+                ok = bool(future.result(timeout=5.0)) and ok
+            except Exception as e:
+                ok = False
+                logger.error("Error sending channel removal result to %s: %s", target_peer, e, exc_info=True)
+        return ok
 
     def send_channel_key_distribution(self, to_peer: str, channel_id: str,
                                        key_id: str, encrypted_key: str,
@@ -3593,6 +4330,7 @@ class P2PNetworkManager:
         local_user_ids: list[str],
         limit: int = 200,
         query_id: Optional[str] = None,
+        username_hints: Optional[dict] = None,
     ) -> bool:
         """Request private-channel membership recovery data from a peer."""
         if not self._running or not self._event_loop:
@@ -3605,6 +4343,7 @@ class P2PNetworkManager:
                 local_user_ids=local_user_ids,
                 limit=limit,
                 query_id=query_id,
+                username_hints=username_hints,
             ),
             self._event_loop,
         )
@@ -3654,6 +4393,66 @@ class P2PNetworkManager:
         future.add_done_callback(_on_done)
         return True
 
+    def send_channel_metadata_request(
+        self,
+        to_peer: str,
+        channel_ids: list[str],
+        request_id: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> bool:
+        """Request authoritative public channel metadata for specific channel IDs."""
+        if not self._running or not self._event_loop:
+            return False
+        if not self.message_router:
+            return False
+        future = asyncio.run_coroutine_threadsafe(
+            self.message_router.send_channel_metadata_request(
+                to_peer=to_peer,
+                channel_ids=channel_ids,
+                request_id=request_id,
+                reason=reason,
+            ),
+            self._event_loop,
+        )
+
+        def _on_done(f: Any) -> None:
+            try:
+                f.result()
+            except Exception as exc:
+                logger.error("Error sending channel metadata request: %s", exc)
+
+        future.add_done_callback(_on_done)
+        return True
+
+    def replay_public_channel_metadata_to_peer(
+        self,
+        to_peer: str,
+        channel_ids: Optional[list[str]] = None,
+        reason: str = 'targeted_request',
+        request_id: Optional[str] = None,
+    ) -> bool:
+        """Replay public channel metadata to a peer without blocking the caller."""
+        if not self._running or not self._event_loop:
+            return False
+        future = asyncio.run_coroutine_threadsafe(
+            self._send_public_channel_metadata_replay_to_peer(
+                to_peer,
+                channel_ids=channel_ids,
+                reason=reason,
+                request_id=request_id,
+            ),
+            self._event_loop,
+        )
+
+        def _on_done(f: Any) -> None:
+            try:
+                f.result()
+            except Exception as exc:
+                logger.error("Error replaying targeted public metadata: %s", exc)
+
+        future.add_done_callback(_on_done)
+        return True
+
     async def _send_channel_sync_to_peer(self, peer_id: str) -> None:
         """
         Send all local public channels to a newly connected peer.
@@ -3662,7 +4461,6 @@ class P2PNetworkManager:
         """
         if not self.message_router:
             return
-
         try:
             channels = []
             if self.get_public_channels_for_sync:
@@ -3672,10 +4470,117 @@ class P2PNetworkManager:
                 logger.debug(f"No public channels to sync with {peer_id}")
                 return
 
-            logger.debug(f"Sending channel sync ({len(channels)} channels) to {peer_id}")
-            await self.message_router.send_channel_sync(peer_id, channels)
+            target_payload_bytes = self._get_channel_sync_target_payload_bytes(peer_id)
+            batches = self._chunk_channel_sync_batches(
+                list(channels or []),
+                target_payload_bytes=target_payload_bytes,
+            )
+            if not batches:
+                logger.debug("No payload-safe public channel sync batches for %s", peer_id)
+                return
+
+            sent_channels = 0
+            total_channels = sum(len(batch) for batch in batches)
+            for idx, batch in enumerate(batches, start=1):
+                payload_bytes = self._estimate_channel_sync_payload_bytes(batch)
+                logger.debug(
+                    "Sending channel sync batch %s/%s to %s (channels=%s size=%s bytes)",
+                    idx,
+                    len(batches),
+                    peer_id,
+                    len(batch),
+                    payload_bytes,
+                )
+                ok = await self.message_router.send_channel_sync(peer_id, batch)
+                if not ok:
+                    logger.warning(
+                        "Channel sync batch %s/%s to %s failed after %s/%s channels",
+                        idx,
+                        len(batches),
+                        peer_id,
+                        sent_channels,
+                        total_channels,
+                    )
+                    break
+                sent_channels += len(batch)
         except Exception as e:
             logger.error(f"Error sending channel sync to {peer_id}: {e}", exc_info=True)
+
+    async def _send_public_channel_metadata_replay_to_peer(
+        self,
+        peer_id: str,
+        channel_ids: Optional[list[str]] = None,
+        reason: str = 'post_connect',
+        request_id: Optional[str] = None,
+    ) -> None:
+        """Replay lightweight per-channel metadata so names converge independently."""
+        if not self.message_router:
+            return
+        try:
+            channels = list(self.get_public_channels_for_sync() or []) if self.get_public_channels_for_sync else []
+            if not channels:
+                logger.debug("No public channel metadata replay needed for %s", peer_id)
+                return
+
+            requested_ids = {
+                str(channel_id or '').strip()
+                for channel_id in (channel_ids or [])
+                if str(channel_id or '').strip()
+            }
+            if requested_ids:
+                channels = [
+                    ch for ch in channels
+                    if isinstance(ch, dict) and str(ch.get('id') or '').strip() in requested_ids
+                ]
+                if not channels:
+                    logger.info(
+                        "No requested public channel metadata available for %s (request_id=%s reason=%s ids=%s)",
+                        peer_id,
+                        request_id or 'none',
+                        reason,
+                        sorted(requested_ids),
+                    )
+                    return
+
+            local_peer_id = str(self.get_peer_id() or '').strip()
+            sent = 0
+            for ch in channels:
+                if not isinstance(ch, dict):
+                    continue
+                channel_id = str(ch.get('id') or '').strip()
+                if not channel_id:
+                    continue
+                authority_peer = str(ch.get('origin_peer') or '').strip() or local_peer_id
+                ok = await self.message_router.send_channel_announce(
+                    channel_id=channel_id,
+                    name=str(ch.get('name') or '').strip(),
+                    channel_type=str(ch.get('type') or 'public').strip(),
+                    description=str(ch.get('desc') or '').strip(),
+                    created_by_peer=authority_peer,
+                    created_by_user_id=None,
+                    privacy_mode=str(ch.get('privacy_mode') or 'open').strip(),
+                    post_policy=ch.get('post_policy'),
+                    allow_member_replies=ch.get('allow_member_replies'),
+                    allowed_poster_user_ids=ch.get('allowed_poster_user_ids'),
+                    last_activity_at=ch.get('last_activity_at'),
+                    lifecycle_ttl_days=ch.get('lifecycle_ttl_days'),
+                    lifecycle_preserved=ch.get('lifecycle_preserved'),
+                    lifecycle_archived_at=ch.get('lifecycle_archived_at'),
+                    lifecycle_archive_reason=ch.get('lifecycle_archive_reason'),
+                    to_peer=peer_id,
+                )
+                if ok:
+                    sent += 1
+            if sent:
+                logger.info(
+                    "Replayed public channel metadata for %d channel(s) to %s (reason=%s request_id=%s)",
+                    sent,
+                    peer_id,
+                    reason,
+                    request_id or 'none',
+                )
+        except Exception as e:
+            logger.error(f"Error replaying public channel metadata to {peer_id}: {e}", exc_info=True)
 
     def _get_local_user_ids_for_membership_recovery(self, limit: int = 256) -> list[str]:
         """Return local user IDs hosted on this peer for membership recovery."""
@@ -3707,18 +4612,57 @@ class P2PNetworkManager:
             logger.debug(f"Failed to load local users for membership recovery: {e}")
             return []
 
+    def _get_local_username_hints_for_membership_recovery(
+        self,
+        user_ids: list[str],
+    ) -> dict[str, str]:
+        """Return user-id -> username hints for membership recovery queries."""
+        clean_user_ids = [
+            str(user_id or '').strip()
+            for user_id in (user_ids or [])
+            if str(user_id or '').strip()
+        ]
+        if not clean_user_ids:
+            return {}
+        try:
+            with self.db.get_connection() as conn:
+                placeholders = ','.join('?' for _ in clean_user_ids)
+                rows = conn.execute(
+                    f"""
+                    SELECT id, username
+                    FROM users
+                    WHERE id IN ({placeholders})
+                    """,
+                    tuple(clean_user_ids),
+                ).fetchall()
+            hints: dict[str, str] = {}
+            for row in rows or []:
+                user_id = str(row['id'] if hasattr(row, 'keys') and 'id' in row.keys() else row[0]).strip()
+                username = str(row['username'] if hasattr(row, 'keys') and 'username' in row.keys() else row[1]).strip()
+                if user_id and username:
+                    hints[user_id] = username
+            return hints
+        except Exception as e:
+            logger.debug(f"Failed to load username hints for membership recovery: {e}")
+            return {}
+
     async def _send_membership_recovery_query(self, peer_id: str) -> None:
         """Send targeted membership-recovery query to a connected peer."""
         if not self.message_router:
             return
+        if not self._peer_is_trusted_for_content(peer_id):
+            logger.debug("Skipping membership recovery query for untrusted peer %s", peer_id)
+            return
         local_user_ids = self._get_local_user_ids_for_membership_recovery(limit=256)
         if not local_user_ids:
             return
+        username_hints = self._get_local_username_hints_for_membership_recovery(local_user_ids)
         try:
             await self.message_router.send_channel_membership_query(
                 to_peer=peer_id,
                 local_user_ids=local_user_ids,
                 limit=200,
+                username_hints=username_hints,
             )
         except Exception as e:
             logger.debug(f"Membership recovery query to {peer_id} failed: {e}")
@@ -3806,9 +4750,13 @@ class P2PNetworkManager:
 
                 peers = self.connection_manager.get_connected_peers()
                 if peers:
+                    trusted_peers = self._filter_trusted_content_peers(peers)
+                    if not trusted_peers:
+                        await asyncio.sleep(self.PERIODIC_CATCHUP_INTERVAL)
+                        continue
                     logger.info(f"Periodic catch-up: syncing with "
-                                f"{len(peers)} connected peer(s)")
-                    for peer_id in peers:
+                                f"{len(trusted_peers)} trusted connected peer(s)")
+                    for peer_id in trusted_peers:
                         try:
                             await self._send_catchup_request(peer_id)
                         except Exception as per_err:
@@ -3832,11 +4780,46 @@ class P2PNetworkManager:
         """
         if not self.message_router:
             return
-
         try:
             channel_timestamps = {}
+            channel_ranges = {}
             if self.get_channel_latest_timestamps:
                 channel_timestamps = self.get_channel_latest_timestamps()
+            get_channel_history_bounds = getattr(self, 'get_channel_history_bounds', None)
+            if callable(get_channel_history_bounds):
+                try:
+                    channel_ranges = get_channel_history_bounds() or {}
+                except Exception:
+                    channel_ranges = {}
+            trusted_content = self._peer_is_trusted_for_content(peer_id)
+            if not trusted_content and channel_timestamps:
+                public_channel_ids = set()
+                if self.get_public_channels_for_sync:
+                    try:
+                        for channel in self.get_public_channels_for_sync() or []:
+                            channel_id = str((channel or {}).get('id') or '').strip()
+                            if channel_id:
+                                public_channel_ids.add(channel_id)
+                    except Exception as public_err:
+                        logger.debug(
+                            "Failed to resolve public channel IDs for catchup request to %s: %s",
+                            peer_id,
+                            public_err,
+                        )
+                if public_channel_ids:
+                    channel_timestamps = {
+                        channel_id: ts
+                        for channel_id, ts in channel_timestamps.items()
+                        if channel_id in public_channel_ids
+                    }
+                    channel_ranges = {
+                        channel_id: value
+                        for channel_id, value in channel_ranges.items()
+                        if channel_id in public_channel_ids
+                    }
+                else:
+                    channel_timestamps = {}
+                    channel_ranges = {}
 
             # Gather extra timestamps for non-channel data
             extra_timestamps = {}
@@ -3891,6 +4874,7 @@ class P2PNetworkManager:
                 peer_id, channel_timestamps,
                 extra_timestamps=extra_timestamps if extra_timestamps else None,
                 digest=digest_payload,
+                channel_ranges=channel_ranges if channel_ranges else None,
             )
         except Exception as e:
             logger.error(f"Error sending catchup request to {peer_id}: {e}",
@@ -3993,38 +4977,64 @@ class P2PNetworkManager:
             logger.info(f"Catchup to {peer_id}: sent {sent}/{len(messages)} "
                         f"messages successfully")
 
-        # Send extra data (circle entries, tasks, feed posts, votes) as
-        # a single batch response.  These are typically small so one
-        # message is fine.
+        # Send extra data (feed posts, circles, tasks, votes) in payload-safe
+        # chunks. A single oversized catchup metadata frame can otherwise
+        # prevent authoritative public-channel metadata from ever arriving.
         if extra_data:
-            total_extra = sum(len(v) for v in extra_data.values() if isinstance(v, list))
-            has_non_list_payload = any(
-                (not isinstance(v, list)) and v not in (None, '', {}, [])
-                for v in extra_data.values()
+            target_payload_bytes = self._get_catchup_extra_target_payload_bytes(peer_id)
+            extra_chunks = self._chunk_catchup_extra_data(
+                extra_data,
+                target_payload_bytes=target_payload_bytes,
             )
-            if total_extra > 0 or has_non_list_payload:
+            for idx, extra_chunk in enumerate(extra_chunks, start=1):
                 try:
                     ok = await asyncio.wait_for(
                         self.message_router.send_catchup_response(
-                            peer_id, [], extra_data=extra_data),
+                            peer_id, [], extra_data=extra_chunk),
                         timeout=30.0)
                     if ok:
+                        payload_bytes = self._estimate_catchup_response_payload_bytes([], extra_chunk)
                         parts = [
                             f"{k}={len(v)}"
-                            for k, v in extra_data.items()
+                            for k, v in extra_chunk.items()
                             if isinstance(v, list) and v
                         ]
-                        for k, v in extra_data.items():
+                        for k, v in extra_chunk.items():
                             if isinstance(v, dict) and v:
                                 parts.append(f"{k}=1")
-                        logger.info(f"Catchup to {peer_id}: sent extra data "
-                                    f"({', '.join(parts)})")
+                        logger.info(
+                            "Catchup to %s: sent extra data chunk %d/%d (%s bytes; %s)",
+                            peer_id,
+                            idx,
+                            len(extra_chunks),
+                            payload_bytes,
+                            ', '.join(parts) or 'no-items',
+                        )
                     else:
-                        logger.warning(f"Catchup to {peer_id}: failed to send extra data")
+                        logger.warning(
+                            "Catchup to %s: failed to send extra data chunk %d/%d",
+                            peer_id,
+                            idx,
+                            len(extra_chunks),
+                        )
+                        break
                 except asyncio.TimeoutError:
-                    logger.warning(f"Catchup to {peer_id}: timeout sending extra data")
+                    logger.warning(
+                        "Catchup to %s: timeout sending extra data chunk %d/%d",
+                        peer_id,
+                        idx,
+                        len(extra_chunks),
+                    )
+                    break
                 except Exception as e:
-                    logger.warning(f"Catchup to {peer_id}: error sending extra data: {e}")
+                    logger.warning(
+                        "Catchup to %s: error sending extra data chunk %d/%d: %s",
+                        peer_id,
+                        idx,
+                        len(extra_chunks),
+                        e,
+                    )
+                    break
 
     def get_connected_peers(self) -> list[str]:
         """Get list of currently connected peer IDs."""
@@ -4116,9 +5126,39 @@ class P2PNetworkManager:
             except Exception:
                 sync_queue_depth = 0
 
+        state_counts: Dict[str, int] = {}
+        pending_handshake_candidates: list[str] = []
+        if self.connection_manager:
+            try:
+                state_counts = self.connection_manager.get_connection_state_counts()
+            except Exception:
+                state_counts = {}
+            try:
+                pending_handshake_candidates = self.connection_manager.get_pending_handshake_peer_ids()
+            except Exception:
+                pending_handshake_candidates = []
+
+        recent_peer_state_transitions: list[Dict[str, Any]] = []
+        try:
+            for event in self.get_activity_events(limit=100):
+                if event.get('kind') != 'connection':
+                    continue
+                recent_peer_state_transitions.append({
+                    'peer_id': str(event.get('peer_id') or '').strip(),
+                    'status': str(event.get('status') or '').strip(),
+                    'timestamp': event.get('timestamp'),
+                    'endpoint': event.get('endpoint'),
+                })
+        except Exception:
+            recent_peer_state_transitions = []
+
         return {
             'timestamp': time.time(),
             'connected_peers': self.get_connected_peers(),
+            'authenticated_count': int(state_counts.get('authenticated', 0)),
+            'pending_connection_count': int(state_counts.get('connecting', 0)) + int(state_counts.get('handshaking', 0)),
+            'connection_state_counts': state_counts,
+            'pending_handshake_candidates': pending_handshake_candidates,
             'known_peers_count': len(getattr(self.identity_manager, 'known_peers', {}) or {}),
             'pending_messages': {
                 'total': total_pending,
@@ -4145,6 +5185,7 @@ class P2PNetworkManager:
                 ),
             },
             'recent_failures': recent_failures[-20:],
+            'recent_peer_state_transitions': recent_peer_state_transitions[-20:],
         }
 
     def resync_mesh(self, include_reconnect: bool = True) -> Dict[str, Any]:

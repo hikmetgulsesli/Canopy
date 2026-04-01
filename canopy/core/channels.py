@@ -47,6 +47,16 @@ _CHANNEL_VARIANT_RELATIONSHIP_VALUES = {
     'module_variant',
     'parameterized_variant',
 }
+_CHANNEL_REMOVAL_VOTE_VALUES = {'remove', 'keep'}
+_CHANNEL_REMOVAL_OPEN_STATUS = 'open'
+_CHANNEL_REMOVAL_RETIRED_STATUS = 'retired'
+_CHANNEL_REMOVAL_REJECTED_STATUS = 'rejected'
+_CHANNEL_REMOVAL_RESTORED_STATUS = 'restored'
+_CHANNEL_REMOVAL_TERMINAL_STATUSES = {
+    _CHANNEL_REMOVAL_RETIRED_STATUS,
+    _CHANNEL_REMOVAL_REJECTED_STATUS,
+    _CHANNEL_REMOVAL_RESTORED_STATUS,
+}
 _CHANNEL_REPOST_REFERENCE_BODY_MAX_CHARS = 8000
 _CHANNEL_REPOST_REFERENCE_ATTACHMENT_IMAGE_CAP = 6
 _CHANNEL_REPOST_REFERENCE_YOUTUBE_CAP = 6
@@ -374,7 +384,10 @@ class Channel:
     can_post_top_level: bool = True
     can_reply: bool = True
     allowed_poster_count: int = 0
-    
+    retired_by_vote: bool = False
+    removal_status: Optional[str] = None
+    active_removal_proposal_id: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert channel to dictionary."""
         return {
@@ -406,6 +419,9 @@ class Channel:
             'can_post_top_level': self.can_post_top_level,
             'can_reply': self.can_reply,
             'allowed_poster_count': self.allowed_poster_count,
+            'retired_by_vote': self.retired_by_vote,
+            'removal_status': self.removal_status,
+            'active_removal_proposal_id': self.active_removal_proposal_id,
         }
 
 
@@ -543,6 +559,13 @@ class Message:
 class ChannelManager:
     """Manages Slack-style channels and messaging."""
 
+    GENERAL_CHANNEL_ID = "general"
+    LEGACY_AGENT_START_CHANNEL_ID = "agent-start-here"
+    AGENT_START_CHANNEL_ID = LEGACY_AGENT_START_CHANNEL_ID
+    AGENT_START_CHANNEL_NAME = "agent-start-here"
+    AGENT_START_CHANNEL_DESCRIPTION = (
+        "Private local-only quarantine and onboarding channel for newly approved agents."
+    )
     DEFAULT_TTL_DAYS = 90  # Quarterly default
     DEFAULT_TTL_SECONDS = DEFAULT_TTL_DAYS * 24 * 3600
     DEFAULT_CHANNEL_LIFECYCLE_DAYS = 180
@@ -606,7 +629,9 @@ class ChannelManager:
         logger.info("Initializing ChannelManager")
         self.db = db
         self.api_key_manager = api_key_manager
+        self.AGENT_START_CHANNEL_ID = self._load_or_create_agent_start_channel_id()
         self.workspace_events: Any = None
+        self.public_placeholder_reconcile_callback: Optional[Callable[..., None]] = None
         self._channel_key_lock = threading.RLock()
         self._channel_key_cache: Dict[Tuple[str, str], bytes] = {}
         self._lifecycle_scan_lock = threading.RLock()
@@ -619,8 +644,49 @@ class ChannelManager:
         # Create default general channel if it doesn't exist
         with LogOperation("Default channel creation"):
             self._ensure_default_channels()
+
+        # Repair membership drift so locally-hosted users see any existing
+        # public/open channels even if those channels arrived after account creation.
+        with LogOperation("Public channel membership repair"):
+            self._repair_public_channel_memberships()
         
         logger.info("ChannelManager initialized successfully")
+
+    def _build_agent_start_channel_id(self) -> str:
+        return f"Cagentstart{secrets.token_hex(8)}"
+
+    def _load_or_create_agent_start_channel_id(self) -> str:
+        getter = getattr(self.db, 'get_system_state', None)
+        setter = getattr(self.db, 'set_system_state', None)
+        if callable(getter):
+            try:
+                existing = str(getter('agent_quarantine_channel_id') or '').strip()
+            except Exception:
+                existing = ''
+            if existing:
+                return existing
+        fallback = "Cagentstartlocal"
+        channel_id = self._build_agent_start_channel_id() if callable(setter) else fallback
+        if callable(setter):
+            try:
+                setter('agent_quarantine_channel_id', channel_id)
+            except Exception:
+                pass
+        return channel_id
+
+    def is_agent_quarantine_channel(self, channel_id: Any, channel_name: Optional[str] = None) -> bool:
+        clean_id = str(channel_id or '').strip()
+        clean_name = self._normalize_channel_name(channel_name or '')
+        if clean_id and clean_id in {self.AGENT_START_CHANNEL_ID, self.LEGACY_AGENT_START_CHANNEL_ID}:
+            return True
+        return clean_name == self.AGENT_START_CHANNEL_NAME
+
+    def get_agent_quarantine_channel_id(self) -> str:
+        return self.AGENT_START_CHANNEL_ID
+
+    def ensure_default_channels_exist(self) -> None:
+        """Public wrapper for default channel bootstrap/self-heal."""
+        self._ensure_default_channels()
 
     def _channel_member_user_ids(self, channel_id: str) -> List[str]:
         """Return all member ids for a channel for local UI event fanout."""
@@ -642,6 +708,185 @@ class ChannelManager:
                 members.append(user_id)
             return members
         except Exception:
+            return []
+
+    def _get_local_public_channel_candidate_user_ids(
+        self,
+        conn: sqlite3.Connection,
+        fallback_user_id: Optional[str] = None,
+    ) -> List[str]:
+        """Return locally-hosted users that should see public/open channels."""
+        candidate_ids: List[str] = []
+        seen: set[str] = set()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id
+                FROM users
+                WHERE id != 'system'
+                  AND id != 'local_user'
+                  AND (origin_peer IS NULL OR trim(origin_peer) = '')
+                  AND (
+                        (password_hash IS NOT NULL AND trim(password_hash) != '')
+                        OR lower(COALESCE(account_type, 'human')) = 'agent'
+                  )
+                ORDER BY created_at ASC, id ASC
+                """
+            ).fetchall()
+        except Exception:
+            rows = []
+
+        for row in rows or []:
+            user_id = str(row['id'] if hasattr(row, 'keys') else row[0] or '').strip()
+            if not user_id or user_id in seen:
+                continue
+            seen.add(user_id)
+            candidate_ids.append(user_id)
+
+        fallback = str(fallback_user_id or '').strip()
+        if fallback and fallback not in seen:
+            row = conn.execute(
+                "SELECT id FROM users WHERE id = ?",
+                (fallback,),
+            ).fetchone()
+            if row:
+                candidate_ids.append(fallback)
+
+        return candidate_ids
+
+    def _ensure_public_channel_membership_conn(
+        self,
+        conn: sqlite3.Connection,
+        channel_id: str,
+        channel_type: Any,
+        privacy_mode: Any,
+        *,
+        fallback_user_id: Optional[str] = None,
+    ) -> int:
+        """Ensure local users are members of a public/open channel."""
+        if not channel_id or not self._is_public_channel(channel_type, privacy_mode):
+            return 0
+
+        added = 0
+        for user_id in self._get_local_public_channel_candidate_user_ids(
+            conn,
+            fallback_user_id=fallback_user_id,
+        ):
+            target_policy = self._load_user_channel_governance(conn, user_id)
+            allowed, reason = self._is_channel_allowed_by_policy(
+                policy=target_policy,
+                channel_id=channel_id,
+                channel_type=channel_type,
+                privacy_mode=privacy_mode,
+            )
+            if not allowed:
+                logger.info(
+                    "Skipping public auto-membership for %s in %s due to governance policy (%s)",
+                    user_id,
+                    channel_id,
+                    reason,
+                )
+                continue
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
+                VALUES (?, ?, 'member')
+                """,
+                (channel_id, user_id),
+            )
+            if int(getattr(cur, 'rowcount', 0) or 0) > 0:
+                added += 1
+        return added
+
+    def _repair_public_channel_memberships(self) -> int:
+        """Backfill local memberships for any existing public/open channels."""
+        repaired = 0
+        try:
+            with self.db.get_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT id, channel_type, COALESCE(privacy_mode, 'open') AS privacy_mode
+                    FROM channels
+                    WHERE (channel_type = 'public' OR channel_type = 'general')
+                      AND COALESCE(privacy_mode, 'open') NOT IN ('private', 'confidential')
+                    """
+                ).fetchall()
+                for row in rows or []:
+                    repaired += self._ensure_public_channel_membership_conn(
+                        conn,
+                        str(row['id'] or '').strip(),
+                        row['channel_type'],
+                        row['privacy_mode'],
+                    )
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to repair public channel memberships: {e}")
+            return 0
+
+        if repaired:
+            logger.info("Repaired %s public channel membership row(s)", repaired)
+        return repaired
+
+    @staticmethod
+    def _has_placeholder_channel_marker(
+        name: Any,
+        description: Any,
+    ) -> bool:
+        clean_name = str(name or '').strip()
+        clean_desc = str(description or '').strip()
+        return (
+            clean_name.startswith('peer-channel-')
+            or clean_desc.startswith('Auto-created from P2P catchup')
+        )
+
+    @classmethod
+    def _is_placeholder_channel_signature(
+        cls,
+        name: Any,
+        description: Any,
+        channel_type: Any,
+        privacy_mode: Any,
+    ) -> bool:
+        clean_type = str(channel_type or '').strip().lower()
+        clean_privacy = str(privacy_mode or '').strip().lower()
+        return (
+            cls._has_placeholder_channel_marker(name, description)
+            and clean_type == 'private'
+            and clean_privacy == 'private'
+        )
+
+    def list_public_placeholder_reconcile_candidates(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """Return placeholder/private channels that should be rechecked against origin metadata."""
+        max_rows = max(1, int(limit or 200))
+        try:
+            with self.db.get_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT c.id,
+                           c.name,
+                           c.description,
+                           c.origin_peer,
+                           c.channel_type,
+                           COALESCE(c.privacy_mode, 'private') AS privacy_mode,
+                           COUNT(m.id) AS message_count
+                    FROM channels c
+                    LEFT JOIN channel_messages m ON m.channel_id = c.id
+                    WHERE c.origin_peer IS NOT NULL
+                      AND TRIM(c.origin_peer) != ''
+                      AND (
+                            c.name LIKE 'peer-channel-%'
+                            OR c.description LIKE 'Auto-created from P2P catchup%'
+                      )
+                    GROUP BY c.id, c.name, c.description, c.origin_peer, c.channel_type, COALESCE(c.privacy_mode, 'private')
+                    HAVING COUNT(m.id) > 0
+                    ORDER BY COUNT(m.id) DESC, c.id ASC
+                    LIMIT ?
+                    """,
+                    (max_rows,),
+                ).fetchall()
+            return [dict(row) for row in rows or []]
+        except Exception as e:
+            logger.warning(f"Failed to list public placeholder reconcile candidates: {e}")
             return []
 
     def _emit_channel_user_event(
@@ -1116,6 +1361,63 @@ class ChannelManager:
                         computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
                     );
+
+                    CREATE TABLE IF NOT EXISTS channel_removal_proposals (
+                        proposal_id TEXT PRIMARY KEY,
+                        channel_id TEXT NOT NULL,
+                        channel_name TEXT,
+                        channel_origin_peer TEXT,
+                        channel_privacy_mode TEXT,
+                        initiator_peer_id TEXT NOT NULL,
+                        initiator_user_id TEXT,
+                        electorate_json TEXT NOT NULL,
+                        threshold_count INTEGER NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'open',
+                        final_result TEXT,
+                        tombstone_id TEXT,
+                        opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        finalized_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_channel_removal_proposals_channel
+                        ON channel_removal_proposals(channel_id, status, opened_at DESC);
+
+                    CREATE TABLE IF NOT EXISTS channel_removal_votes (
+                        proposal_id TEXT NOT NULL,
+                        channel_id TEXT NOT NULL,
+                        voter_peer_id TEXT NOT NULL,
+                        voter_user_id TEXT,
+                        vote TEXT NOT NULL,
+                        reason TEXT,
+                        cast_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (proposal_id, voter_peer_id),
+                        FOREIGN KEY (proposal_id) REFERENCES channel_removal_proposals(proposal_id) ON DELETE CASCADE,
+                        FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_channel_removal_votes_channel
+                        ON channel_removal_votes(channel_id, cast_at DESC);
+
+                    CREATE TABLE IF NOT EXISTS channel_removal_tombstones (
+                        tombstone_id TEXT PRIMARY KEY,
+                        channel_id TEXT NOT NULL,
+                        proposal_id TEXT,
+                        channel_name TEXT,
+                        channel_origin_peer TEXT,
+                        electorate_json TEXT NOT NULL,
+                        threshold_count INTEGER NOT NULL,
+                        retired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        retired_by_peer_id TEXT NOT NULL,
+                        retired_by_user_id TEXT,
+                        restored_at TIMESTAMP,
+                        restored_by_peer_id TEXT,
+                        restored_by_user_id TEXT,
+                        restoration_reason TEXT,
+                        FOREIGN KEY (proposal_id) REFERENCES channel_removal_proposals(proposal_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_channel_removal_tombstones_channel
+                        ON channel_removal_tombstones(channel_id, restored_at, retired_at DESC);
                 """)
 
                 # Add origin_peer column if it doesn't exist (migration)
@@ -1411,52 +1713,264 @@ class ChannelManager:
                     INSERT OR IGNORE INTO users (id, username, public_key)
                     VALUES ('local_user', 'Local User', 'default_public_key')
                 """)
-                
-                # Check if general channel exists
-                cursor = conn.execute("SELECT id FROM channels WHERE name = 'general'")
+
+                owner_id = None
+                try:
+                    owner_id = self.db.get_instance_owner_user_id()
+                except Exception:
+                    owner_id = None
+
+                cursor = conn.execute(
+                    "SELECT id FROM channels WHERE id = ? OR name = ?",
+                    (self.GENERAL_CHANNEL_ID, self.GENERAL_CHANNEL_ID),
+                )
                 if not cursor.fetchone():
                     logger.info("Creating default general channel")
-                    
-                    # Create the general channel
-                    conn.execute("""
+                    conn.execute(
+                        """
                         INSERT INTO channels (
                             id, name, channel_type, created_by, description, privacy_mode,
                             last_activity_at, lifecycle_ttl_days, lifecycle_preserved
                         )
-                        VALUES (
-                            'general', 'general', 'public', 'system', 'General discussion channel', 'open',
-                            CURRENT_TIMESTAMP, ?, 1
-                        )
-                    """, (self.DEFAULT_CHANNEL_LIFECYCLE_DAYS,))
-                    conn.execute(
-                        "UPDATE channels SET lifecycle_preserved = 1, last_activity_at = COALESCE(last_activity_at, created_at) WHERE id = 'general'",
+                        VALUES (?, ?, 'public', 'system', ?, 'open', CURRENT_TIMESTAMP, ?, 1)
+                        """,
+                        (
+                            self.GENERAL_CHANNEL_ID,
+                            self.GENERAL_CHANNEL_ID,
+                            'General discussion channel',
+                            self.DEFAULT_CHANNEL_LIFECYCLE_DAYS,
+                        ),
                     )
-                    
-                    # Add local user to the general channel
-                    conn.execute("""
-                        INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
-                        VALUES ('general', 'local_user', 'admin')
-                    """)
-                    
-                    conn.commit()
                     logger.info("Default general channel created successfully")
                 else:
                     logger.debug("General channel already exists")
-                    # Ensure general channel is always open
-                    conn.execute("""
-                        UPDATE channels SET privacy_mode = 'open' WHERE id = 'general'
-                    """)
-                    
-                    # Ensure local user is in general channel even if channel exists
-                    conn.execute("""
+                    conn.execute(
+                        "UPDATE channels SET privacy_mode = 'open' WHERE id = ?",
+                        (self.GENERAL_CHANNEL_ID,),
+                    )
+
+                conn.execute(
+                    "UPDATE channels SET lifecycle_preserved = 1, last_activity_at = COALESCE(last_activity_at, created_at) WHERE id = ?",
+                    (self.GENERAL_CHANNEL_ID,),
+                )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
+                    VALUES (?, 'local_user', 'admin')
+                    """,
+                    (self.GENERAL_CHANNEL_ID,),
+                )
+
+                self._ensure_agent_quarantine_channel(conn)
+                conn.execute(
+                    "UPDATE channels SET lifecycle_preserved = 1, last_activity_at = COALESCE(last_activity_at, created_at) WHERE id = ?",
+                    (self.AGENT_START_CHANNEL_ID,),
+                )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
+                    VALUES (?, 'local_user', 'admin')
+                    """,
+                    (self.AGENT_START_CHANNEL_ID,),
+                )
+                if owner_id and owner_id not in {'system', 'local_user'}:
+                    conn.execute(
+                        """
                         INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
-                        VALUES ('general', 'local_user', 'admin')
-                    """)
-                    conn.commit()
+                        VALUES (?, ?, 'admin')
+                        """,
+                        (self.AGENT_START_CHANNEL_ID, owner_id),
+                    )
+                conn.commit()
                     
         except Exception as e:
             logger.error(f"Failed to ensure default channels: {e}", exc_info=True)
             raise
+
+    def _ensure_agent_quarantine_channel(self, conn: sqlite3.Connection) -> None:
+        current_id = self.AGENT_START_CHANNEL_ID
+        existing_current = conn.execute(
+            "SELECT id FROM channels WHERE id = ?",
+            (current_id,),
+        ).fetchone()
+        if not existing_current:
+            logger.info("Creating per-instance agent quarantine channel %s", current_id)
+            conn.execute(
+                """
+                INSERT INTO channels (
+                    id, name, channel_type, created_by, description, privacy_mode,
+                    last_activity_at, lifecycle_ttl_days, lifecycle_preserved,
+                    post_policy, allow_member_replies
+                )
+                VALUES (?, ?, 'private', 'system', ?, 'private', CURRENT_TIMESTAMP, ?, 1, ?, 1)
+                """,
+                (
+                    current_id,
+                    self.AGENT_START_CHANNEL_NAME,
+                    self.AGENT_START_CHANNEL_DESCRIPTION,
+                    self.DEFAULT_CHANNEL_LIFECYCLE_DAYS,
+                    self.POST_POLICY_OPEN,
+                ),
+            )
+
+        stale_rows = conn.execute(
+            """
+            SELECT id, COALESCE(origin_peer, '') AS origin_peer
+            FROM channels
+            WHERE name = ?
+              AND id != ?
+            ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id ASC
+            """,
+            (
+                self.AGENT_START_CHANNEL_NAME,
+                current_id,
+                self.LEGACY_AGENT_START_CHANNEL_ID,
+            ),
+        ).fetchall()
+        if not stale_rows:
+            return
+
+        governance_updates: List[str] = []
+        for row in stale_rows:
+            stale_id = str(row['id'] if hasattr(row, 'keys') and 'id' in row.keys() else row[0])
+            origin_peer = str(row['origin_peer'] if hasattr(row, 'keys') and 'origin_peer' in row.keys() else row[1]).strip()
+            if not stale_id or stale_id == current_id:
+                continue
+            if not origin_peer:
+                self._migrate_agent_quarantine_references(conn, stale_id, current_id)
+                governance_updates.append(stale_id)
+            logger.info("Removing stale agent quarantine channel %s", stale_id)
+            conn.execute("DELETE FROM channels WHERE id = ?", (stale_id,))
+
+        for stale_id in governance_updates:
+            self._replace_quarantine_channel_in_governance(conn, stale_id, current_id)
+
+    def _migrate_agent_quarantine_references(
+        self,
+        conn: sqlite3.Connection,
+        old_channel_id: str,
+        new_channel_id: str,
+    ) -> None:
+        if not old_channel_id or not new_channel_id or old_channel_id == new_channel_id:
+            return
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO channel_members (
+                channel_id, user_id, joined_at, role, notifications_enabled, last_read_at
+            )
+            SELECT ?, user_id, joined_at, role, notifications_enabled, last_read_at
+            FROM channel_members
+            WHERE channel_id = ?
+            """,
+            (new_channel_id, old_channel_id),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO channel_post_permissions (
+                channel_id, user_id, granted_by, granted_at
+            )
+            SELECT ?, user_id, granted_by, granted_at
+            FROM channel_post_permissions
+            WHERE channel_id = ?
+            """,
+            (new_channel_id, old_channel_id),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO channel_keys (
+                channel_id, key_id, key_material_enc, created_by_peer, created_at, revoked_at, metadata
+            )
+            SELECT ?, key_id, key_material_enc, created_by_peer, created_at, revoked_at, metadata
+            FROM channel_keys
+            WHERE channel_id = ?
+            """,
+            (new_channel_id, old_channel_id),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO channel_member_keys (
+                channel_id, key_id, peer_id, delivery_state, last_error, delivered_at, acked_at, updated_at
+            )
+            SELECT ?, key_id, peer_id, delivery_state, last_error, delivered_at, acked_at, updated_at
+            FROM channel_member_keys
+            WHERE channel_id = ?
+            """,
+            (new_channel_id, old_channel_id),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO channel_thread_subscriptions (
+                channel_id, thread_root_message_id, user_id, subscribed, source, created_at, updated_at
+            )
+            SELECT ?, thread_root_message_id, user_id, subscribed, source, created_at, updated_at
+            FROM channel_thread_subscriptions
+            WHERE channel_id = ?
+            """,
+            (new_channel_id, old_channel_id),
+        )
+        conn.execute(
+            "UPDATE channel_messages SET channel_id = ? WHERE channel_id = ?",
+            (new_channel_id, old_channel_id),
+        )
+        for table_name in (
+            'channel_member_sync_deliveries',
+            'channel_sync_digests',
+            'channel_removal_proposals',
+            'channel_removal_votes',
+            'channel_removal_tombstones',
+        ):
+            conn.execute(
+                f"UPDATE {table_name} SET channel_id = ? WHERE channel_id = ?",
+                (new_channel_id, old_channel_id),
+            )
+        for table_name in (
+            'channel_members',
+            'channel_post_permissions',
+            'channel_member_keys',
+            'channel_keys',
+            'channel_thread_subscriptions',
+        ):
+            conn.execute(f"DELETE FROM {table_name} WHERE channel_id = ?", (old_channel_id,))
+
+    def _replace_quarantine_channel_in_governance(
+        self,
+        conn: sqlite3.Connection,
+        old_channel_id: str,
+        new_channel_id: str,
+    ) -> None:
+        rows = conn.execute(
+            """
+            SELECT user_id, allowed_channel_ids
+            FROM user_channel_governance
+            WHERE allowed_channel_ids IS NOT NULL
+              AND allowed_channel_ids != ''
+            """
+        ).fetchall()
+        for row in rows or []:
+            user_id = str(row['user_id'])
+            raw = row['allowed_channel_ids']
+            try:
+                parsed = json.loads(raw or '[]')
+            except Exception:
+                continue
+            if not isinstance(parsed, list) or old_channel_id not in parsed:
+                continue
+            updated = []
+            seen: set[str] = set()
+            for value in parsed:
+                channel_id = new_channel_id if str(value or '').strip() == old_channel_id else str(value or '').strip()
+                if not channel_id or channel_id in seen:
+                    continue
+                seen.add(channel_id)
+                updated.append(channel_id)
+            conn.execute(
+                """
+                UPDATE user_channel_governance
+                SET allowed_channel_ids = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+                """,
+                (json.dumps(updated), user_id),
+            )
 
     # ------------------------------------------------------------------
     #  Channel governance helpers
@@ -1632,6 +2146,1235 @@ class ChannelManager:
             logger.error(f"Failed to update channel governance for {user_id}: {e}", exc_info=True)
             return False
 
+    def ensure_agent_quarantine_assignment(
+        self,
+        user_id: str,
+        *,
+        updated_by: Optional[str] = None,
+        role: str = 'member',
+    ) -> bool:
+        """Place an agent into the built-in quarantine channel and restrict channel access."""
+        if not user_id:
+            return False
+        try:
+            with self.db.get_connection() as conn:
+                exists = conn.execute(
+                    "SELECT 1 FROM users WHERE id = ?",
+                    (user_id,),
+                ).fetchone()
+                if not exists:
+                    return False
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
+                    VALUES (?, ?, ?)
+                    """,
+                    (self.AGENT_START_CHANNEL_ID, user_id, role or 'member'),
+                )
+                conn.commit()
+            return self.set_user_channel_governance(
+                user_id=user_id,
+                enabled=True,
+                block_public_channels=True,
+                restrict_to_allowed_channels=True,
+                allowed_channel_ids=[self.AGENT_START_CHANNEL_ID],
+                updated_by=updated_by or 'system',
+            )
+        except Exception as e:
+            logger.error(f"Failed to quarantine agent {user_id}: {e}", exc_info=True)
+            return False
+
+    @staticmethod
+    def _normalize_peer_id_list(peer_ids: Optional[List[Any]]) -> List[str]:
+        seen: set[str] = set()
+        normalized: List[str] = []
+        for peer_id in peer_ids or []:
+            clean = str(peer_id or '').strip()
+            if not clean or clean in seen:
+                continue
+            seen.add(clean)
+            normalized.append(clean)
+        return sorted(normalized)
+
+    @staticmethod
+    def _load_channel_removal_electorate(raw_json: Any) -> List[str]:
+        try:
+            parsed = json.loads(raw_json or '[]')
+        except Exception:
+            parsed = []
+        if not isinstance(parsed, list):
+            parsed = []
+        return ChannelManager._normalize_peer_id_list(parsed)
+
+    def _channel_removal_ineligible_reason(
+        self,
+        *,
+        channel_id: str,
+        channel_type: str,
+        lifecycle_preserved: bool,
+    ) -> Optional[str]:
+        clean_id = str(channel_id or '').strip()
+        ctype = str(channel_type or '').strip().lower()
+        if not clean_id:
+            return 'invalid_channel'
+        if clean_id == self.GENERAL_CHANNEL_ID or self.is_agent_quarantine_channel(clean_id):
+            return 'system_channel'
+        if ctype in {'general', 'dm', 'group_dm'}:
+            return 'channel_type_ineligible'
+        if bool(lifecycle_preserved):
+            return 'preserved_channel'
+        return None
+
+    def _get_active_channel_removal_tombstone_row(
+        self,
+        conn: sqlite3.Connection,
+        channel_id: str,
+    ) -> Optional[sqlite3.Row]:
+        return conn.execute(
+            """
+            SELECT *
+            FROM channel_removal_tombstones
+            WHERE channel_id = ?
+              AND restored_at IS NULL
+            ORDER BY retired_at DESC
+            LIMIT 1
+            """,
+            (channel_id,),
+        ).fetchone()
+
+    def _get_open_channel_removal_proposal_row(
+        self,
+        conn: sqlite3.Connection,
+        channel_id: str,
+    ) -> Optional[sqlite3.Row]:
+        return conn.execute(
+            """
+            SELECT *
+            FROM channel_removal_proposals
+            WHERE channel_id = ?
+              AND status = ?
+            ORDER BY opened_at DESC
+            LIMIT 1
+            """,
+            (channel_id, _CHANNEL_REMOVAL_OPEN_STATUS),
+        ).fetchone()
+
+    def is_channel_retired_by_vote(self, channel_id: str) -> bool:
+        if not channel_id:
+            return False
+        try:
+            with self.db.get_connection() as conn:
+                return bool(self._get_active_channel_removal_tombstone_row(conn, channel_id))
+        except Exception as e:
+            logger.error(f"Failed to load removal tombstone for {channel_id}: {e}", exc_info=True)
+            return False
+
+    def resolve_channel_removal_electorate(
+        self,
+        channel_id: str,
+        *,
+        local_peer_id: Optional[str],
+        connected_peer_ids: Optional[List[Any]],
+        trusted_peer_ids: Optional[List[Any]],
+    ) -> List[str]:
+        clean_channel_id = str(channel_id or '').strip()
+        if not clean_channel_id:
+            return []
+        try:
+            with self.db.get_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT channel_type, COALESCE(privacy_mode, 'open') AS privacy_mode
+                    FROM channels
+                    WHERE id = ?
+                    """,
+                    (clean_channel_id,),
+                ).fetchone()
+            if not row:
+                return []
+
+            connected = set(self._normalize_peer_id_list(connected_peer_ids))
+            trusted = set(self._normalize_peer_id_list(trusted_peer_ids))
+            electorate: set[str] = set()
+            local_peer = str(local_peer_id or '').strip()
+            if local_peer:
+                electorate.add(local_peer)
+
+            privacy_mode = str(row['privacy_mode'] or 'open').strip().lower()
+            channel_type = str(row['channel_type'] or 'public').strip().lower()
+            targeted = privacy_mode in self.TARGETED_PRIVACY_MODES or channel_type == 'private'
+            if targeted:
+                member_peers = self.get_member_peer_ids(clean_channel_id, local_peer or None)
+                electorate.update(member_peers & connected & trusted)
+            else:
+                electorate.update(connected & trusted)
+
+            return self._normalize_peer_id_list(list(electorate))
+        except Exception as e:
+            logger.error(f"Failed to resolve removal electorate for {channel_id}: {e}", exc_info=True)
+            return []
+
+    def _build_channel_removal_status_locked(
+        self,
+        conn: sqlite3.Connection,
+        channel_row: Optional[sqlite3.Row],
+        *,
+        channel_id: str,
+        local_peer_id: Optional[str],
+        viewer_user_id: Optional[str],
+        allow_admin: bool,
+        connected_peer_ids: Optional[List[Any]],
+        trusted_peer_ids: Optional[List[Any]],
+    ) -> Dict[str, Any]:
+        status: Dict[str, Any] = {
+            'channel_id': channel_id,
+            'channel_exists': bool(channel_row),
+            'retired': False,
+            'retired_reason': None,
+            'can_start': False,
+            'can_vote': False,
+            'can_change_vote': False,
+            'ineligible_reason': None,
+            'active_proposal': None,
+            'tombstone': None,
+        }
+        if not channel_row:
+            status['ineligible_reason'] = 'channel_not_found'
+            return status
+
+        channel_type = str(channel_row['channel_type'] or 'public').strip().lower()
+        lifecycle_preserved = bool(channel_row['lifecycle_preserved'])
+        status['ineligible_reason'] = self._channel_removal_ineligible_reason(
+            channel_id=channel_id,
+            channel_type=channel_type,
+            lifecycle_preserved=lifecycle_preserved,
+        )
+
+        active_tombstone = self._get_active_channel_removal_tombstone_row(conn, channel_id)
+        if active_tombstone:
+            electorate = self._load_channel_removal_electorate(active_tombstone['electorate_json'])
+            status['retired'] = True
+            status['retired_reason'] = 'retired_by_vote'
+            status['tombstone'] = {
+                'tombstone_id': active_tombstone['tombstone_id'],
+                'proposal_id': active_tombstone['proposal_id'],
+                'channel_name': active_tombstone['channel_name'],
+                'channel_origin_peer': active_tombstone['channel_origin_peer'],
+                'electorate_peer_ids': electorate,
+                'threshold_count': int(active_tombstone['threshold_count'] or len(electorate) or 0),
+                'retired_at': active_tombstone['retired_at'],
+                'retired_by_peer_id': active_tombstone['retired_by_peer_id'],
+                'retired_by_user_id': active_tombstone['retired_by_user_id'],
+            }
+            return status
+
+        if viewer_user_id:
+            status['can_start'] = bool(allow_admin or self.is_channel_admin(channel_id, viewer_user_id))
+
+        proposal_row = self._get_open_channel_removal_proposal_row(conn, channel_id)
+        if proposal_row:
+            electorate = self._load_channel_removal_electorate(proposal_row['electorate_json'])
+            vote_rows = conn.execute(
+                """
+                SELECT voter_peer_id, voter_user_id, vote, reason, cast_at
+                FROM channel_removal_votes
+                WHERE proposal_id = ?
+                ORDER BY cast_at ASC
+                """,
+                (proposal_row['proposal_id'],),
+            ).fetchall()
+            votes_by_peer = {
+                str(row['voter_peer_id'] or '').strip(): {
+                    'peer_id': str(row['voter_peer_id'] or '').strip(),
+                    'user_id': str(row['voter_user_id'] or '').strip() or None,
+                    'vote': str(row['vote'] or '').strip().lower(),
+                    'reason': row['reason'],
+                    'cast_at': row['cast_at'],
+                }
+                for row in vote_rows or []
+                if str(row['voter_peer_id'] or '').strip()
+            }
+            local_peer = str(local_peer_id or '').strip()
+            connected = set(self._normalize_peer_id_list(connected_peer_ids))
+            trusted = set(self._normalize_peer_id_list(trusted_peer_ids))
+            electorate_entries: List[Dict[str, Any]] = []
+            remove_votes = 0
+            keep_votes = 0
+            for peer_id in electorate:
+                vote_entry = votes_by_peer.get(peer_id)
+                vote_value = str(vote_entry.get('vote') or '').strip().lower() if vote_entry else ''
+                if vote_value == 'remove':
+                    remove_votes += 1
+                elif vote_value == 'keep':
+                    keep_votes += 1
+                electorate_entries.append({
+                    'peer_id': peer_id,
+                    'connected': peer_id in connected or (local_peer and peer_id == local_peer),
+                    'trusted': peer_id in trusted or (local_peer and peer_id == local_peer),
+                    'is_local_peer': bool(local_peer and peer_id == local_peer),
+                    'vote': vote_value or None,
+                    'voter_user_id': vote_entry.get('user_id') if vote_entry else None,
+                    'cast_at': vote_entry.get('cast_at') if vote_entry else None,
+                })
+
+            local_vote = votes_by_peer.get(local_peer, {}).get('vote') if local_peer else None
+            status['active_proposal'] = {
+                'proposal_id': proposal_row['proposal_id'],
+                'status': proposal_row['status'],
+                'channel_name': proposal_row['channel_name'],
+                'channel_origin_peer': proposal_row['channel_origin_peer'],
+                'channel_privacy_mode': proposal_row['channel_privacy_mode'],
+                'initiator_peer_id': proposal_row['initiator_peer_id'],
+                'initiator_user_id': proposal_row['initiator_user_id'],
+                'opened_at': proposal_row['opened_at'],
+                'electorate_count': len(electorate),
+                'threshold_count': int(proposal_row['threshold_count'] or len(electorate) or 0),
+                'remove_votes': remove_votes,
+                'keep_votes': keep_votes,
+                'pending_votes': max(0, len(electorate) - remove_votes - keep_votes),
+                'electorate': electorate_entries,
+                'local_peer_id': local_peer or None,
+                'local_vote': local_vote,
+            }
+            status['can_vote'] = bool(
+                viewer_user_id
+                and (allow_admin or self.get_member_role(channel_id, viewer_user_id))
+                and local_peer
+                and local_peer in electorate
+                and not local_vote
+            )
+            status['can_change_vote'] = bool(
+                viewer_user_id
+                and (allow_admin or self.get_member_role(channel_id, viewer_user_id))
+                and local_peer
+                and local_peer in electorate
+                and local_vote
+            )
+            return status
+
+        return status
+
+    def get_channel_removal_status(
+        self,
+        channel_id: str,
+        *,
+        local_peer_id: Optional[str] = None,
+        viewer_user_id: Optional[str] = None,
+        allow_admin: bool = False,
+        connected_peer_ids: Optional[List[Any]] = None,
+        trusted_peer_ids: Optional[List[Any]] = None,
+    ) -> Dict[str, Any]:
+        clean_channel_id = str(channel_id or '').strip()
+        if not clean_channel_id:
+            return {
+                'channel_id': '',
+                'channel_exists': False,
+                'retired': False,
+                'retired_reason': None,
+                'can_start': False,
+                'can_vote': False,
+                'can_change_vote': False,
+                'ineligible_reason': 'invalid_channel',
+                'active_proposal': None,
+                'tombstone': None,
+            }
+        try:
+            with self.db.get_connection() as conn:
+                channel_row = conn.execute(
+                    """
+                    SELECT id, name, channel_type, origin_peer,
+                           COALESCE(privacy_mode, 'open') AS privacy_mode,
+                           COALESCE(lifecycle_preserved, 0) AS lifecycle_preserved
+                    FROM channels
+                    WHERE id = ?
+                    """,
+                    (clean_channel_id,),
+                ).fetchone()
+                return self._build_channel_removal_status_locked(
+                    conn,
+                    channel_row,
+                    channel_id=clean_channel_id,
+                    local_peer_id=local_peer_id,
+                    viewer_user_id=viewer_user_id,
+                    allow_admin=allow_admin,
+                    connected_peer_ids=connected_peer_ids,
+                    trusted_peer_ids=trusted_peer_ids,
+                )
+        except Exception as e:
+            logger.error(f"Failed to get channel removal status for {channel_id}: {e}", exc_info=True)
+            return {
+                'channel_id': clean_channel_id,
+                'channel_exists': False,
+                'retired': False,
+                'retired_reason': None,
+                'can_start': False,
+                'can_vote': False,
+                'can_change_vote': False,
+                'ineligible_reason': 'internal_error',
+                'active_proposal': None,
+                'tombstone': None,
+            }
+
+    def _finalize_channel_removal_locked(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        proposal_row: sqlite3.Row,
+        finalizing_peer_id: str,
+        finalizing_user_id: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        proposal_id = str(proposal_row['proposal_id'] or '').strip()
+        channel_id = str(proposal_row['channel_id'] or '').strip()
+        if not proposal_id or not channel_id:
+            return None
+
+        electorate = self._load_channel_removal_electorate(proposal_row['electorate_json'])
+        threshold_count = int(proposal_row['threshold_count'] or len(electorate) or 0)
+        vote_rows = conn.execute(
+            """
+            SELECT voter_peer_id, vote
+            FROM channel_removal_votes
+            WHERE proposal_id = ?
+            """,
+            (proposal_id,),
+        ).fetchall()
+        electorate_set = set(electorate)
+        vote_map = {
+            str(row['voter_peer_id'] or '').strip(): str(row['vote'] or '').strip().lower()
+            for row in vote_rows or []
+            if str(row['voter_peer_id'] or '').strip() in electorate_set
+        }
+        remove_votes = sum(1 for vote in vote_map.values() if vote == 'remove')
+        keep_votes = sum(1 for vote in vote_map.values() if vote == 'keep')
+        now_ts = self._format_db_timestamp(datetime.now(timezone.utc))
+        if keep_votes > 0:
+            conn.execute(
+                """
+                UPDATE channel_removal_proposals
+                SET status = ?, final_result = ?, finalized_at = ?, updated_at = ?
+                WHERE proposal_id = ?
+                """,
+                (
+                    _CHANNEL_REMOVAL_REJECTED_STATUS,
+                    _CHANNEL_REMOVAL_REJECTED_STATUS,
+                    now_ts,
+                    now_ts,
+                    proposal_id,
+                ),
+            )
+            return {
+                'proposal_id': proposal_id,
+                'channel_id': channel_id,
+                'status': _CHANNEL_REMOVAL_REJECTED_STATUS,
+                'result': _CHANNEL_REMOVAL_REJECTED_STATUS,
+                'electorate_peer_ids': electorate,
+                'threshold_count': threshold_count,
+                'remove_votes': remove_votes,
+                'keep_votes': keep_votes,
+                'finalized_at': now_ts,
+            }
+
+        if threshold_count > 0 and remove_votes >= threshold_count:
+            tombstone_row = self._get_active_channel_removal_tombstone_row(conn, channel_id)
+            tombstone_id = None
+            if tombstone_row:
+                tombstone_id = str(tombstone_row['tombstone_id'] or '').strip() or None
+            if not tombstone_id:
+                tombstone_id = f"CRT{secrets.token_hex(16)}"
+                conn.execute(
+                    """
+                    INSERT INTO channel_removal_tombstones (
+                        tombstone_id, channel_id, proposal_id, channel_name,
+                        channel_origin_peer, electorate_json, threshold_count,
+                        retired_at, retired_by_peer_id, retired_by_user_id
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        tombstone_id,
+                        channel_id,
+                        proposal_id,
+                        proposal_row['channel_name'],
+                        proposal_row['channel_origin_peer'],
+                        json.dumps(electorate),
+                        threshold_count,
+                        now_ts,
+                        finalizing_peer_id,
+                        finalizing_user_id,
+                    ),
+                )
+            conn.execute(
+                """
+                UPDATE channel_removal_proposals
+                SET status = ?, final_result = ?, tombstone_id = ?, finalized_at = ?, updated_at = ?
+                WHERE proposal_id = ?
+                """,
+                (
+                    _CHANNEL_REMOVAL_RETIRED_STATUS,
+                    _CHANNEL_REMOVAL_RETIRED_STATUS,
+                    tombstone_id,
+                    now_ts,
+                    now_ts,
+                    proposal_id,
+                ),
+            )
+            return {
+                'proposal_id': proposal_id,
+                'channel_id': channel_id,
+                'status': _CHANNEL_REMOVAL_RETIRED_STATUS,
+                'result': _CHANNEL_REMOVAL_RETIRED_STATUS,
+                'tombstone_id': tombstone_id,
+                'electorate_peer_ids': electorate,
+                'threshold_count': threshold_count,
+                'remove_votes': remove_votes,
+                'keep_votes': keep_votes,
+                'finalized_at': now_ts,
+            }
+        return None
+
+    def start_channel_removal_vote(
+        self,
+        *,
+        channel_id: str,
+        user_id: str,
+        local_peer_id: str,
+        connected_peer_ids: Optional[List[Any]],
+        trusted_peer_ids: Optional[List[Any]],
+        allow_admin: bool = False,
+        reason: Optional[str] = None,
+        proposal_id: Optional[str] = None,
+        opened_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        clean_channel_id = str(channel_id or '').strip()
+        local_peer = str(local_peer_id or '').strip()
+        actor_user_id = str(user_id or '').strip()
+        if not clean_channel_id or not local_peer or not actor_user_id:
+            return {'ok': False, 'error': 'invalid_request'}
+        try:
+            with self.db.get_connection() as conn:
+                channel_row = conn.execute(
+                    """
+                    SELECT id, name, channel_type, origin_peer,
+                           COALESCE(privacy_mode, 'open') AS privacy_mode,
+                           COALESCE(lifecycle_preserved, 0) AS lifecycle_preserved
+                    FROM channels
+                    WHERE id = ?
+                    """,
+                    (clean_channel_id,),
+                ).fetchone()
+                if not channel_row:
+                    return {'ok': False, 'error': 'channel_not_found'}
+                if not (allow_admin or self.is_channel_admin(clean_channel_id, actor_user_id)):
+                    return {'ok': False, 'error': 'not_authorized'}
+
+                ineligible = self._channel_removal_ineligible_reason(
+                    channel_id=clean_channel_id,
+                    channel_type=channel_row['channel_type'],
+                    lifecycle_preserved=bool(channel_row['lifecycle_preserved']),
+                )
+                if ineligible:
+                    return {'ok': False, 'error': ineligible}
+                if self._get_active_channel_removal_tombstone_row(conn, clean_channel_id):
+                    return {'ok': False, 'error': 'already_retired'}
+
+                existing = self._get_open_channel_removal_proposal_row(conn, clean_channel_id)
+                if existing:
+                    status = self._build_channel_removal_status_locked(
+                        conn,
+                        channel_row,
+                        channel_id=clean_channel_id,
+                        local_peer_id=local_peer,
+                        viewer_user_id=actor_user_id,
+                        allow_admin=allow_admin,
+                        connected_peer_ids=connected_peer_ids,
+                        trusted_peer_ids=trusted_peer_ids,
+                    )
+                    return {'ok': False, 'error': 'proposal_exists', 'status': status}
+
+                electorate = self.resolve_channel_removal_electorate(
+                    clean_channel_id,
+                    local_peer_id=local_peer,
+                    connected_peer_ids=connected_peer_ids,
+                    trusted_peer_ids=trusted_peer_ids,
+                )
+                if not electorate:
+                    return {'ok': False, 'error': 'no_eligible_electorate'}
+                if local_peer not in electorate:
+                    electorate.append(local_peer)
+                    electorate = self._normalize_peer_id_list(electorate)
+
+                clean_reason = str(reason or '').strip() or None
+                clean_proposal_id = str(proposal_id or '').strip() or f"CRP{secrets.token_hex(16)}"
+                opened_ts = str(opened_at or '').strip() or self._format_db_timestamp(datetime.now(timezone.utc))
+                conn.execute(
+                    """
+                    INSERT INTO channel_removal_proposals (
+                        proposal_id, channel_id, channel_name, channel_origin_peer,
+                        channel_privacy_mode, initiator_peer_id, initiator_user_id,
+                        electorate_json, threshold_count, status, opened_at,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        clean_proposal_id,
+                        clean_channel_id,
+                        channel_row['name'],
+                        channel_row['origin_peer'],
+                        channel_row['privacy_mode'],
+                        local_peer,
+                        actor_user_id,
+                        json.dumps(electorate),
+                        len(electorate),
+                        _CHANNEL_REMOVAL_OPEN_STATUS,
+                        opened_ts,
+                        opened_ts,
+                        opened_ts,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO channel_removal_votes (
+                        proposal_id, channel_id, voter_peer_id, voter_user_id, vote, reason, cast_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        clean_proposal_id,
+                        clean_channel_id,
+                        local_peer,
+                        actor_user_id,
+                        'remove',
+                        clean_reason,
+                        opened_ts,
+                    ),
+                )
+                proposal_row = self._get_open_channel_removal_proposal_row(conn, clean_channel_id)
+                finalization = None
+                if proposal_row:
+                    finalization = self._finalize_channel_removal_locked(
+                        conn,
+                        proposal_row=proposal_row,
+                        finalizing_peer_id=local_peer,
+                        finalizing_user_id=actor_user_id,
+                    )
+                conn.commit()
+
+            member_targets = self._channel_member_user_ids(clean_channel_id)
+            event_reason = 'channel_removal_vote_opened'
+            dedupe_suffix = f"removal_vote_opened:{clean_proposal_id}"
+            if finalization and finalization.get('result') == _CHANNEL_REMOVAL_RETIRED_STATUS:
+                event_reason = 'channel_retired_by_vote'
+                dedupe_suffix = f"channel_retired_by_vote:{clean_proposal_id}"
+            elif finalization and finalization.get('result') == _CHANNEL_REMOVAL_REJECTED_STATUS:
+                event_reason = 'channel_removal_vote_rejected'
+                dedupe_suffix = f"channel_removal_vote_rejected:{clean_proposal_id}"
+            self._emit_channel_user_event(
+                channel_id=clean_channel_id,
+                event_type=EVENT_CHANNEL_STATE_UPDATED,
+                actor_user_id=actor_user_id,
+                target_user_ids=member_targets,
+                payload={
+                    'reason': event_reason,
+                    'proposal_id': clean_proposal_id,
+                },
+                dedupe_suffix=dedupe_suffix,
+            )
+            status = self.get_channel_removal_status(
+                clean_channel_id,
+                local_peer_id=local_peer,
+                viewer_user_id=actor_user_id,
+                allow_admin=allow_admin,
+                connected_peer_ids=connected_peer_ids,
+                trusted_peer_ids=trusted_peer_ids,
+            )
+            return {
+                'ok': True,
+                'proposal_id': clean_proposal_id,
+                'status': status,
+                'finalization': finalization,
+                'electorate_peer_ids': electorate,
+            }
+        except Exception as e:
+            logger.error(f"Failed to start channel removal vote for {channel_id}: {e}", exc_info=True)
+            return {'ok': False, 'error': 'internal_error'}
+
+    def cast_channel_removal_vote(
+        self,
+        *,
+        channel_id: str,
+        proposal_id: str,
+        user_id: str,
+        local_peer_id: str,
+        vote: str,
+        allow_admin: bool = False,
+        reason: Optional[str] = None,
+        connected_peer_ids: Optional[List[Any]] = None,
+        trusted_peer_ids: Optional[List[Any]] = None,
+        cast_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        clean_channel_id = str(channel_id or '').strip()
+        clean_proposal_id = str(proposal_id or '').strip()
+        actor_user_id = str(user_id or '').strip()
+        local_peer = str(local_peer_id or '').strip()
+        vote_value = str(vote or '').strip().lower()
+        if vote_value not in _CHANNEL_REMOVAL_VOTE_VALUES or not clean_channel_id or not clean_proposal_id or not actor_user_id or not local_peer:
+            return {'ok': False, 'error': 'invalid_request'}
+        try:
+            with self.db.get_connection() as conn:
+                channel_row = conn.execute(
+                    """
+                    SELECT id, name, channel_type, origin_peer,
+                           COALESCE(privacy_mode, 'open') AS privacy_mode,
+                           COALESCE(lifecycle_preserved, 0) AS lifecycle_preserved
+                    FROM channels
+                    WHERE id = ?
+                    """,
+                    (clean_channel_id,),
+                ).fetchone()
+                if not channel_row:
+                    return {'ok': False, 'error': 'channel_not_found'}
+                if not (allow_admin or self.get_member_role(clean_channel_id, actor_user_id)):
+                    return {'ok': False, 'error': 'not_authorized'}
+
+                proposal_row = conn.execute(
+                    """
+                    SELECT *
+                    FROM channel_removal_proposals
+                    WHERE proposal_id = ?
+                      AND channel_id = ?
+                      AND status = ?
+                    """,
+                    (clean_proposal_id, clean_channel_id, _CHANNEL_REMOVAL_OPEN_STATUS),
+                ).fetchone()
+                if not proposal_row:
+                    return {'ok': False, 'error': 'proposal_not_found'}
+
+                electorate = self._load_channel_removal_electorate(proposal_row['electorate_json'])
+                if local_peer not in electorate:
+                    return {'ok': False, 'error': 'peer_not_in_electorate'}
+                existing_vote = conn.execute(
+                    """
+                    SELECT vote
+                    FROM channel_removal_votes
+                    WHERE proposal_id = ? AND voter_peer_id = ?
+                    """,
+                    (clean_proposal_id, local_peer),
+                ).fetchone()
+                previous_vote = str(existing_vote['vote'] or '').strip().lower() if existing_vote else ''
+                changed = True
+                if existing_vote and previous_vote == vote_value:
+                    changed = False
+                cast_ts = str(cast_at or '').strip() or self._format_db_timestamp(datetime.now(timezone.utc))
+                if existing_vote and changed:
+                    conn.execute(
+                        """
+                        UPDATE channel_removal_votes
+                        SET voter_user_id = ?, vote = ?, reason = ?, cast_at = ?
+                        WHERE proposal_id = ? AND voter_peer_id = ?
+                        """,
+                        (
+                            actor_user_id,
+                            vote_value,
+                            str(reason or '').strip() or None,
+                            cast_ts,
+                            clean_proposal_id,
+                            local_peer,
+                        ),
+                    )
+                elif not existing_vote:
+                    conn.execute(
+                        """
+                        INSERT INTO channel_removal_votes (
+                            proposal_id, channel_id, voter_peer_id, voter_user_id, vote, reason, cast_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            clean_proposal_id,
+                            clean_channel_id,
+                            local_peer,
+                            actor_user_id,
+                            vote_value,
+                            str(reason or '').strip() or None,
+                            cast_ts,
+                        ),
+                    )
+                finalization = None
+                if changed:
+                    finalization = self._finalize_channel_removal_locked(
+                        conn,
+                        proposal_row=proposal_row,
+                        finalizing_peer_id=local_peer,
+                        finalizing_user_id=actor_user_id,
+                    )
+                conn.commit()
+            if changed:
+                event_reason = 'channel_removal_vote_updated'
+                dedupe_suffix = f"channel_removal_vote_updated:{clean_proposal_id}:{local_peer}"
+                if finalization and finalization.get('result') == _CHANNEL_REMOVAL_RETIRED_STATUS:
+                    event_reason = 'channel_retired_by_vote'
+                    dedupe_suffix = f"channel_retired_by_vote:{clean_proposal_id}"
+                elif finalization and finalization.get('result') == _CHANNEL_REMOVAL_REJECTED_STATUS:
+                    event_reason = 'channel_removal_vote_rejected'
+                    dedupe_suffix = f"channel_removal_vote_rejected:{clean_proposal_id}"
+                self._emit_channel_user_event(
+                    channel_id=clean_channel_id,
+                    event_type=EVENT_CHANNEL_STATE_UPDATED,
+                    actor_user_id=actor_user_id,
+                    payload={
+                        'reason': event_reason,
+                        'proposal_id': clean_proposal_id,
+                        'vote': vote_value,
+                        'previous_vote': previous_vote or None,
+                        'voter_peer_id': local_peer,
+                    },
+                    dedupe_suffix=dedupe_suffix,
+                )
+            status = self.get_channel_removal_status(
+                clean_channel_id,
+                local_peer_id=local_peer,
+                viewer_user_id=actor_user_id,
+                allow_admin=allow_admin,
+                connected_peer_ids=connected_peer_ids,
+                trusted_peer_ids=trusted_peer_ids,
+            )
+            return {
+                'ok': True,
+                'status': status,
+                'finalization': finalization,
+                'changed': changed,
+                'previous_vote': previous_vote or None,
+            }
+        except Exception as e:
+            logger.error(f"Failed to cast channel removal vote for {channel_id}: {e}", exc_info=True)
+            return {'ok': False, 'error': 'internal_error'}
+
+    def receive_channel_removal_proposal(
+        self,
+        *,
+        proposal_id: str,
+        channel_id: str,
+        channel_name: Optional[str],
+        channel_origin_peer: Optional[str],
+        channel_privacy_mode: Optional[str],
+        initiator_peer_id: str,
+        initiator_user_id: Optional[str],
+        electorate_peer_ids: Optional[List[Any]],
+        threshold_count: int,
+        opened_at: Optional[str] = None,
+        trusted_peer_ids: Optional[List[Any]] = None,
+    ) -> bool:
+        clean_proposal_id = str(proposal_id or '').strip()
+        clean_channel_id = str(channel_id or '').strip()
+        initiator_peer = str(initiator_peer_id or '').strip()
+        electorate = self._normalize_peer_id_list(electorate_peer_ids)
+        if not clean_proposal_id or not clean_channel_id or not initiator_peer or not electorate:
+            return False
+        trusted = set(self._normalize_peer_id_list(trusted_peer_ids))
+        if trusted and initiator_peer not in trusted:
+            logger.warning(
+                "Ignoring channel removal proposal %s for %s from untrusted peer %s",
+                clean_proposal_id,
+                clean_channel_id,
+                initiator_peer,
+            )
+            return False
+        if initiator_peer not in electorate:
+            logger.warning(
+                "Ignoring channel removal proposal %s for %s because initiator %s is outside the electorate",
+                clean_proposal_id,
+                clean_channel_id,
+                initiator_peer,
+            )
+            return False
+        try:
+            with self.db.get_connection() as conn:
+                channel_row = conn.execute(
+                    """
+                    SELECT channel_type, COALESCE(lifecycle_preserved, 0) AS lifecycle_preserved
+                    FROM channels
+                    WHERE id = ?
+                    """,
+                    (clean_channel_id,),
+                ).fetchone()
+                if not channel_row:
+                    logger.debug("Ignoring channel removal proposal for unknown channel %s", clean_channel_id)
+                    return False
+                if self._channel_removal_ineligible_reason(
+                    channel_id=clean_channel_id,
+                    channel_type=channel_row['channel_type'],
+                    lifecycle_preserved=bool(channel_row['lifecycle_preserved']),
+                ):
+                    return False
+                if self._get_active_channel_removal_tombstone_row(conn, clean_channel_id):
+                    return False
+                if self._get_open_channel_removal_proposal_row(conn, clean_channel_id):
+                    return True
+                opened_ts = str(opened_at or '').strip() or self._format_db_timestamp(datetime.now(timezone.utc))
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO channel_removal_proposals (
+                        proposal_id, channel_id, channel_name, channel_origin_peer,
+                        channel_privacy_mode, initiator_peer_id, initiator_user_id,
+                        electorate_json, threshold_count, status, opened_at,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        clean_proposal_id,
+                        clean_channel_id,
+                        channel_name,
+                        channel_origin_peer,
+                        channel_privacy_mode,
+                        initiator_peer,
+                        initiator_user_id,
+                        json.dumps(electorate),
+                        max(1, int(threshold_count or len(electorate))),
+                        _CHANNEL_REMOVAL_OPEN_STATUS,
+                        opened_ts,
+                        opened_ts,
+                        opened_ts,
+                    ),
+                )
+                conn.commit()
+            self._emit_channel_user_event(
+                channel_id=clean_channel_id,
+                event_type=EVENT_CHANNEL_STATE_UPDATED,
+                payload={
+                    'reason': 'channel_removal_vote_opened',
+                    'proposal_id': clean_proposal_id,
+                },
+                dedupe_suffix=f"channel_removal_vote_opened:{clean_proposal_id}",
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to receive channel removal proposal {proposal_id}: {e}", exc_info=True)
+            return False
+
+    def receive_channel_removal_vote(
+        self,
+        *,
+        proposal_id: str,
+        channel_id: str,
+        voter_peer_id: str,
+        voter_user_id: Optional[str],
+        vote: str,
+        reason: Optional[str] = None,
+        cast_at: Optional[str] = None,
+        trusted_peer_ids: Optional[List[Any]] = None,
+    ) -> Dict[str, Any]:
+        clean_proposal_id = str(proposal_id or '').strip()
+        clean_channel_id = str(channel_id or '').strip()
+        voter_peer = str(voter_peer_id or '').strip()
+        vote_value = str(vote or '').strip().lower()
+        if not clean_proposal_id or not clean_channel_id or not voter_peer or vote_value not in _CHANNEL_REMOVAL_VOTE_VALUES:
+            return {'ok': False, 'error': 'invalid_request'}
+        trusted = set(self._normalize_peer_id_list(trusted_peer_ids))
+        if trusted and voter_peer not in trusted:
+            return {'ok': False, 'error': 'untrusted_peer'}
+        try:
+            with self.db.get_connection() as conn:
+                proposal_row = conn.execute(
+                    """
+                    SELECT *
+                    FROM channel_removal_proposals
+                    WHERE proposal_id = ?
+                      AND channel_id = ?
+                      AND status = ?
+                    """,
+                    (clean_proposal_id, clean_channel_id, _CHANNEL_REMOVAL_OPEN_STATUS),
+                ).fetchone()
+                if not proposal_row:
+                    return {'ok': False, 'error': 'proposal_not_found'}
+                electorate = self._load_channel_removal_electorate(proposal_row['electorate_json'])
+                if voter_peer not in electorate:
+                    return {'ok': False, 'error': 'peer_not_in_electorate'}
+                existing_vote = conn.execute(
+                    """
+                    SELECT 1
+                           , vote
+                    FROM channel_removal_votes
+                    WHERE proposal_id = ? AND voter_peer_id = ?
+                    """,
+                    (clean_proposal_id, voter_peer),
+                ).fetchone()
+                previous_vote = str(existing_vote['vote'] or '').strip().lower() if existing_vote else ''
+                changed = True
+                if existing_vote and previous_vote == vote_value:
+                    changed = False
+                cast_ts = str(cast_at or '').strip() or self._format_db_timestamp(datetime.now(timezone.utc))
+                if existing_vote and changed:
+                    conn.execute(
+                        """
+                        UPDATE channel_removal_votes
+                        SET voter_user_id = ?, vote = ?, reason = ?, cast_at = ?
+                        WHERE proposal_id = ? AND voter_peer_id = ?
+                        """,
+                        (
+                            str(voter_user_id or '').strip() or None,
+                            vote_value,
+                            str(reason or '').strip() or None,
+                            cast_ts,
+                            clean_proposal_id,
+                            voter_peer,
+                        ),
+                    )
+                elif not existing_vote:
+                    conn.execute(
+                        """
+                        INSERT INTO channel_removal_votes (
+                            proposal_id, channel_id, voter_peer_id, voter_user_id, vote, reason, cast_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            clean_proposal_id,
+                            clean_channel_id,
+                            voter_peer,
+                            str(voter_user_id or '').strip() or None,
+                            vote_value,
+                            str(reason or '').strip() or None,
+                            cast_ts,
+                        ),
+                    )
+                finalization = None
+                if changed:
+                    finalization = self._finalize_channel_removal_locked(
+                        conn,
+                        proposal_row=proposal_row,
+                        finalizing_peer_id=voter_peer,
+                        finalizing_user_id=str(voter_user_id or '').strip() or None,
+                    )
+                conn.commit()
+            if changed:
+                event_reason = 'channel_removal_vote_updated'
+                dedupe_suffix = f"channel_removal_vote_updated:{clean_proposal_id}:{voter_peer}"
+                if finalization and finalization.get('result') == _CHANNEL_REMOVAL_RETIRED_STATUS:
+                    event_reason = 'channel_retired_by_vote'
+                    dedupe_suffix = f"channel_retired_by_vote:{clean_proposal_id}"
+                elif finalization and finalization.get('result') == _CHANNEL_REMOVAL_REJECTED_STATUS:
+                    event_reason = 'channel_removal_vote_rejected'
+                    dedupe_suffix = f"channel_removal_vote_rejected:{clean_proposal_id}"
+                self._emit_channel_user_event(
+                    channel_id=clean_channel_id,
+                    event_type=EVENT_CHANNEL_STATE_UPDATED,
+                    actor_user_id=str(voter_user_id or '').strip() or None,
+                    payload={
+                        'reason': event_reason,
+                        'proposal_id': clean_proposal_id,
+                        'vote': vote_value,
+                        'previous_vote': previous_vote or None,
+                        'voter_peer_id': voter_peer,
+                    },
+                    dedupe_suffix=dedupe_suffix,
+                )
+            return {'ok': True, 'finalization': finalization, 'changed': changed, 'previous_vote': previous_vote or None}
+        except Exception as e:
+            logger.error(f"Failed to receive channel removal vote {proposal_id}: {e}", exc_info=True)
+            return {'ok': False, 'error': 'internal_error'}
+
+    def apply_channel_removal_result(
+        self,
+        *,
+        proposal_id: str,
+        channel_id: str,
+        result: str,
+        electorate_peer_ids: Optional[List[Any]],
+        threshold_count: int,
+        finalizing_peer_id: str,
+        finalizing_user_id: Optional[str] = None,
+        tombstone_id: Optional[str] = None,
+        finalized_at: Optional[str] = None,
+        trusted_peer_ids: Optional[List[Any]] = None,
+    ) -> bool:
+        clean_proposal_id = str(proposal_id or '').strip()
+        clean_channel_id = str(channel_id or '').strip()
+        result_value = str(result or '').strip().lower()
+        if result_value not in {_CHANNEL_REMOVAL_RETIRED_STATUS, _CHANNEL_REMOVAL_REJECTED_STATUS}:
+            return False
+        electorate = self._normalize_peer_id_list(electorate_peer_ids)
+        if not clean_proposal_id or not clean_channel_id or not electorate:
+            return False
+        finalizer_peer = str(finalizing_peer_id or '').strip()
+        if not finalizer_peer:
+            logger.warning(
+                "Ignoring channel removal result %s for %s because finalizing peer is missing",
+                clean_proposal_id,
+                clean_channel_id,
+            )
+            return False
+        trusted = set(self._normalize_peer_id_list(trusted_peer_ids))
+        if trusted and finalizer_peer not in trusted:
+            logger.warning(
+                "Ignoring channel removal result %s for %s from untrusted peer %s",
+                clean_proposal_id,
+                clean_channel_id,
+                finalizer_peer,
+            )
+            return False
+        if finalizer_peer and finalizer_peer not in electorate:
+            logger.warning(
+                "Ignoring channel removal result %s for %s because finalizer %s is outside the electorate",
+                clean_proposal_id,
+                clean_channel_id,
+                finalizer_peer,
+            )
+            return False
+        try:
+            with self.db.get_connection() as conn:
+                channel_row = conn.execute(
+                    """
+                    SELECT name, origin_peer, COALESCE(privacy_mode, 'open') AS privacy_mode
+                    FROM channels
+                    WHERE id = ?
+                    """,
+                    (clean_channel_id,),
+                ).fetchone()
+                if not channel_row:
+                    return False
+                proposal_row = conn.execute(
+                    """
+                    SELECT *
+                    FROM channel_removal_proposals
+                    WHERE proposal_id = ? AND channel_id = ?
+                    """,
+                    (clean_proposal_id, clean_channel_id),
+                ).fetchone()
+                now_ts = str(finalized_at or '').strip() or self._format_db_timestamp(datetime.now(timezone.utc))
+                if not proposal_row:
+                    conn.execute(
+                        """
+                        INSERT INTO channel_removal_proposals (
+                            proposal_id, channel_id, channel_name, channel_origin_peer,
+                            channel_privacy_mode, initiator_peer_id, initiator_user_id,
+                            electorate_json, threshold_count, status, final_result,
+                            opened_at, finalized_at, created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            clean_proposal_id,
+                            clean_channel_id,
+                            channel_row['name'],
+                            channel_row['origin_peer'],
+                            channel_row['privacy_mode'],
+                            str(finalizing_peer_id or '').strip(),
+                            str(finalizing_user_id or '').strip() or None,
+                            json.dumps(electorate),
+                            max(1, int(threshold_count or len(electorate))),
+                            result_value,
+                            result_value,
+                            now_ts,
+                            now_ts,
+                            now_ts,
+                            now_ts,
+                        ),
+                    )
+                else:
+                    stored_electorate = self._load_channel_removal_electorate(proposal_row['electorate_json'])
+                    stored_threshold = max(1, int(proposal_row['threshold_count'] or len(stored_electorate) or 0))
+                    if stored_electorate != electorate or stored_threshold != max(1, int(threshold_count or len(electorate) or 0)):
+                        logger.warning(
+                            "Ignoring channel removal result %s for %s due to electorate/threshold mismatch",
+                            clean_proposal_id,
+                            clean_channel_id,
+                        )
+                        return False
+                    electorate = stored_electorate
+                    threshold_count = stored_threshold
+                    # Reject a remote terminal result when our locally stored ballots
+                    # already prove the opposite outcome.
+                    vote_rows = conn.execute(
+                        """
+                        SELECT voter_peer_id, vote
+                        FROM channel_removal_votes
+                        WHERE proposal_id = ?
+                        """,
+                        (clean_proposal_id,),
+                    ).fetchall()
+                    electorate_set = set(stored_electorate)
+                    stored_votes = {
+                        str(row['voter_peer_id'] or '').strip(): str(row['vote'] or '').strip().lower()
+                        for row in vote_rows or []
+                        if str(row['voter_peer_id'] or '').strip() in electorate_set
+                    }
+                    stored_remove_votes = sum(1 for vote in stored_votes.values() if vote == 'remove')
+                    stored_keep_votes = sum(1 for vote in stored_votes.values() if vote == 'keep')
+                    if result_value == _CHANNEL_REMOVAL_RETIRED_STATUS and stored_keep_votes > 0:
+                        logger.warning(
+                            "Ignoring channel removal result %s for %s because locally stored keep votes contradict retirement",
+                            clean_proposal_id,
+                            clean_channel_id,
+                        )
+                        return False
+                    if result_value == _CHANNEL_REMOVAL_REJECTED_STATUS and threshold_count > 0 and stored_remove_votes >= threshold_count:
+                        logger.warning(
+                            "Ignoring channel removal result %s for %s because locally stored remove votes already meet the retirement threshold",
+                            clean_proposal_id,
+                            clean_channel_id,
+                        )
+                        return False
+                    conn.execute(
+                        """
+                        UPDATE channel_removal_proposals
+                        SET status = ?, final_result = ?,
+                            tombstone_id = COALESCE(?, tombstone_id), finalized_at = ?, updated_at = ?
+                        WHERE proposal_id = ?
+                        """,
+                        (
+                            result_value,
+                            result_value,
+                            str(tombstone_id or '').strip() or None,
+                            now_ts,
+                            now_ts,
+                            clean_proposal_id,
+                        ),
+                    )
+
+                if result_value == _CHANNEL_REMOVAL_RETIRED_STATUS:
+                    active_tombstone = self._get_active_channel_removal_tombstone_row(conn, clean_channel_id)
+                    if not active_tombstone:
+                        clean_tombstone_id = str(tombstone_id or '').strip() or f"CRT{secrets.token_hex(16)}"
+                        conn.execute(
+                            """
+                            INSERT INTO channel_removal_tombstones (
+                                tombstone_id, channel_id, proposal_id, channel_name,
+                                channel_origin_peer, electorate_json, threshold_count,
+                                retired_at, retired_by_peer_id, retired_by_user_id
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                clean_tombstone_id,
+                                clean_channel_id,
+                                clean_proposal_id,
+                                channel_row['name'],
+                                channel_row['origin_peer'],
+                                json.dumps(electorate),
+                                max(1, int(threshold_count or len(electorate))),
+                                now_ts,
+                                str(finalizing_peer_id or '').strip(),
+                                str(finalizing_user_id or '').strip() or None,
+                            ),
+                        )
+                conn.commit()
+            self._emit_channel_user_event(
+                channel_id=clean_channel_id,
+                event_type=EVENT_CHANNEL_STATE_UPDATED,
+                actor_user_id=str(finalizing_user_id or '').strip() or None,
+                payload={
+                    'reason': 'channel_retired_by_vote' if result_value == _CHANNEL_REMOVAL_RETIRED_STATUS else 'channel_removal_vote_rejected',
+                    'proposal_id': clean_proposal_id,
+                },
+                dedupe_suffix=f"channel_removal_result:{clean_proposal_id}:{result_value}",
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to apply channel removal result for {proposal_id}: {e}", exc_info=True)
+            return False
+
     def get_channel_access_decision(
         self,
         channel_id: str,
@@ -1667,6 +3410,9 @@ class ChannelManager:
                     return decision
 
                 decision['channel_exists'] = True
+                if self._get_active_channel_removal_tombstone_row(conn, channel_id):
+                    decision['reason'] = 'retired_by_vote'
+                    return decision
                 role = row['member_role'] if 'member_role' in row.keys() else None
                 decision['role'] = role
                 if require_membership and not role:
@@ -1754,13 +3500,14 @@ class ChannelManager:
                     rows = conn.execute(
                         """
                         SELECT c.id, c.name, c.channel_type, COALESCE(c.privacy_mode, 'open') AS privacy_mode,
+                               c.origin_peer,
                                COUNT(DISTINCT cm.user_id) AS member_count,
                                MAX(CASE WHEN cmu.user_id IS NOT NULL THEN 1 ELSE 0 END) AS is_member
                         FROM channels c
                         LEFT JOIN channel_members cm ON cm.channel_id = c.id
                         LEFT JOIN channel_members cmu
                           ON cmu.channel_id = c.id AND cmu.user_id = ?
-                        GROUP BY c.id, c.name, c.channel_type, COALESCE(c.privacy_mode, 'open')
+                        GROUP BY c.id, c.name, c.channel_type, COALESCE(c.privacy_mode, 'open'), c.origin_peer
                         ORDER BY CASE WHEN c.id = 'general' THEN 0 ELSE 1 END, LOWER(c.name) ASC
                         """,
                         (user_id,),
@@ -1769,10 +3516,11 @@ class ChannelManager:
                     rows = conn.execute(
                         """
                         SELECT c.id, c.name, c.channel_type, COALESCE(c.privacy_mode, 'open') AS privacy_mode,
+                               c.origin_peer,
                                COUNT(DISTINCT cm.user_id) AS member_count
                         FROM channels c
                         LEFT JOIN channel_members cm ON cm.channel_id = c.id
-                        GROUP BY c.id, c.name, c.channel_type, COALESCE(c.privacy_mode, 'open')
+                        GROUP BY c.id, c.name, c.channel_type, COALESCE(c.privacy_mode, 'open'), c.origin_peer
                         ORDER BY CASE WHEN c.id = 'general' THEN 0 ELSE 1 END, LOWER(c.name) ASC
                         """
                     ).fetchall()
@@ -1788,6 +3536,7 @@ class ChannelManager:
                         'name': row['name'],
                         'channel_type': channel_type,
                         'privacy_mode': privacy_mode,
+                        'origin_peer': row['origin_peer'],
                         'member_count': int(row['member_count'] or 0),
                         'is_public_open': bool(is_public),
                     }
@@ -2884,6 +4633,14 @@ class ChannelManager:
                                     INSERT OR IGNORE INTO channel_members (channel_id, user_id)
                                     VALUES (?, ?)
                                 """, (channel_id, user_id))
+
+                    self._ensure_public_channel_membership_conn(
+                        conn,
+                        channel_id,
+                        channel_type.value,
+                        privacy_mode,
+                        fallback_user_id=created_by,
+                    )
                     
                     conn.commit()
             
@@ -2928,6 +4685,12 @@ class ChannelManager:
                     FROM channels
                     WHERE (channel_type = 'public' OR channel_type = 'general')
                       AND COALESCE(privacy_mode, 'open') NOT IN ('private', 'confidential')
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM channel_removal_tombstones crt
+                          WHERE crt.channel_id = channels.id
+                            AND crt.restored_at IS NULL
+                      )
                 """, (self.POST_POLICY_OPEN, self.DEFAULT_CHANNEL_LIFECYCLE_DAYS)).fetchall()
                 channel_ids = [str(r[0]) for r in rows if r and r[0]]
                 allowed_by_channel: Dict[str, List[str]] = {}
@@ -3012,6 +4775,12 @@ class ChannelManager:
         try:
             sync_creator_id = 'system'
             with self.db.get_connection() as conn:
+                if self._get_active_channel_removal_tombstone_row(conn, channel_id):
+                    logger.info(
+                        "Ignoring synced channel %s because the channel is retired by vote",
+                        channel_id,
+                    )
+                    return None
                 # Check if channel already exists
                 existing = conn.execute(
                     "SELECT 1 FROM channels WHERE id = ?", (channel_id,)
@@ -3068,7 +4837,6 @@ class ChannelManager:
                     lifecycle_archive_reason,
                 ))
 
-                added = 0
                 mode = (privacy_mode or '').lower()
                 is_targeted = mode in self.TARGETED_PRIVACY_MODES or channel_type == 'private'
                 if is_targeted:
@@ -3103,55 +4871,15 @@ class ChannelManager:
                                     INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
                                     VALUES (?, ?, 'member')
                                 """, (channel_id, uid))
-                                added += 1
                                 logger.debug(f"Added targeted member {uid} to channel {channel_id}")
                 else:
-                    # Public channels: add ALL registered human users
-                    human_users = conn.execute("""
-                        SELECT id FROM users
-                        WHERE id != 'system' AND id != 'local_user'
-                          AND password_hash IS NOT NULL AND password_hash != ''
-                    """).fetchall()
-
-                    for (uid,) in human_users:
-                        target_policy = self._load_user_channel_governance(conn, uid)
-                        allowed, reason = self._is_channel_allowed_by_policy(
-                            policy=target_policy,
-                            channel_id=channel_id,
-                            channel_type=channel_type,
-                            privacy_mode=privacy_mode,
-                        )
-                        if not allowed:
-                            logger.info(
-                                f"Skipping auto-membership for {uid} in synced channel {channel_id} "
-                                f"due to governance policy ({reason})"
-                            )
-                            continue
-                        conn.execute("""
-                            INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
-                            VALUES (?, ?, 'member')
-                        """, (channel_id, uid))
-                        added += 1
-
-                # Fallback: if no human users found, add the provided user (open/guarded only)
-                if added == 0 and local_user_id and not is_targeted:
-                    fallback_policy = self._load_user_channel_governance(conn, local_user_id)
-                    fallback_allowed, fallback_reason = self._is_channel_allowed_by_policy(
-                        policy=fallback_policy,
-                        channel_id=channel_id,
-                        channel_type=channel_type,
-                        privacy_mode=privacy_mode,
+                    self._ensure_public_channel_membership_conn(
+                        conn,
+                        channel_id,
+                        channel_type,
+                        privacy_mode,
+                        fallback_user_id=local_user_id,
                     )
-                    if not fallback_allowed:
-                        logger.info(
-                            f"Skipped fallback member {local_user_id} for synced channel {channel_id} "
-                            f"due to governance policy ({fallback_reason})"
-                        )
-                    else:
-                        conn.execute("""
-                            INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
-                            VALUES (?, ?, 'member')
-                        """, (channel_id, local_user_id))
 
                 conn.commit()
 
@@ -3228,17 +4956,24 @@ class ChannelManager:
             lifecycle_preserved = True
         try:
             with self.db.get_connection() as conn:
+                if self._get_active_channel_removal_tombstone_row(conn, remote_id):
+                    logger.info(
+                        "Ignoring channel announce for %s because the channel is retired by vote",
+                        remote_id,
+                    )
+                    return None
                 # Already have this exact channel?
                 existing = conn.execute(
-                    "SELECT name, description, privacy_mode, origin_peer, created_by FROM channels WHERE id = ?",
+                    "SELECT name, description, channel_type, privacy_mode, origin_peer, created_by FROM channels WHERE id = ?",
                     (remote_id,)
                 ).fetchone()
                 if existing:
                     old_name = existing[0] or ''
                     old_desc = existing[1] or ''
-                    old_privacy = self._normalize_privacy_mode(existing[2], default='open')
-                    old_origin_peer = existing[3] or ''
-                    old_created_by = existing[4] or ''
+                    old_type = str(existing[2] or 'public').strip().lower()
+                    old_privacy = self._normalize_privacy_mode(existing[3], default='open')
+                    old_origin_peer = existing[4] or ''
+                    old_created_by = existing[5] or ''
 
                     can_apply_remote_metadata = False
                     if old_origin_peer:
@@ -3252,6 +4987,7 @@ class ChannelManager:
                     needs_update = False
                     new_name = old_name
                     new_desc = old_desc
+                    new_type = old_type
                     new_privacy = old_privacy
                     new_post_policy = post_policy
                     new_allow_member_replies = bool(allow_member_replies)
@@ -3263,6 +4999,61 @@ class ChannelManager:
                             and remote_desc
                             and not remote_desc.startswith('Auto-created from P2P')):
                         new_desc = remote_desc
+                        needs_update = True
+                    normalized_remote_type = str(remote_type or '').strip().lower() or old_type
+                    incoming_looks_public = self._is_public_channel(
+                        normalized_remote_type,
+                        privacy_mode or old_privacy,
+                    )
+                    old_has_placeholder_marker = self._has_placeholder_channel_marker(
+                        old_name,
+                        old_desc,
+                    )
+                    old_is_placeholder = self._is_placeholder_channel_signature(
+                        old_name,
+                        old_desc,
+                        old_type,
+                        old_privacy,
+                    )
+                    remote_has_canonical_name = bool(
+                        remote_name
+                        and not str(remote_name or '').strip().startswith('peer-channel-')
+                    )
+                    remote_has_canonical_desc = bool(
+                        remote_desc
+                        and not str(remote_desc or '').strip().startswith('Auto-created from P2P')
+                    )
+                    trusted_placeholder_hint = bool(
+                        old_has_placeholder_marker
+                        and not can_apply_remote_metadata
+                        and incoming_looks_public
+                        and (
+                            remote_has_canonical_name
+                            or remote_has_canonical_desc
+                            or normalized_remote_type != old_type
+                            or privacy_mode != old_privacy
+                        )
+                    )
+                    if trusted_placeholder_hint:
+                        callback = getattr(self, 'public_placeholder_reconcile_callback', None)
+                        if callable(callback):
+                            try:
+                                callback(
+                                    channel_id=remote_id,
+                                    origin_peer=old_origin_peer,
+                                    observed_from_peer=str(from_peer or '').strip(),
+                                    remote_name=remote_name,
+                                    remote_type=normalized_remote_type,
+                                    privacy_mode=privacy_mode,
+                                )
+                            except Exception as callback_err:
+                                logger.debug(
+                                    "Placeholder reconcile callback failed for %s: %s",
+                                    remote_id,
+                                    callback_err,
+                                )
+                    if can_apply_remote_metadata and normalized_remote_type in {'public', 'private', 'general'} and normalized_remote_type != old_type:
+                        new_type = normalized_remote_type
                         needs_update = True
                     if privacy_mode and privacy_mode != old_privacy:
                         privacy_downgrade = self._is_privacy_downgrade(old_privacy, privacy_mode)
@@ -3338,11 +5129,22 @@ class ChannelManager:
                             needs_update = True
                     if needs_update:
                         try:
+                            if old_has_placeholder_marker and remote_has_canonical_name:
+                                logger.info(
+                                    "Placeholder reconcile DB update attempt for %s "
+                                    "(from_peer=%s can_apply=%s old_name=%s new_name=%s)",
+                                    remote_id,
+                                    from_peer,
+                                    can_apply_remote_metadata,
+                                    old_name,
+                                    new_name,
+                                )
                             conn.execute(
                                 """
                                 UPDATE channels
                                    SET name = ?,
                                        description = ?,
+                                       channel_type = ?,
                                        privacy_mode = ?,
                                        post_policy = ?,
                                        allow_member_replies = ?,
@@ -3357,6 +5159,7 @@ class ChannelManager:
                                 (
                                     new_name,
                                     new_desc,
+                                    new_type,
                                     new_privacy,
                                     new_post_policy,
                                     1 if new_allow_member_replies else 0,
@@ -3369,7 +5172,27 @@ class ChannelManager:
                                     remote_id,
                                 )
                             )
+                            self._ensure_public_channel_membership_conn(
+                                conn,
+                                remote_id,
+                                new_type,
+                                new_privacy,
+                                fallback_user_id=local_user_id,
+                            )
                             conn.commit()
+                            if old_has_placeholder_marker and remote_has_canonical_name:
+                                readback = conn.execute(
+                                    "SELECT name, channel_type, privacy_mode FROM channels WHERE id = ?",
+                                    (remote_id,),
+                                ).fetchone()
+                                logger.info(
+                                    "Placeholder reconcile DB update committed for %s "
+                                    "(name=%s type=%s privacy=%s)",
+                                    remote_id,
+                                    str((readback['name'] if readback and hasattr(readback, 'keys') else (readback[0] if readback else '')) or '').strip() or 'missing',
+                                    str((readback['channel_type'] if readback and hasattr(readback, 'keys') else (readback[1] if readback else '')) or '').strip() or 'unknown',
+                                    str((readback['privacy_mode'] if readback and hasattr(readback, 'keys') else (readback[2] if readback else '')) or '').strip() or 'unknown',
+                                )
                             self.apply_remote_channel_posting_snapshot(
                                 remote_id,
                                 from_peer,
@@ -3383,7 +5206,7 @@ class ChannelManager:
                                         f"desc updated={old_desc != new_desc}")
                             return remote_id
                         except Exception as ue:
-                            logger.debug(f"Channel update for {remote_id} skipped: {ue}")
+                            logger.warning(f"Channel update for {remote_id} failed: {ue}")
                     # Still set origin_peer if not yet set (only for synced rows).
                     try:
                         if old_created_by == 'p2p-sync':
@@ -3403,6 +5226,15 @@ class ChannelManager:
                         allowed_poster_user_ids=allowed_poster_user_ids,
                         log_context='channel_announce_existing',
                     )
+                    with self.db.get_connection() as membership_conn:
+                        self._ensure_public_channel_membership_conn(
+                            membership_conn,
+                            remote_id,
+                            old_type,
+                            privacy_mode,
+                            fallback_user_id=local_user_id,
+                        )
+                        membership_conn.commit()
                     return None  # Already synced, no updates needed
 
                 # Check for same-name conflict
@@ -3470,6 +5302,14 @@ class ChannelManager:
                                 INSERT OR IGNORE INTO channel_members (channel_id, user_id, role)
                                 VALUES (?, ?, ?)
                             """, (remote_id, user_id, role))
+
+                        self._ensure_public_channel_membership_conn(
+                            conn,
+                            remote_id,
+                            remote_type,
+                            privacy_mode,
+                            fallback_user_id=local_user_id,
+                        )
 
                         conn.commit()
                         self.sync_channel_post_permissions(
@@ -5453,6 +7293,7 @@ class ChannelManager:
         requester_peer_id: str,
         limit: int = 200,
         max_members_per_channel: int = 200,
+        query_username_hints: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Return private/confidential channels relevant to querying peer users."""
         requester = str(requester_peer_id or '').strip()
@@ -5486,6 +7327,30 @@ class ChannelManager:
                     str(row['id'] if hasattr(row, 'keys') and 'id' in row.keys() else row[0])
                     for row in (valid_rows or [])
                 ]
+                if not valid_user_ids and query_username_hints:
+                    hinted_usernames = []
+                    seen_usernames = set()
+                    for query_user_id in user_ids:
+                        username = str((query_username_hints or {}).get(query_user_id) or '').strip()
+                        if not username or username in seen_usernames:
+                            continue
+                        seen_usernames.add(username)
+                        hinted_usernames.append(username)
+                    if hinted_usernames:
+                        username_placeholders = ','.join('?' for _ in hinted_usernames)
+                        fallback_rows = conn.execute(
+                            f"""
+                            SELECT id
+                            FROM users
+                            WHERE origin_peer = ?
+                              AND username IN ({username_placeholders})
+                            """,
+                            (requester, *hinted_usernames),
+                        ).fetchall()
+                        valid_user_ids = [
+                            str(row['id'] if hasattr(row, 'keys') and 'id' in row.keys() else row[0])
+                            for row in (fallback_rows or [])
+                        ]
                 if not valid_user_ids:
                     return {'channels': [], 'truncated': False, 'queried_users': []}
 
@@ -5504,6 +7369,17 @@ class ChannelManager:
                         COALESCE(c.privacy_mode, 'open') IN ('private', 'confidential')
                         OR c.channel_type = 'private'
                       )
+                      AND NOT (
+                        c.name = ?
+                        OR c.id = ?
+                        OR c.id = ?
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM channel_removal_tombstones crt
+                        WHERE crt.channel_id = c.id
+                          AND crt.restored_at IS NULL
+                      )
                       AND NOT EXISTS (
                         SELECT 1
                         FROM channel_member_sync_deliveries d
@@ -5521,7 +7397,14 @@ class ChannelManager:
                     ORDER BY COALESCE(MAX(cm.joined_at), c.created_at) DESC
                     LIMIT ?
                     """,
-                    tuple(valid_user_ids) + (requester, int(limit) + 1),
+                    tuple(valid_user_ids)
+                    + (
+                        self.AGENT_START_CHANNEL_NAME,
+                        self.AGENT_START_CHANNEL_ID,
+                        self.LEGACY_AGENT_START_CHANNEL_ID,
+                        requester,
+                        int(limit) + 1,
+                    ),
                 ).fetchall()
 
                 truncated = len(channel_rows) > int(limit)
@@ -6603,6 +8486,20 @@ class ChannelManager:
                 policy = self._load_user_channel_governance(conn, user_id)
                 cursor = conn.execute("""
                     SELECT c.*, cm.last_read_at, cm.notifications_enabled, cm.role as user_role,
+                           EXISTS(
+                               SELECT 1
+                               FROM channel_removal_tombstones crt
+                               WHERE crt.channel_id = c.id
+                                 AND crt.restored_at IS NULL
+                           ) AS retired_by_vote,
+                           (
+                               SELECT proposal_id
+                               FROM channel_removal_proposals crp
+                               WHERE crp.channel_id = c.id
+                                 AND crp.status = 'open'
+                               ORDER BY crp.opened_at DESC
+                               LIMIT 1
+                           ) AS active_removal_proposal_id,
                            COUNT(DISTINCT cm2.user_id) as member_count,
                            MAX(msg.created_at) as last_message_at,
                            COALESCE(c.post_policy, ?) AS post_policy,
@@ -6651,6 +8548,13 @@ class ChannelManager:
                     if not allowed:
                         logger.debug(
                             f"Skipping channel {row['id']} for user {user_id} due to governance ({reason})"
+                        )
+                        continue
+                    if bool(row['retired_by_vote']):
+                        logger.debug(
+                            "Skipping channel %s for user %s because it is retired by vote",
+                            row['id'],
+                            user_id,
                         )
                         continue
                     # origin_peer may not exist in older DBs
@@ -6721,6 +8625,9 @@ class ChannelManager:
                         can_post_top_level=can_post_top_level,
                         can_reply=can_reply,
                         allowed_poster_count=allowed_poster_count,
+                        retired_by_vote=bool(row['retired_by_vote']),
+                        removal_status='open' if row['active_removal_proposal_id'] else None,
+                        active_removal_proposal_id=row['active_removal_proposal_id'],
                         crypto_mode=(
                             row['crypto_mode']
                             if 'crypto_mode' in row.keys() and row['crypto_mode']
@@ -6765,6 +8672,70 @@ class ChannelManager:
             logger.error(f"Failed to get channel latest timestamps: {e}",
                          exc_info=True)
             return {}
+
+    def get_channel_history_bounds(self) -> Dict[str, Dict[str, Any]]:
+        """Return oldest/latest timestamp and live message count per channel."""
+        try:
+            with self.db.get_connection() as conn:
+                rows = conn.execute("""
+                    SELECT channel_id,
+                           MIN(created_at) AS oldest,
+                           MAX(created_at) AS latest,
+                           COUNT(id) AS message_count
+                    FROM channel_messages
+                    WHERE expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP
+                    GROUP BY channel_id
+                """).fetchall()
+                result: Dict[str, Dict[str, Any]] = {}
+                for row in rows:
+                    channel_id = str(row['channel_id'] or '').strip()
+                    if not channel_id:
+                        continue
+                    result[channel_id] = {
+                        'oldest': row['oldest'],
+                        'latest': row['latest'],
+                        'message_count': int(row['message_count'] or 0),
+                    }
+                return result
+        except Exception as e:
+            logger.error(f"Failed to get channel history bounds: {e}", exc_info=True)
+            return {}
+
+    def get_channel_visibility_map(self, channel_ids: List[str]) -> Dict[str, bool]:
+        """Return whether each channel ID is public/open enough for public mesh bootstrap."""
+        result: Dict[str, bool] = {}
+        ids: List[str] = []
+        seen = set()
+        for raw in channel_ids or []:
+            cid = str(raw or '').strip()
+            if not cid or cid in seen:
+                continue
+            seen.add(cid)
+            ids.append(cid)
+        if not ids:
+            return result
+        try:
+            with self.db.get_connection() as conn:
+                placeholders = ",".join("?" for _ in ids)
+                rows = conn.execute(
+                    f"""
+                    SELECT id, channel_type, COALESCE(privacy_mode, 'open') AS privacy_mode
+                    FROM channels
+                    WHERE id IN ({placeholders})
+                    """,
+                    tuple(ids),
+                ).fetchall()
+            for row in rows or []:
+                channel_id = str(row['id'] or '').strip()
+                if not channel_id:
+                    continue
+                result[channel_id] = self._is_public_channel(
+                    row['channel_type'],
+                    row['privacy_mode'],
+                )
+        except Exception as e:
+            logger.debug(f"Failed to build channel visibility map: {e}")
+        return result
 
     @staticmethod
     def _stable_json(value: Any) -> str:
@@ -7007,17 +8978,22 @@ class ChannelManager:
         try:
             with self.db.get_connection() as conn:
                 rows = conn.execute("""
-                    SELECT id, channel_id, user_id, content,
-                           message_type, created_at, attachments, expires_at,
-                           origin_peer,
-                           ttl_seconds, ttl_mode, parent_message_id, source_layout,
-                           source_reference, repost_policy,
-                           encrypted_content, crypto_state, key_id, nonce
-                    FROM channel_messages
-                    WHERE channel_id = ?
-                      AND created_at > ?
-                      AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-                    ORDER BY created_at ASC
+                    SELECT m.id, m.channel_id, m.user_id, m.content,
+                           m.message_type, m.created_at, m.attachments, m.expires_at,
+                           m.origin_peer,
+                           m.ttl_seconds, m.ttl_mode, m.parent_message_id, m.source_layout,
+                           m.source_reference, m.repost_policy,
+                           m.encrypted_content, m.crypto_state, m.key_id, m.nonce,
+                           c.name AS channel_name,
+                           c.channel_type AS channel_type,
+                           COALESCE(c.privacy_mode, 'open') AS channel_privacy_mode,
+                           c.origin_peer AS channel_origin_peer
+                    FROM channel_messages m
+                    LEFT JOIN channels c ON c.id = m.channel_id
+                    WHERE m.channel_id = ?
+                      AND m.created_at > ?
+                      AND (m.expires_at IS NULL OR m.expires_at > CURRENT_TIMESTAMP)
+                    ORDER BY m.created_at ASC
                     LIMIT ?
                 """, (channel_id, since_timestamp, limit)).fetchall()
 
@@ -7032,6 +9008,10 @@ class ChannelManager:
                         'created_at': row['created_at'],
                         'expires_at': row['expires_at'],
                         'origin_peer': row['origin_peer'] if 'origin_peer' in row.keys() else None,
+                        'channel_name': row['channel_name'] if 'channel_name' in row.keys() else None,
+                        'channel_type': row['channel_type'] if 'channel_type' in row.keys() else None,
+                        'channel_privacy_mode': row['channel_privacy_mode'] if 'channel_privacy_mode' in row.keys() else None,
+                        'channel_origin_peer': row['channel_origin_peer'] if 'channel_origin_peer' in row.keys() else None,
                         'ttl_seconds': row['ttl_seconds'] if 'ttl_seconds' in row.keys() else None,
                         'ttl_mode': row['ttl_mode'] if 'ttl_mode' in row.keys() else None,
                         'parent_message_id': row['parent_message_id'] if 'parent_message_id' in row.keys() else None,
@@ -7063,6 +9043,83 @@ class ChannelManager:
                 return messages
         except Exception as e:
             logger.error(f"Failed to get messages since {since_timestamp} "
+                         f"for #{channel_id}: {e}", exc_info=True)
+            return []
+
+    def get_messages_before(self, channel_id: str, before_timestamp: str,
+                            limit: int = 50) -> List[Dict[str, Any]]:
+        """Get older messages in a channel created before *before_timestamp*.
+
+        Results are returned in ascending timestamp order so callers can append
+        them directly to replay/catchup payloads without additional sorting.
+        """
+        try:
+            with self.db.get_connection() as conn:
+                rows = conn.execute("""
+                    SELECT m.id, m.channel_id, m.user_id, m.content,
+                           m.message_type, m.created_at, m.attachments, m.expires_at,
+                           m.origin_peer,
+                           m.ttl_seconds, m.ttl_mode, m.parent_message_id, m.source_layout,
+                           m.source_reference, m.repost_policy,
+                           m.encrypted_content, m.crypto_state, m.key_id, m.nonce,
+                           c.name AS channel_name,
+                           c.channel_type AS channel_type,
+                           COALESCE(c.privacy_mode, 'open') AS channel_privacy_mode,
+                           c.origin_peer AS channel_origin_peer
+                    FROM channel_messages m
+                    LEFT JOIN channels c ON c.id = m.channel_id
+                    WHERE m.channel_id = ?
+                      AND m.created_at < ?
+                      AND (m.expires_at IS NULL OR m.expires_at > CURRENT_TIMESTAMP)
+                    ORDER BY m.created_at DESC
+                    LIMIT ?
+                """, (channel_id, before_timestamp, limit)).fetchall()
+
+                messages: List[Dict[str, Any]] = []
+                for row in reversed(rows):
+                    msg = {
+                        'id': row['id'],
+                        'channel_id': row['channel_id'],
+                        'user_id': row['user_id'],
+                        'content': row['content'],
+                        'message_type': row['message_type'],
+                        'created_at': row['created_at'],
+                        'expires_at': row['expires_at'],
+                        'origin_peer': row['origin_peer'] if 'origin_peer' in row.keys() else None,
+                        'channel_name': row['channel_name'] if 'channel_name' in row.keys() else None,
+                        'channel_type': row['channel_type'] if 'channel_type' in row.keys() else None,
+                        'channel_privacy_mode': row['channel_privacy_mode'] if 'channel_privacy_mode' in row.keys() else None,
+                        'channel_origin_peer': row['channel_origin_peer'] if 'channel_origin_peer' in row.keys() else None,
+                        'ttl_seconds': row['ttl_seconds'] if 'ttl_seconds' in row.keys() else None,
+                        'ttl_mode': row['ttl_mode'] if 'ttl_mode' in row.keys() else None,
+                        'parent_message_id': row['parent_message_id'] if 'parent_message_id' in row.keys() else None,
+                        'source_layout': json.loads(row['source_layout']) if ('source_layout' in row.keys() and row['source_layout']) else None,
+                        'source_reference': json.loads(row['source_reference']) if ('source_reference' in row.keys() and row['source_reference']) else None,
+                        'repost_policy': _normalize_channel_repost_policy(row['repost_policy']) if 'repost_policy' in row.keys() else None,
+                        'encrypted_content': (
+                            row['encrypted_content'] if 'encrypted_content' in row.keys() else None
+                        ),
+                        'crypto_state': (
+                            row['crypto_state'] if 'crypto_state' in row.keys() else None
+                        ),
+                        'key_id': row['key_id'] if 'key_id' in row.keys() else None,
+                        'nonce': row['nonce'] if 'nonce' in row.keys() else None,
+                    }
+                    if row['attachments']:
+                        try:
+                            atts = json.loads(row['attachments'])
+                            for att in atts:
+                                att.pop('data', None)
+                            msg['attachments'] = atts
+                        except Exception:
+                            pass
+                    messages.append(msg)
+
+                logger.debug(f"Catchup backfill: {len(messages)} messages in "
+                             f"#{channel_id} before {before_timestamp}")
+                return messages
+        except Exception as e:
+            logger.error(f"Failed to get messages before {before_timestamp} "
                          f"for #{channel_id}: {e}", exc_info=True)
             return []
 
